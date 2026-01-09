@@ -441,7 +441,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
         transition-all duration-150
       `}
     >
-      {/* Input Handle - Left side, aligned with Start States section */}
+      {/* Input Handle - Left side, aligned with Start Conditions section */}
       <Handle
         type="target"
         position={Position.Left}
@@ -721,7 +721,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
         </div>
       )}
 
-      {/* Start States Section */}
+      {/* Start Conditions Section */}
       <div className="border-b border-[#2a2a4a]">
         <button
           onClick={(e) => { e.stopPropagation(); setExpandedSection(expandedSection === 'start' ? null : 'start') }}
@@ -729,7 +729,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
         >
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-cyan-500" />
-            <span className="text-[10px] text-cyan-400 uppercase tracking-wider font-medium">Start States</span>
+            <span className="text-[10px] text-cyan-400 uppercase tracking-wider font-medium">Start Conditions</span>
             <span className="text-[9px] text-gray-600">({startStates.length})</span>
           </div>
           {expandedSection === 'start' ? (
@@ -740,6 +740,9 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
         </button>
         {expandedSection === 'start' && (
           <div className="px-3 pb-2 space-y-1.5">
+            <p className="text-[9px] text-gray-500">
+              Preconditions before this step starts. Every=all robots in scope, Any=at least one.
+            </p>
             {startStates.length === 0 ? (
               <p className="text-[9px] text-gray-600 italic">No preconditions</p>
             ) : (
@@ -892,6 +895,9 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
             <Plus className="w-2.5 h-2.5 text-yellow-500" />
           </button>
         </div>
+        <p className="text-[9px] text-gray-500 mb-1">
+          Temporary override while executing; non-self targets revert on completion.
+        </p>
         <div className="flex flex-wrap gap-1">
           {duringStateTargets.length === 0 ? (
             <span className="text-[9px] text-gray-600 italic">No states during execution</span>
@@ -991,6 +997,9 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
             <Plus className="w-2.5 h-2.5 text-gray-400" />
           </button>
         </div>
+        <p className="text-[9px] text-gray-500 mb-1">
+          Final state for executing robot per outcome. ROS2 ends: SUCCEEDED/ABORTED/CANCELED (timeout/rejected are policy-level).
+        </p>
         {/* Show result fields info */}
         {resultFields.length > 0 && (
           <div className="mb-2 px-2 py-1 bg-gray-800/50 rounded text-[8px]">

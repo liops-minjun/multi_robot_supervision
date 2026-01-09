@@ -936,7 +936,12 @@ function ActionGraphEditor() {
                   No agents connected
                 </div>
               ) : (
-                agentsOverview.map((agent: AgentOverviewInfo) => (
+                agentsOverview.map((agent: AgentOverviewInfo) => {
+                  const actionServers = agent.action_servers || []
+                  const actionTypes = agent.action_types || []
+                  const assignedTemplates = agent.assigned_templates || []
+
+                  return (
                   <div key={agent.agent_id} className="border-b border-[#2a2a4a]/50">
                     <button
                       onClick={() => toggleAgent(agent.agent_id)}
@@ -959,10 +964,10 @@ function ActionGraphEditor() {
                     {expandedAgents.includes(agent.agent_id) && (
                       <div className="bg-[#0f0f1a]/50">
                         {/* Action Servers (individual) */}
-                        {agent.action_servers && agent.action_servers.length > 0 ? (
+                        {actionServers.length > 0 ? (
                           <div className="pl-8 pr-3 py-2 border-t border-[#2a2a4a]/30">
                             <div className="flex flex-wrap gap-1">
-                              {agent.action_servers.slice(0, 4).map(srv => (
+                              {actionServers.slice(0, 4).map(srv => (
                                 <span
                                   key={srv.action_server}
                                   className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${
@@ -975,37 +980,37 @@ function ActionGraphEditor() {
                                   {srv.action_server.replace(/^\//, '')}
                                 </span>
                               ))}
-                              {agent.action_servers.length > 4 && (
+                              {actionServers.length > 4 && (
                                 <span className="text-[9px] px-1.5 py-0.5 bg-gray-500/20 text-gray-500 rounded">
-                                  +{agent.action_servers.length - 4}
+                                  +{actionServers.length - 4}
                                 </span>
                               )}
                             </div>
                           </div>
-                        ) : agent.action_types.length > 0 && (
+                        ) : actionTypes.length > 0 && (
                           /* Fallback to action_types if action_servers not available */
                           <div className="pl-8 pr-3 py-2 border-t border-[#2a2a4a]/30">
                             <div className="flex flex-wrap gap-1">
-                              {agent.action_types.slice(0, 4).map(at => (
+                              {actionTypes.slice(0, 4).map(at => (
                                 <span key={at} className="text-[9px] px-1.5 py-0.5 bg-purple-500/20 text-purple-400 rounded">
                                   {at.split('/').pop()}
                                 </span>
                               ))}
-                              {agent.action_types.length > 4 && (
+                              {actionTypes.length > 4 && (
                                 <span className="text-[9px] px-1.5 py-0.5 bg-gray-500/20 text-gray-500 rounded">
-                                  +{agent.action_types.length - 4}
+                                  +{actionTypes.length - 4}
                                 </span>
                               )}
                             </div>
                           </div>
                         )}
                         {/* Assigned templates */}
-                        {agent.assigned_templates.length === 0 ? (
+                        {assignedTemplates.length === 0 ? (
                           <div className="pl-10 pr-3 py-2 text-xs text-gray-600 italic border-t border-[#2a2a4a]/30">
                             No templates assigned
                           </div>
                         ) : (
-                          agent.assigned_templates.map(at => (
+                          assignedTemplates.map(at => (
                             <button
                               key={at.assignment_id}
                               onClick={() => setSelectedTemplateId(at.template_id)}
@@ -1024,7 +1029,7 @@ function ActionGraphEditor() {
                       </div>
                     )}
                   </div>
-                ))
+                )})
               )}
             </div>
           )}

@@ -590,6 +590,9 @@ func (s *Server) GetAgentsOverview(w http.ResponseWriter, r *http.Request) {
 	for _, agent := range agents {
 		// Get agent's action types (capabilities)
 		actionTypes, _ := s.repo.GetAgentActionTypes(agent.ID)
+		if actionTypes == nil {
+			actionTypes = []string{}
+		}
 
 		// Get agent's individual action servers (capabilities)
 		agentCaps, _ := s.repo.GetAgentCapabilities(agent.ID)

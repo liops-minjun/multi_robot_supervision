@@ -53,7 +53,7 @@ export interface ConditionGroup {
   negated?: boolean  // NOT operator for entire group
 }
 
-// Start State - pre-condition before action executes
+// Start Condition - pre-condition before action executes
 // Reads like: "[Every/Any/Self/Specific] [AgentType/RobotId] is [State] [and/or]"
 export interface StartStateConfig {
   id: string
