@@ -151,7 +151,7 @@ sudo apt-get update
 sudo apt-get install -y libmsquic
 ```
 
-### 빌드 및 실행
+### 빌드
 
 ```bash
 cd fleet_agent_cpp
@@ -164,82 +164,70 @@ colcon build --symlink-install
 
 # 환경 설정
 source install/setup.bash
-
-# Agent 실행
-ros2 run fleet_agent fleet_agent_node --ros-args -p agent_id:=agent_01
 ```
 
-### 외부 서버 연결 설정
-
-#### 1. 설정 파일 수정
-
-`fleet_agent_cpp/config/agent.yaml`:
-
-```yaml
-agent:
-  id: "agent_01"
-  name: "Factory Agent"
-
-server:
-  quic:
-    server_address: "192.168.0.100"  # Central Server IP (변경 필요)
-    server_port: 9444                 # Raw QUIC 포트
-    alpn: "fleet-agent-raw"
-    ca_cert: "/etc/fleet_agent/certs/ca.crt"
-    client_cert: "/etc/fleet_agent/certs/agent.crt"
-    client_key: "/etc/fleet_agent/certs/agent.key"
-    idle_timeout_ms: 30000
-    keepalive_interval_ms: 10000
-    enable_0rtt: true
-    enable_datagrams: true
-
-robots:
-  - id: "robot_001"
-    namespace: "/robot_001"
-    name: "AMR Robot 1"
-```
-
-#### 2. TLS 인증서 복사
-
-Central Server의 인증서를 로봇으로 복사:
+### 실행 (Launch 파일 사용)
 
 ```bash
-# 로봇에서 실행
-sudo mkdir -p /etc/fleet_agent/certs
+# 기본 실행 (localhost 연결)
+ros2 launch fleet_agent_cpp fleet_agent.launch.py
 
-# Central Server에서 인증서 복사 (scp 사용)
-scp user@central-server:/path/to/central_server_go/certs/ca.crt /etc/fleet_agent/certs/
-scp user@central-server:/path/to/central_server_go/certs/agent.crt /etc/fleet_agent/certs/
-scp user@central-server:/path/to/central_server_go/certs/agent.key /etc/fleet_agent/certs/
+# 외부 서버 연결 (가장 일반적인 사용법)
+ros2 launch fleet_agent_cpp fleet_agent.launch.py server_ip:=192.168.0.100
 
-# 또는 fleet_agent_cpp/certs에서 복사
-cp fleet_agent_cpp/certs/* /etc/fleet_agent/certs/
+# 전체 옵션
+ros2 launch fleet_agent_cpp fleet_agent.launch.py \
+  server_ip:=192.168.0.100 \
+  server_port:=9444 \
+  agent_id:=agent_02
 ```
 
-#### 3. 방화벽 설정
+### Launch 파라미터
 
-Central Server에서 UDP 포트 열기:
+| 파라미터 | 기본값 | 설명 |
+|----------|--------|------|
+| `server_ip` | localhost | Central Server IP 주소 |
+| `server_port` | 9444 | QUIC 포트 |
+| `agent_id` | agent_01 | Agent 고유 ID |
+| `config` | (패키지 내 config) | 설정 파일 경로 |
+| `log_level` | info | 로그 레벨 |
+| `domain_id` | 0 | ROS_DOMAIN_ID |
+
+### 설정 파일
+
+설정 파일은 빌드 후 자동으로 패키지에 포함됩니다.
+커스텀 설정이 필요한 경우:
 
 ```bash
-# Central Server에서 실행
+# 설정 파일 복사 후 수정
+cp install/fleet_agent_cpp/share/fleet_agent_cpp/config/agent.yaml ~/my_agent.yaml
+
+# 커스텀 설정으로 실행
+ros2 launch fleet_agent_cpp fleet_agent.launch.py \
+  config:=~/my_agent.yaml \
+  server_ip:=192.168.0.100
+```
+
+### 인증서 설정
+
+인증서는 빌드 시 패키지에 포함됩니다. 프로덕션 환경에서는:
+
+```bash
+# Central Server에서 인증서 복사
+scp user@server:/path/to/certs/* fleet_agent_cpp/certs/
+
+# 다시 빌드
+colcon build --packages-select fleet_agent_cpp
+```
+
+### 방화벽 설정 (Central Server)
+
+```bash
 sudo ufw allow 9444/udp  # Raw QUIC
 sudo ufw allow 9443/udp  # gRPC over QUIC
 ```
 
-#### 4. 연결 확인
-
-```bash
-# Agent 실행
-cd fleet_agent_cpp
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-ros2 run fleet_agent fleet_agent_node
-
-# 로그에서 연결 확인
-# [INFO] Connected to server at 192.168.0.100:9444
-```
-
-#### 5. 네트워크 구성 예시
+### 네트워크 구성 예시
 
 ```
 ┌─────────────────────────────────────────────────────────────┐

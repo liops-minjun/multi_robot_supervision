@@ -235,6 +235,11 @@ install(DIRECTORY config/
   DESTINATION share/${PROJECT_NAME}/config
 )
 
+install(DIRECTORY certs/
+  DESTINATION share/${PROJECT_NAME}/certs
+  OPTIONAL
+)
+
 install(DIRECTORY launch/
   DESTINATION share/${PROJECT_NAME}/launch
   OPTIONAL

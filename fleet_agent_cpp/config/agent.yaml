@@ -1,28 +1,33 @@
-# Fleet Agent Configuration - Test/Development
-# Agent-based capability model: all visible action servers belong to this agent
+# Fleet Agent Configuration
+# 환경변수로 오버라이드 가능: ${VAR:-default}
+#
+# 사용법:
+#   ros2 launch fleet_agent_cpp fleet_agent.launch.py server_ip:=192.168.0.100
+#   ros2 launch fleet_agent_cpp fleet_agent.launch.py server_ip:=192.168.0.100 agent_id:=agent_02
 
-# Agent identification (required)
+# Agent identification
 agent:
-  id: "agent_01"
-  name: "Test Agent"
+  id: "${FLEET_AGENT_ID:-agent_01}"
+  name: "Fleet Agent"
 
 # Server connection
 server:
-  url: "http://localhost:8081"
+  url: "http://${FLEET_SERVER_IP:-localhost}:8081"
   quic:
-    server_address: "localhost"
-    server_port: 9444
+    server_address: "${FLEET_SERVER_IP:-localhost}"
+    server_port: ${FLEET_SERVER_PORT:-9444}
     alpn: "fleet-agent-raw"
-    ca_cert: "/home/sy/Downloads/multi-robot-supervision/fleet_agent_cpp/certs/ca.crt"
-    client_cert: "/home/sy/Downloads/multi-robot-supervision/fleet_agent_cpp/certs/agent.crt"
-    client_key: "/home/sy/Downloads/multi-robot-supervision/fleet_agent_cpp/certs/agent.key"
+    # 인증서 경로 (패키지 상대 경로 사용)
+    ca_cert: "${FLEET_AGENT_PKG_PATH:-/etc/fleet_agent}/certs/ca.crt"
+    client_cert: "${FLEET_AGENT_PKG_PATH:-/etc/fleet_agent}/certs/agent.crt"
+    client_key: "${FLEET_AGENT_PKG_PATH:-/etc/fleet_agent}/certs/agent.key"
     idle_timeout_ms: 30000
     keepalive_interval_ms: 10000
     handshake_timeout_ms: 10000
     max_bidi_streams: 1000
     max_uni_streams: 100
-    enable_0rtt: false
-    enable_datagrams: false
+    enable_0rtt: true
+    enable_datagrams: true
 
 # Communication settings
 communication:
@@ -52,14 +57,13 @@ ros:
 
 # Logging
 logging:
-  level: "debug"
+  level: "${FLEET_LOG_LEVEL:-info}"
   file: ""
   console: true
   include_timestamp: true
 
 # Robots (optional) - declare IDs and namespaces for execution
-# Capabilities are discovered from ALL visible action servers, regardless of robots
 # robots:
 #   - id: "robot_001"
-#     name: "Test Robot 1"
+#     name: "AMR Robot 1"
 #     namespace: "/robot_001"
