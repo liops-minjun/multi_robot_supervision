@@ -210,6 +210,7 @@ export interface ActionGraph {
   description: string | null
   agent_id: string | null       // Owner agent (null = template)
   agent_name: string | null     // Convenience field
+  entry_point?: string | null
   preconditions: Precondition[] | null
   steps: GraphStep[]
   version: number
@@ -225,6 +226,7 @@ export interface GraphListItem {
   description: string | null
   agent_id: string | null
   agent_name: string | null
+  entry_point?: string | null
   step_count: number
   version: number
   is_template: boolean
@@ -238,6 +240,7 @@ export interface GraphCreateRequest {
   name: string
   description?: string
   agent_id?: string             // Owner agent (null = template)
+  entry_point?: string
   preconditions?: Precondition[]
   steps: GraphStep[]
 }
@@ -366,14 +369,21 @@ export type StateQuantifier = 'self' | 'all' | 'any' | 'none' | 'specific'
 export type StateOperatorType = '==' | '!=' | 'in' | 'not_in'
 
 export interface RobotStateSnapshot {
-  robot_id: string
-  robot_name: string
-  agent_id: string | null
-  agent_name: string | null
-  state: string
-  state_updated_at: string  // ISO timestamp
-  is_online: boolean
-  staleness_sec: number
+  id?: string
+  name?: string
+  agent_id?: string | null
+  current_state?: string
+  is_online?: boolean
+  is_executing?: boolean
+  current_task_id?: string
+  current_step_id?: string
+  staleness_sec?: number
+  // Legacy fields (for backward compatibility)
+  robot_id?: string
+  robot_name?: string
+  agent_name?: string | null
+  state?: string
+  state_updated_at?: string  // ISO timestamp
 }
 
 export interface FleetStateSnapshot {

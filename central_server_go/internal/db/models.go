@@ -162,6 +162,7 @@ type ActionGraph struct {
 	Name             string         `gorm:"size:100;not null"`
 	Description      sql.NullString `gorm:"type:text"`
 	AgentID          sql.NullString `gorm:"size:50;index"` // null = template
+	EntryPoint       sql.NullString `gorm:"size:50"`
 	Preconditions    datatypes.JSON `gorm:"type:jsonb"`
 	Steps            datatypes.JSON `gorm:"type:jsonb;not null"`
 	Version          int            `gorm:"default:1"`

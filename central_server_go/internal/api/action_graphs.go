@@ -84,6 +84,12 @@ func (s *Server) CreateActionGraph(w http.ResponseWriter, r *http.Request) {
 	if req.AgentID != "" {
 		graph.AgentID = sql.NullString{String: req.AgentID, Valid: true}
 	}
+	if req.EntryPoint != "" {
+		graph.EntryPoint = sql.NullString{String: req.EntryPoint, Valid: true}
+	}
+	if req.EntryPoint != "" {
+		graph.EntryPoint = sql.NullString{String: req.EntryPoint, Valid: true}
+	}
 
 	if err := s.repo.CreateActionGraph(graph); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -166,6 +172,12 @@ func (s *Server) UpdateActionGraph(w http.ResponseWriter, r *http.Request) {
 	if req.Preconditions != nil {
 		preconditionsJSON, _ := json.Marshal(req.Preconditions)
 		graph.Preconditions = datatypes.JSON(preconditionsJSON)
+	}
+	if req.EntryPoint != "" {
+		graph.EntryPoint = sql.NullString{String: req.EntryPoint, Valid: true}
+	}
+	if req.EntryPoint != "" {
+		graph.EntryPoint = sql.NullString{String: req.EntryPoint, Valid: true}
 	}
 	if req.Steps != nil {
 		normalizedSteps := normalizeActionGraphSteps(req.Steps)
@@ -360,6 +372,9 @@ func actionGraphToListResponse(graph *db.ActionGraph, repo *db.Repository) Actio
 			response.AgentName = agent.Name
 		}
 	}
+	if graph.EntryPoint.Valid {
+		response.EntryPoint = graph.EntryPoint.String
+	}
 
 	// Count steps
 	var steps []interface{}
@@ -396,6 +411,9 @@ func actionGraphToResponse(graph *db.ActionGraph, repo *db.Repository) ActionGra
 		if agent != nil {
 			response.AgentName = agent.Name
 		}
+	}
+	if graph.EntryPoint.Valid {
+		response.EntryPoint = graph.EntryPoint.String
 	}
 
 	// Parse JSON fields

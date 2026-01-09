@@ -24,6 +24,9 @@ const ACTION_COLORS: Record<string, string> = {
   'std_srvs/Trigger': '#06b6d4',
 }
 
+const START_NODE_ID = '__action_graph_start__'
+const START_NODE_COLOR = '#22c55e'
+
 const getActionColor = (actionType: string): string => {
   return ACTION_COLORS[actionType] || '#6b7280'
 }
@@ -227,6 +230,18 @@ function ActionGraphViewerInner({
     const nodes: Node[] = []
     const edges: Edge[] = []
     const actionMappings = stateDef?.action_mappings || []
+    const entryPoint = actionGraph.entry_point || actionGraph.steps[0]?.id
+
+    nodes.push({
+      id: START_NODE_ID,
+      type: 'event',
+      position: { x: 20, y: 20 },
+      data: {
+        label: 'Start',
+        subtype: 'Start',
+        color: START_NODE_COLOR,
+      },
+    })
 
     actionGraph.steps.forEach((step, index) => {
       const cols = compact ? 2 : 3
@@ -315,6 +330,19 @@ function ActionGraphViewerInner({
         }
       }
     })
+
+    if (entryPoint) {
+      edges.push({
+        id: `${START_NODE_ID}->${entryPoint}`,
+        source: START_NODE_ID,
+        target: entryPoint,
+        sourceHandle: 'state-out',
+        targetHandle: 'state-in',
+        type: 'smoothstep',
+        markerEnd: { type: MarkerType.ArrowClosed, color: START_NODE_COLOR },
+        style: { stroke: START_NODE_COLOR, strokeWidth: 1.5 },
+      })
+    }
 
     return { nodes, edges }
   }, [actionGraph, stateDef, currentStepId, completedSteps, failedSteps, compact])

@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -51,20 +52,28 @@ func FromDBModel(ag *db.ActionGraph) (*CanonicalGraph, error) {
 	if ag.AgentID.Valid {
 		graph.ActionGraph.AgentID = ag.AgentID.String
 	}
+	entryPoint := ""
+	if ag.EntryPoint.Valid {
+		entryPoint = ag.EntryPoint.String
+	}
 
 	// Build vertices and edges from steps
 	for i, step := range steps {
 		vertex := stepToVertex(&step)
 		graph.Vertices = append(graph.Vertices, vertex)
 
-		// First step is entry point
-		if i == 0 {
-			graph.EntryPoint = step.ID
-		}
-
 		// Extract edges from transitions
 		edges := extractEdges(&step)
 		graph.Edges = append(graph.Edges, edges...)
+	}
+
+	if entryPoint != "" {
+		graph.EntryPoint = entryPoint
+	} else if len(steps) > 0 {
+		graph.EntryPoint = steps[0].ID
+	}
+	if graph.EntryPoint != "" && graph.GetVertex(graph.EntryPoint) == nil && len(steps) > 0 {
+		graph.EntryPoint = steps[0].ID
 	}
 
 	// Compute checksum
@@ -108,6 +117,9 @@ func ToDBModel(cg *CanonicalGraph) (*db.ActionGraph, error) {
 	if cg.ActionGraph.AgentID != "" {
 		ag.AgentID.String = cg.ActionGraph.AgentID
 		ag.AgentID.Valid = true
+	}
+	if cg.EntryPoint != "" {
+		ag.EntryPoint = sql.NullString{String: cg.EntryPoint, Valid: true}
 	}
 
 	return ag, nil

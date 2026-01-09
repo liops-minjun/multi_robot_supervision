@@ -330,11 +330,12 @@ std::vector<ActionCapability> CapabilityScanner::get_all() const {
 }
 
 std::vector<ActionCapability> CapabilityScanner::get_for_registration() const {
+    // Return ALL capabilities (both available and unavailable) so the server
+    // can track which action servers are currently offline.
+    // The is_available flag in each capability indicates the current status.
     std::vector<ActionCapability> result;
     for (auto it = store_.begin(); it != store_.end(); ++it) {
-        if (it->second.available.load()) {
-            result.push_back(it->second);
-        }
+        result.push_back(it->second);
     }
     return result;
 }

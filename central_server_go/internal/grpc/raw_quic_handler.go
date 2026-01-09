@@ -438,6 +438,7 @@ type ActionCapabilityMsg struct {
 	ResultSchema    string
 	FeedbackSchema  string
 	SuccessCriteria *SuccessCriteriaMsg
+	IsAvailable     bool // true if action server is currently running
 }
 
 // SuccessCriteriaMsg represents auto-inferred success criteria
@@ -899,6 +900,15 @@ func parseActionCapability(data []byte) (*ActionCapabilityMsg, error) {
 				if err == nil && criteria != nil {
 					cap.SuccessCriteria = criteria
 				}
+				data = data[n:]
+			}
+		case 9: // is_available (bool)
+			if wireType == protowire.VarintType {
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid is_available")
+				}
+				cap.IsAvailable = v != 0
 				data = data[n:]
 			}
 		default:
@@ -1633,13 +1643,19 @@ func (h *RawQUICHandler) handleCapabilityRegistration(
 		// Generate ID using agent_id + action_server (unique per server per agent)
 		id := fmt.Sprintf("%s_%s", agentID, cap.ActionServer)
 
+		// Determine status based on availability
+		status := "idle"
+		if !cap.IsAvailable {
+			status = "offline"
+		}
+
 		dbCap := db.AgentCapability{
 			ID:           id,
 			AgentID:      agentID,
 			ActionType:   cap.ActionType,
 			ActionServer: cap.ActionServer,
-			IsAvailable:  true,
-			Status:       "idle",
+			IsAvailable:  cap.IsAvailable, // Use the actual availability from the agent
+			Status:       status,
 		}
 
 		// Store schemas as JSON (they come as JSON strings from C++)
@@ -1663,7 +1679,8 @@ func (h *RawQUICHandler) handleCapabilityRegistration(
 
 		dbCaps = append(dbCaps, dbCap)
 
-		log.Printf("[RawQUIC]   - %s at %s (criteria: %v)", cap.ActionType, cap.ActionServer, cap.SuccessCriteria != nil)
+		log.Printf("[RawQUIC]   - %s at %s (available: %v, criteria: %v)",
+			cap.ActionType, cap.ActionServer, cap.IsAvailable, cap.SuccessCriteria != nil)
 	}
 
 	// Sync to database (using agent-based capabilities)
@@ -1677,19 +1694,29 @@ func (h *RawQUICHandler) handleCapabilityRegistration(
 
 	// Broadcast capability update to WebSocket clients
 	if h.wsHub != nil {
-		wsCaps := make([]map[string]string, 0, len(reg.Capabilities))
+		wsCaps := make([]map[string]interface{}, 0, len(reg.Capabilities))
 		for _, cap := range reg.Capabilities {
-			wsCaps = append(wsCaps, map[string]string{
+			wsCaps = append(wsCaps, map[string]interface{}{
 				"action_type":   cap.ActionType,
 				"action_server": cap.ActionServer,
 				"package":       cap.Package,
 				"action_name":   cap.ActionName,
+				"is_available":  cap.IsAvailable,
+				"status":        statusFromAvailability(cap.IsAvailable),
 			})
 		}
 		// Broadcast with agent_id instead of robot_id
 		h.wsHub.BroadcastCapabilityUpdate(agentID, wsCaps)
 		log.Printf("[RawQUIC] Broadcasted capability update for agent %s to WebSocket clients", agentID)
 	}
+}
+
+// statusFromAvailability returns the status string based on availability
+func statusFromAvailability(available bool) string {
+	if available {
+		return "idle"
+	}
+	return "offline"
 }
 
 // ============================================================

@@ -170,6 +170,7 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, robotID string
 	var steps []db.ActionGraphStep
 	var preconditions []state.Precondition
 	var graphVersion int
+	var entryPoint string
 
 	cached, cacheHit := s.stateManager.GraphCache().Get(robotState.AgentID, actionGraphID)
 	if cacheHit {
@@ -177,6 +178,7 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, robotID string
 		graphVersion = cached.Version
 		steps = s.canonicalToDBSteps(cached.Graph)
 		preconditions = s.canonicalToPreconditions(cached.Graph)
+		entryPoint = cached.Graph.EntryPoint
 		log.Printf("Cache HIT for graph %s (agent=%s, version=%d)", actionGraphID, robotState.AgentID, graphVersion)
 	} else {
 		// Cache miss - load from database
@@ -191,6 +193,9 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, robotID string
 		}
 
 		graphVersion = dbGraph.Version
+		if dbGraph.EntryPoint.Valid {
+			entryPoint = dbGraph.EntryPoint.String
+		}
 
 		// Parse steps from DB
 		if err := json.Unmarshal(dbGraph.Steps, &steps); err != nil {
@@ -216,6 +221,9 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, robotID string
 		canonicalGraph, err := graph.FromDBModel(dbGraph)
 		if err == nil {
 			s.stateManager.GraphCache().Set(robotState.AgentID, actionGraphID, canonicalGraph)
+			if entryPoint == "" && canonicalGraph.EntryPoint != "" {
+				entryPoint = canonicalGraph.EntryPoint
+			}
 		}
 	}
 
@@ -226,8 +234,20 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, robotID string
 
 	agentMode := isSelfOnlyGraph(steps)
 
-	// Extract required zones from first step
-	requiredZones := s.extractRequiredZones(steps[0])
+	entryIndex := 0
+	entryStepID := steps[0].ID
+	if entryPoint != "" {
+		for i, step := range steps {
+			if step.ID == entryPoint {
+				entryIndex = i
+				entryStepID = step.ID
+				break
+			}
+		}
+	}
+
+	// Extract required zones from entry step
+	requiredZones := s.extractRequiredZones(steps[entryIndex])
 	if agentMode {
 		requiredZones = nil
 	}
@@ -236,7 +256,7 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, robotID string
 	success, errMsg := s.stateManager.TryStartExecution(
 		robotID,
 		taskID,
-		steps[0].ID,
+		entryStepID,
 		requiredZones,
 		preconditions,
 	)
@@ -250,8 +270,8 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, robotID string
 		ActionGraphID:    sql.NullString{String: actionGraphID, Valid: true},
 		RobotID:          sql.NullString{String: robotID, Valid: true},
 		Status:           string(TaskRunning),
-		CurrentStepID:    sql.NullString{String: steps[0].ID, Valid: true},
-		CurrentStepIndex: 0,
+		CurrentStepID:    sql.NullString{String: entryStepID, Valid: true},
+		CurrentStepIndex: entryIndex,
 		StartedAt:        sql.NullTime{Time: time.Now(), Valid: true},
 	}
 	if err := s.repo.CreateTask(dbTask); err != nil {
@@ -277,7 +297,7 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, robotID string
 		RobotID:       robotID,
 		AgentID:       robotState.AgentID,
 		Steps:         steps,
-		CurrentStep:   0,
+		CurrentStep:   entryIndex,
 		Status:        TaskRunning,
 		RetryCount:    make(map[string]int),
 		ReservedZones: requiredZones,

@@ -1024,6 +1024,9 @@ std::shared_ptr<fleet::v1::AgentMessage> CapabilityRegistrar::build_registration
         proto_cap->set_result_schema(cap.result_schema_json);
         proto_cap->set_feedback_schema(cap.feedback_schema_json);
 
+        // Include availability status so server can track offline action servers
+        proto_cap->set_is_available(cap.available.load());
+
         if (!cap.success_criteria.is_empty()) {
             auto* criteria = proto_cap->mutable_success_criteria();
             criteria->set_field(cap.success_criteria.field);

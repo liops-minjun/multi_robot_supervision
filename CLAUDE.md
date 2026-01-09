@@ -1,3 +1,71 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Build & Development Commands
+
+### Docker (Full Stack)
+```bash
+docker-compose up -d --build      # Build and start all services
+docker-compose down               # Stop services
+docker-compose down -v            # Stop and remove volumes (reset data)
+docker-compose logs -f            # Follow logs
+```
+
+### Go Backend (central_server_go/)
+```bash
+cd central_server_go
+go run cmd/server/main.go         # Run backend (requires Neo4j)
+go build -o fleet-server ./cmd/server  # Build binary
+go test ./...                     # Run all tests
+go test ./internal/api/...        # Test specific package
+```
+
+### React Frontend (central_server/frontend/)
+```bash
+cd central_server/frontend
+npm install                       # Install dependencies
+npm run dev                       # Development server (port 5173)
+npm run build                     # Production build
+tsc                               # Type check
+```
+
+### Fleet Agent C++ (fleet_agent_cpp/)
+```bash
+# Setup ROS2 workspace (one-time)
+./setup_test.sh
+cd ros2_ws
+source /opt/ros/humble/setup.bash
+
+# Build
+colcon build --symlink-install
+source install/setup.bash
+
+# Run
+ros2 launch fleet_agent_cpp fleet_agent.launch.py server_ip:=192.168.0.100
+```
+
+### Development Scripts
+```bash
+./scripts/dev.sh                  # Start backend + frontend (no Docker)
+./scripts/run_test.sh             # Integration test with ROS2 action servers
+./scripts/test_capability_api.sh  # Test capability APIs
+./scripts/test_graph_api.sh       # Test action graph APIs
+```
+
+### Regenerate Protobuf (when modifying proto files)
+```bash
+# Go (in central_server_go/)
+protoc --proto_path=./pkg/proto \
+  --go_out=./pkg/proto --go_opt=paths=source_relative \
+  --go-grpc_out=./pkg/proto --go-grpc_opt=paths=source_relative \
+  ./pkg/proto/fleet.proto
+
+# C++ (handled by CMake during colcon build)
+```
+
+---
+
 # Multi-Robot Supervision System - Development Guide
 
 ## Project Overview

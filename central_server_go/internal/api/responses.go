@@ -61,6 +61,7 @@ type ActionGraphListResponse struct {
 	Description      string    `json:"description,omitempty"`
 	AgentID          string    `json:"agent_id,omitempty"`
 	AgentName        string    `json:"agent_name,omitempty"`
+	EntryPoint       string    `json:"entry_point,omitempty"`
 	StepCount        int       `json:"step_count"`
 	Version          int       `json:"version"`
 	IsTemplate       bool      `json:"is_template"`
@@ -75,6 +76,7 @@ type ActionGraphResponse struct {
 	Description      string                   `json:"description,omitempty"`
 	AgentID          string                   `json:"agent_id,omitempty"`
 	AgentName        string                   `json:"agent_name,omitempty"`
+	EntryPoint       string                   `json:"entry_point,omitempty"`
 	Preconditions    []map[string]interface{} `json:"preconditions,omitempty"`
 	Steps            []map[string]interface{} `json:"steps"`
 	Version          int                      `json:"version"`
@@ -89,6 +91,7 @@ type ActionGraphCreateRequest struct {
 	Name          string                   `json:"name"`
 	Description   string                   `json:"description,omitempty"`
 	AgentID       string                   `json:"agent_id,omitempty"`
+	EntryPoint    string                   `json:"entry_point,omitempty"`
 	Preconditions []map[string]interface{} `json:"preconditions,omitempty"`
 	Steps         []map[string]interface{} `json:"steps"`
 }
@@ -96,6 +99,7 @@ type ActionGraphCreateRequest struct {
 type ActionGraphUpdateRequest struct {
 	Name          string                   `json:"name,omitempty"`
 	Description   string                   `json:"description,omitempty"`
+	EntryPoint    string                   `json:"entry_point,omitempty"`
 	Preconditions []map[string]interface{} `json:"preconditions,omitempty"`
 	Steps         []map[string]interface{} `json:"steps,omitempty"`
 }

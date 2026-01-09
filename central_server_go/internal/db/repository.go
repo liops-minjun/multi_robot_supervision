@@ -690,6 +690,7 @@ func (r *Repository) GetActionGraph(id string) (*ActionGraph, error) {
 				props := gNode.Props
 				stepsJSON := getString(props, "steps_json")
 				preconditionsJSON := getString(props, "preconditions_json")
+				entryPoint := getString(props, "entry_point")
 				ag := ActionGraph{
 					ID:               getString(props, "id"),
 					Name:             getString(props, "name"),
@@ -700,6 +701,9 @@ func (r *Repository) GetActionGraph(id string) (*ActionGraph, error) {
 					TemplateCategory: toNullString(getString(props, "template_category")),
 					CreatedAt:        time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
 					UpdatedAt:        time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
+				}
+				if entryPoint != "" {
+					ag.EntryPoint = toNullString(entryPoint)
 				}
 				if stepsJSON != "" {
 					ag.Steps = datatypes.JSON([]byte(stepsJSON))
@@ -749,11 +753,17 @@ func (r *Repository) GetActionGraphs(agentID string, includeTemplates bool) ([]A
 			node, _ := res.Record().Get("g")
 			if gNode, ok := node.(neo4j.Node); ok {
 				props := gNode.Props
+				entryPoint := getString(props, "entry_point")
+				var entryPointValue sql.NullString
+				if entryPoint != "" {
+					entryPointValue = toNullString(entryPoint)
+				}
 				graphs = append(graphs, ActionGraph{
 					ID:               getString(props, "id"),
 					Name:             getString(props, "name"),
 					Description:      toNullString(getString(props, "description")),
 					AgentID:          toNullString(getString(props, "agent_id")),
+					EntryPoint:       entryPointValue,
 					Version:          int(getInt64(props, "version")),
 					IsTemplate:       getBool(props, "is_template"),
 					TemplateCategory: toNullString(getString(props, "template_category")),
@@ -781,12 +791,18 @@ func (r *Repository) CreateActionGraph(graph *ActionGraph) error {
 	requiredTypes := ExtractActionTypesFromSteps(steps)
 	executionMode := executionModeFromSteps(steps)
 	stepsJSON := string(graph.Steps)
+	entryPoint := graph.EntryPoint.String
+	if entryPoint == "" && len(steps) > 0 {
+		entryPoint = steps[0].ID
+		graph.EntryPoint = toNullString(entryPoint)
+	}
 	ctx := context.Background()
 	props := map[string]any{
 		"id":                    graph.ID,
 		"name":                  graph.Name,
 		"description":           graph.Description.String,
 		"agent_id":              graph.AgentID.String,
+		"entry_point":           entryPoint,
 		"version":               graph.Version,
 		"is_template":           graph.IsTemplate,
 		"template_category":     graph.TemplateCategory.String,
@@ -806,6 +822,7 @@ func (r *Repository) CreateActionGraph(graph *ActionGraph) error {
 				name: $name,
 				description: $description,
 				agent_id: $agent_id,
+				entry_point: $entry_point,
 				version: $version,
 				is_template: $is_template,
 				template_category: $template_category,
@@ -841,12 +858,18 @@ func (r *Repository) UpdateActionGraph(graph *ActionGraph) error {
 	requiredTypes := ExtractActionTypesFromSteps(steps)
 	executionMode := executionModeFromSteps(steps)
 	stepsJSON := string(graph.Steps)
+	entryPoint := graph.EntryPoint.String
+	if entryPoint == "" && len(steps) > 0 {
+		entryPoint = steps[0].ID
+		graph.EntryPoint = toNullString(entryPoint)
+	}
 	ctx := context.Background()
 	props := map[string]any{
 		"id":                    graph.ID,
 		"name":                  graph.Name,
 		"description":           graph.Description.String,
 		"agent_id":              graph.AgentID.String,
+		"entry_point":           entryPoint,
 		"version":               graph.Version,
 		"is_template":           graph.IsTemplate,
 		"template_category":     graph.TemplateCategory.String,
@@ -862,12 +885,13 @@ func (r *Repository) UpdateActionGraph(graph *ActionGraph) error {
 		_, err := tx.Run(ctx, `
 			MATCH (g:ActionGraph {id: $id})
 			SET g.name = $name,
-			    g.description = $description,
-			    g.agent_id = $agent_id,
-			    g.version = $version,
-			    g.is_template = $is_template,
-			    g.template_category = $template_category,
-			    g.steps_json = $steps_json,
+				g.description = $description,
+				g.agent_id = $agent_id,
+				g.entry_point = $entry_point,
+				g.version = $version,
+				g.is_template = $is_template,
+				g.template_category = $template_category,
+				g.steps_json = $steps_json,
 			    g.preconditions_json = $preconditions_json,
 			    g.required_action_types = $required_action_types,
 			    g.execution_mode = $execution_mode,
@@ -922,7 +946,10 @@ func (r *Repository) storeActionGraphStructure(ctx context.Context, tx neo4j.Man
 		return nil
 	}
 
-	entryPoint := steps[0].ID
+	entryPoint := graph.EntryPoint.String
+	if entryPoint == "" {
+		entryPoint = steps[0].ID
+	}
 
 	for _, step := range steps {
 		isTerminal := step.Type == "terminal" || step.TerminalType != ""

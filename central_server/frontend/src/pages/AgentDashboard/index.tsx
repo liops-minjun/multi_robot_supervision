@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useState, useEffect, useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import {
   Server,
   Wifi,
@@ -9,15 +9,13 @@ import {
   ChevronRight,
   Zap,
   Clock,
-  FileCode,
-  Check,
-  AlertTriangle,
-  Link2,
+  Layout,
   Heart,
   HeartPulse,
 } from 'lucide-react'
-import { agentApi, templateApi } from '../../api/client'
-import type { AgentCapabilityInfo, TemplateCompatibilityInfo, AgentConnectionStatus } from '../../types'
+import { agentApi, actionGraphApi, fleetApi, stateDefinitionApi } from '../../api/client'
+import type { AgentCapabilityInfo, AgentConnectionStatus, ActionGraph, RobotStateSnapshot, StateDefinition } from '../../types'
+import ActionGraphViewer from '../../components/ActionGraphViewer'
 import { useTranslation } from '../../i18n'
 
 // Status badge component
@@ -150,105 +148,59 @@ function CapabilityCard({
   )
 }
 
-// Template card component
-function TemplateCard({
-  template,
-  onAssign,
-  assigning,
-  t,
-}: {
-  template: TemplateCompatibilityInfo
-  onAssign: () => void
-  assigning: boolean
-  t: (key: 'agent.compatible' | 'agent.partial' | 'agent.assigned' | 'agent.missing' | 'agent.assign' | 'agent.assigning') => string
-}) {
-  return (
-    <div
-      className={`bg-[#1a1a2e] rounded-lg border p-4 ${
-        template.is_fully_compatible ? 'border-[#2a2a4a]' : 'border-yellow-500/30'
-      }`}
-    >
-      <div className="flex items-start justify-between">
-        <div className="flex items-start gap-3">
-          <FileCode className={`w-5 h-5 mt-0.5 ${
-            template.is_fully_compatible ? 'text-blue-400' : 'text-yellow-400'
-          }`} />
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-white">{template.template_name}</span>
-              {template.is_fully_compatible ? (
-                <span className="text-[9px] px-1.5 py-0.5 bg-green-500/20 text-green-400 rounded flex items-center gap-1">
-                  <Check size={10} />
-                  {t('agent.compatible')}
-                </span>
-              ) : (
-                <span className="text-[9px] px-1.5 py-0.5 bg-yellow-500/20 text-yellow-400 rounded flex items-center gap-1">
-                  <AlertTriangle size={10} />
-                  {t('agent.partial')}
-                </span>
-              )}
-              {template.already_assigned && (
-                <span className="text-[9px] px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded">
-                  {t('agent.assigned')}
-                </span>
-              )}
-            </div>
+const resolveRobotId = (robot: RobotStateSnapshot) => robot.id || robot.robot_id || ''
+const resolveRobotName = (robot: RobotStateSnapshot) => robot.name || robot.robot_name || resolveRobotId(robot)
+const resolveRobotState = (robot: RobotStateSnapshot) => robot.current_state || robot.state || ''
+const resolveRobotExecuting = (robot: RobotStateSnapshot) => robot.is_executing ?? false
 
-            {/* Required action types */}
-            {template.required_action_types && template.required_action_types.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-2">
-                {template.required_action_types.map((at) => {
-                  const isMissing = template.missing_capabilities?.includes(at) ?? false
-                  return (
-                    <span
-                      key={at}
-                      className={`text-[9px] px-1.5 py-0.5 rounded ${
-                        isMissing
-                          ? 'bg-red-500/20 text-red-400'
-                          : 'bg-purple-500/20 text-purple-400'
-                      }`}
-                    >
-                      {isMissing && '✗ '}{at.split('/').pop()}
-                    </span>
-                  )
-                })}
-              </div>
-            )}
+const resolveActiveStepId = (graph: ActionGraph | null, robot?: RobotStateSnapshot | null) => {
+  if (!graph || !robot) return null
+  if (robot.current_step_id) return robot.current_step_id
+  if (!resolveRobotExecuting(robot)) return null
 
-            {/* Missing capabilities warning */}
-            {!template.is_fully_compatible && template.missing_capabilities && template.missing_capabilities.length > 0 && (
-              <div className="text-[10px] text-yellow-400 mt-2">
-                {t('agent.missing')}: {template.missing_capabilities.map(c => c.split('/').pop()).join(', ')}
-              </div>
-            )}
-          </div>
-        </div>
+  const currentState = resolveRobotState(robot)
+  if (!currentState) return null
 
-        {/* Assign button */}
-        {!template.already_assigned && (
-          <button
-            onClick={onAssign}
-            disabled={!template.is_fully_compatible || assigning}
-            className={`px-3 py-1.5 text-xs rounded-lg flex items-center gap-1.5 transition-colors ${
-              template.is_fully_compatible
-                ? 'bg-blue-600 hover:bg-blue-500 text-white'
-                : 'bg-gray-700 text-gray-500 cursor-not-allowed'
-            }`}
-          >
-            <Link2 size={12} />
-            {assigning ? t('agent.assigning') : t('agent.assign')}
-          </button>
-        )}
-      </div>
-    </div>
-  )
+  const agentId = robot.agent_id || null
+
+  for (const step of graph.steps) {
+    const rawTargets: Array<{
+      state?: string
+      target_type?: string
+      agent_id?: string
+      targetType?: string
+      agentId?: string
+    }> = (step.during_state_targets || step.duringStateTargets || []) as any
+    for (const target of rawTargets) {
+      const targetType = (target.target_type || target.targetType || '').toLowerCase()
+      if (!target.state || target.state !== currentState) {
+        continue
+      }
+      if (targetType === '' || targetType === 'self' || targetType === 'all') {
+        return step.id
+      }
+      if (targetType === 'agent') {
+        const targetAgent = target.agent_id || target.agentId || ''
+        if (!targetAgent || (agentId && targetAgent === agentId)) {
+          return step.id
+        }
+      }
+    }
+
+    const duringStates = step.during_states || step.duringStates || []
+    if (duringStates.includes(currentState)) {
+      return step.id
+    }
+  }
+
+  return null
 }
 
 export default function AgentDashboard() {
   const { t } = useTranslation()
-  const queryClient = useQueryClient()
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [expandedCapabilities, setExpandedCapabilities] = useState<string[]>([])
+  const [selectedRobotId, setSelectedRobotId] = useState<string | null>(null)
 
   // Fetch all agents
   const {
@@ -284,21 +236,41 @@ export default function AgentDashboard() {
     refetchInterval: 5000,
   })
 
-  // Fetch compatible templates for selected agent
-  const { data: compatibleTemplates, isLoading: templatesLoading } = useQuery({
-    queryKey: ['agent-compatible-templates', selectedAgentId],
-    queryFn: () => agentApi.getCompatibleTemplates(selectedAgentId!),
-    enabled: !!selectedAgentId,
+  const { data: actionGraphs = [], isLoading: graphsLoading } = useQuery({
+    queryKey: ['action-graphs', 'fleet'],
+    queryFn: () => actionGraphApi.list({ includeTemplates: false }),
     refetchInterval: 10000,
   })
 
-  // Assign template mutation
-  const assignTemplate = useMutation({
-    mutationFn: ({ templateId, agentId }: { templateId: string; agentId: string }) =>
-      templateApi.assign(templateId, agentId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agent-compatible-templates', selectedAgentId] })
-    },
+  const fleetGraphMeta = useMemo(() => {
+    if (actionGraphs.length === 0) return null
+    const sorted = [...actionGraphs].sort((a, b) => {
+      const aTime = new Date(a.updated_at || a.created_at).getTime()
+      const bTime = new Date(b.updated_at || b.created_at).getTime()
+      return bTime - aTime
+    })
+    return sorted[0]
+  }, [actionGraphs])
+
+  const { data: fleetGraph } = useQuery({
+    queryKey: ['action-graph', fleetGraphMeta?.id],
+    queryFn: () => actionGraphApi.get(fleetGraphMeta!.id),
+    enabled: !!fleetGraphMeta,
+  })
+
+  const { data: stateDefinitions = [] } = useQuery({
+    queryKey: ['state-definitions'],
+    queryFn: () => stateDefinitionApi.list(),
+  })
+
+  const selectedStateDef: StateDefinition | null = stateDefinitions[0] || null
+
+  const { data: agentState } = useQuery({
+    queryKey: ['agent-state', selectedAgentId],
+    queryFn: () => fleetApi.getAgentState(selectedAgentId!),
+    enabled: !!selectedAgentId,
+    refetchInterval: 1000,
+    refetchIntervalInBackground: true,
   })
 
   const selectedAgent = agents.find((a) => a.id === selectedAgentId)
@@ -325,18 +297,31 @@ export default function AgentDashboard() {
     )
   }
 
-  // Sort templates: fully compatible first, then by name
-  const sortedTemplates = compatibleTemplates?.templates
-    ?.slice()
-    .sort((a, b) => {
-      if (a.is_fully_compatible !== b.is_fully_compatible) {
-        return a.is_fully_compatible ? -1 : 1
-      }
-      if (a.already_assigned !== b.already_assigned) {
-        return a.already_assigned ? 1 : -1
-      }
-      return a.template_name.localeCompare(b.template_name)
-    }) || []
+  const agentRobots = agentState?.robots || []
+
+  useEffect(() => {
+    if (!agentRobots.length) {
+      setSelectedRobotId(null)
+      return
+    }
+    const existing = selectedRobotId &&
+      agentRobots.some(robot => resolveRobotId(robot) === selectedRobotId)
+    if (existing) return
+    const executing = agentRobots.find(robot => resolveRobotExecuting(robot))
+    setSelectedRobotId(resolveRobotId(executing || agentRobots[0]))
+  }, [agentRobots, selectedRobotId])
+
+  const selectedRobotState = useMemo(() => {
+    if (!selectedRobotId) return null
+    return agentRobots.find(robot => resolveRobotId(robot) === selectedRobotId) || null
+  }, [agentRobots, selectedRobotId])
+
+  const currentStepId = useMemo(() => {
+    return resolveActiveStepId(fleetGraph || null, selectedRobotState)
+  }, [fleetGraph, selectedRobotState])
+
+  const selectedRobotCurrentState = selectedRobotState ? resolveRobotState(selectedRobotState) : ''
+  const selectedRobotExecuting = selectedRobotState ? resolveRobotExecuting(selectedRobotState) : false
 
   // Summary stats
   const onlineCount = agents.filter((a) => a.status === 'online').length
@@ -580,42 +565,80 @@ export default function AgentDashboard() {
                 )}
               </div>
 
-              {/* Compatible Templates */}
+              {/* Action Graph */}
               <div>
                 <div className="flex items-center gap-2 mb-4">
-                  <FileCode className="w-5 h-5 text-blue-400" />
-                  <h3 className="text-lg font-semibold text-white">{t('agent.compatibleTemplates')}</h3>
-                  <span className="text-sm text-gray-500">
-                    ({sortedTemplates.filter(tmpl => tmpl.is_fully_compatible).length} {t('agent.compatible')} / {sortedTemplates.length} {t('agent.total')})
-                  </span>
+                  <Layout className="w-5 h-5 text-cyan-400" />
+                  <h3 className="text-lg font-semibold text-white">Action Graph</h3>
+                  {fleetGraph && (
+                    <span className="text-sm text-gray-500">v{fleetGraph.version}</span>
+                  )}
                 </div>
 
-                {templatesLoading ? (
-                  <div className="text-center py-8 text-gray-500">{t('agent.loadingTemplates')}</div>
-                ) : sortedTemplates.length === 0 ? (
+                {graphsLoading ? (
+                  <div className="text-center py-8 text-gray-500">Loading action graph...</div>
+                ) : !fleetGraph ? (
                   <div className="text-center py-8">
-                    <FileCode className="w-10 h-10 mx-auto mb-3 text-gray-600" />
-                    <p className="text-gray-500 text-sm">{t('agent.noTemplates')}</p>
+                    <Layout className="w-10 h-10 mx-auto mb-3 text-gray-600" />
+                    <p className="text-gray-500 text-sm">No action graph configured</p>
                     <p className="text-xs text-gray-600 mt-1">
-                      {t('agent.noTemplatesHint')}
+                      Create an Action Graph to visualize execution for this agent.
                     </p>
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {sortedTemplates.map((template) => (
-                      <TemplateCard
-                        key={template.template_id}
-                        template={template}
-                        assigning={assignTemplate.isPending}
-                        onAssign={() =>
-                          assignTemplate.mutate({
-                            templateId: template.template_id,
-                            agentId: selectedAgentId!,
-                          })
-                        }
-                        t={t}
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-gray-400">
+                      <span className="uppercase tracking-wider text-[10px] text-gray-500">Graph</span>
+                      <span className="text-gray-200 font-medium">{fleetGraph.name}</span>
+                      <span className="text-gray-600">{fleetGraph.id}</span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-3">
+                      <label className="text-xs text-gray-400">Robot</label>
+                      <select
+                        value={selectedRobotId || ''}
+                        onChange={(e) => setSelectedRobotId(e.target.value)}
+                        className="px-2 py-1 bg-[#1a1a2e] border border-[#2a2a4a] rounded text-xs text-white"
+                        disabled={agentRobots.length === 0}
+                      >
+                        {agentRobots.length === 0 && (
+                          <option value="">No robots</option>
+                        )}
+                        {agentRobots.map((robot) => {
+                          const robotId = resolveRobotId(robot)
+                          return (
+                            <option key={robotId} value={robotId}>
+                              {resolveRobotName(robot)}
+                            </option>
+                          )
+                        })}
+                      </select>
+
+                      {selectedRobotState && (
+                        <div className="flex items-center gap-2 text-xs text-gray-400">
+                          <span>State:</span>
+                          <span className="text-gray-200 font-medium">
+                            {selectedRobotCurrentState || 'unknown'}
+                          </span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                            selectedRobotExecuting ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'
+                          }`}>
+                            {selectedRobotExecuting ? 'executing' : 'idle'}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="h-[380px] rounded-lg border border-[#2a2a4a] overflow-hidden bg-[#0f0f1a]">
+                      <ActionGraphViewer
+                        actionGraph={fleetGraph}
+                        stateDef={selectedStateDef}
+                        currentStepId={currentStepId}
+                        className="h-full"
+                        showControls={true}
+                        showMiniMap={false}
                       />
-                    ))}
+                    </div>
                   </div>
                 )}
               </div>

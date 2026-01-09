@@ -862,6 +862,7 @@ func (s *Server) CopyActionGraph(w http.ResponseWriter, r *http.Request) {
 		Description:   sourceGraph.Description,
 		Preconditions: sourceGraph.Preconditions,
 		Steps:         sourceGraph.Steps,
+		EntryPoint:    sourceGraph.EntryPoint,
 		Version:       1,
 		IsTemplate:    false,
 	}

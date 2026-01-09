@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -135,6 +136,9 @@ func (s *Server) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 		graph.Description.String = req.Description
 		graph.Description.Valid = true
 	}
+	if req.EntryPoint != "" {
+		graph.EntryPoint = sql.NullString{String: req.EntryPoint, Valid: true}
+	}
 
 	if req.Steps != nil {
 		normalizedSteps := normalizeActionGraphSteps(req.Steps)
@@ -208,6 +212,9 @@ func (s *Server) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
 	if req.Description != "" {
 		template.Description.String = req.Description
 		template.Description.Valid = true
+	}
+	if req.EntryPoint != "" {
+		template.EntryPoint = sql.NullString{String: req.EntryPoint, Valid: true}
 	}
 	if req.Steps != nil {
 		normalizedSteps := normalizeActionGraphSteps(req.Steps)

@@ -190,6 +190,9 @@ message ActionCapability {
 
   // Success criteria
   SuccessCriteria success_criteria = 8;
+
+  // Availability status (true if action server is currently running)
+  bool is_available = 9;
 }
 
 message SuccessCriteria {

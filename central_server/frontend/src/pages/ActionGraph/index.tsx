@@ -39,6 +39,9 @@ const nodeTypes = {
   transition: StateTransitionNode,
 }
 
+const START_NODE_ID = '__action_graph_start__'
+const START_NODE_COLOR = '#22c55e'
+
 // Color palette for different action types
 const ACTION_COLORS: Record<string, string> = {
   'nav2_msgs/NavigateToPose': '#3b82f6',
@@ -409,8 +412,20 @@ function ActionGraphEditor() {
 
   // Save template mutation
   const saveTemplate = useMutation({
-    mutationFn: async ({ templateId, steps }: { templateId: string; steps: ActionGraph['steps'] }) => {
-      return templateApi.update(templateId, { steps })
+    mutationFn: async ({
+      templateId,
+      steps,
+      entryPoint,
+    }: {
+      templateId: string
+      steps: ActionGraph['steps']
+      entryPoint?: string
+    }) => {
+      const payload: Partial<ActionGraph> = { steps }
+      if (entryPoint) {
+        payload.entry_point = entryPoint
+      }
+      return templateApi.update(templateId, payload)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['template', selectedTemplateId] })
@@ -487,12 +502,6 @@ function ActionGraphEditor() {
       color: getStateColor(state),
     }))
 
-    stateItems.unshift({
-      type: 'event',
-      subtype: 'Start',
-      label: 'Start',
-      color: '#22c55e',
-    })
     stateItems.push({
       type: 'event',
       subtype: 'End',
@@ -571,7 +580,10 @@ function ActionGraphEditor() {
   }, [availableAgents, setNodes])
 
   // Convert ReactFlow nodes/edges back to ActionGraph steps
-  const convertGraphToSteps = useCallback((): ActionGraph['steps'] => {
+  const convertGraphToSteps = useCallback((): {
+    steps: ActionGraph['steps']
+    entryPoint?: string
+  } => {
     const steps: ActionGraph['steps'] = []
 
     nodes.forEach((node) => {
@@ -662,18 +674,49 @@ function ActionGraphEditor() {
       steps.push(step)
     })
 
-    return steps
+    const stepIds = new Set(steps.map(step => step.id))
+    const startEdge = edges.find(edge => edge.source === START_NODE_ID)
+    let entryPoint: string | undefined
+    if (startEdge?.target && stepIds.has(startEdge.target)) {
+      entryPoint = startEdge.target
+    } else if (steps.length > 0) {
+      entryPoint = steps[0].id
+    }
+
+    return { steps, entryPoint }
   }, [nodes, edges])
 
   // Handle save
   const handleSave = useCallback(() => {
     if (!selectedTemplateId) return
-    const steps = convertGraphToSteps()
-    saveTemplate.mutate({ templateId: selectedTemplateId, steps })
+    const { steps, entryPoint } = convertGraphToSteps()
+    saveTemplate.mutate({ templateId: selectedTemplateId, steps, entryPoint })
   }, [selectedTemplateId, convertGraphToSteps, saveTemplate])
 
   const onConnect = useCallback(
     (params: Connection) => {
+      if (!params.source || !params.target) return
+      if (params.target === START_NODE_ID) return
+      if (params.source === START_NODE_ID) {
+        const color = START_NODE_COLOR
+        setEdges((eds) => {
+          const withoutStart = eds.filter(edge => edge.source !== START_NODE_ID)
+          return addEdge({
+            ...params,
+            sourceHandle: params.sourceHandle || 'state-out',
+            targetHandle: params.targetHandle || 'state-in',
+            type: 'smoothstep',
+            animated: false,
+            markerEnd: { type: MarkerType.ArrowClosed, color },
+            style: {
+              stroke: color,
+              strokeWidth: 2,
+            },
+          }, withoutStart)
+        })
+        return
+      }
+
       const sourceNode = nodes.find(node => node.id === params.source)
       const endStates = sourceNode?.data?.endStates as EndStateConfig[] | undefined
       const matchedEndState = endStates?.find(es => es.id === params.sourceHandle)
@@ -1389,6 +1432,25 @@ function convertActionGraphToGraph(
   const actionMappings = stateDef?.action_mappings || []
   const defaultState = availableStates.includes('idle') ? 'idle' : availableStates[0] || 'idle'
   const errorState = availableStates.includes('error') ? 'error' : availableStates[availableStates.length - 1] || 'error'
+  const stepIds = new Set(actionGraph.steps.map(step => step.id))
+  const preferredEntry = actionGraph.entry_point || actionGraph.steps[0]?.id
+
+  nodes.push({
+    id: START_NODE_ID,
+    type: 'event',
+    position: { x: 80, y: 100 },
+    data: {
+      label: 'Start',
+      subtype: 'Start',
+      color: START_NODE_COLOR,
+      initialState: defaultState,
+      availableStates,
+      availableAgents,
+    },
+    draggable: false,
+    selectable: false,
+    deletable: false,
+  })
 
   actionGraph.steps.forEach((step, index) => {
     const x = 300 + (index % 3) * 300
@@ -1558,6 +1620,22 @@ function convertActionGraphToGraph(
       }
     }
   })
+
+  const entryPoint = preferredEntry && stepIds.has(preferredEntry)
+    ? preferredEntry
+    : actionGraph.steps[0]?.id
+  if (entryPoint) {
+    edges.push({
+      id: `${START_NODE_ID}->${entryPoint}`,
+      source: START_NODE_ID,
+      target: entryPoint,
+      sourceHandle: 'state-out',
+      targetHandle: 'state-in',
+      type: 'smoothstep',
+      markerEnd: { type: MarkerType.ArrowClosed, color: START_NODE_COLOR },
+      style: { stroke: START_NODE_COLOR, strokeWidth: 2 },
+    })
+  }
 
   return { initialNodes: nodes, initialEdges: edges }
 }
