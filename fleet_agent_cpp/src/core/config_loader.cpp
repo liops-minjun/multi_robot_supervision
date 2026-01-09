@@ -23,26 +23,44 @@ std::string get_string(const YAML::Node& node, const std::string& key,
     return default_val;
 }
 
-// Helper to get optional int from YAML node
+// Helper to get optional int from YAML node (supports env var expansion)
 int get_int(const YAML::Node& node, const std::string& key, int default_val = 0) {
     if (node[key] && node[key].IsScalar()) {
-        return node[key].as<int>();
+        std::string str_val = node[key].as<std::string>();
+        str_val = expand_env_vars(str_val);
+        try {
+            return std::stoi(str_val);
+        } catch (const std::exception&) {
+            return default_val;
+        }
     }
     return default_val;
 }
 
-// Helper to get optional float from YAML node
+// Helper to get optional float from YAML node (supports env var expansion)
 float get_float(const YAML::Node& node, const std::string& key, float default_val = 0.0f) {
     if (node[key] && node[key].IsScalar()) {
-        return node[key].as<float>();
+        std::string str_val = node[key].as<std::string>();
+        str_val = expand_env_vars(str_val);
+        try {
+            return std::stof(str_val);
+        } catch (const std::exception&) {
+            return default_val;
+        }
     }
     return default_val;
 }
 
-// Helper to get optional double from YAML node
+// Helper to get optional double from YAML node (supports env var expansion)
 double get_double(const YAML::Node& node, const std::string& key, double default_val = 0.0) {
     if (node[key] && node[key].IsScalar()) {
-        return node[key].as<double>();
+        std::string str_val = node[key].as<std::string>();
+        str_val = expand_env_vars(str_val);
+        try {
+            return std::stod(str_val);
+        } catch (const std::exception&) {
+            return default_val;
+        }
     }
     return default_val;
 }
