@@ -58,7 +58,7 @@ func FromDBModel(ag *db.ActionGraph) (*CanonicalGraph, error) {
 	}
 
 	// Build vertices and edges from steps
-	for i, step := range steps {
+	for _, step := range steps {
 		vertex := stepToVertex(&step)
 		graph.Vertices = append(graph.Vertices, vertex)
 
