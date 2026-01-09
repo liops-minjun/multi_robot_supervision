@@ -169,9 +169,11 @@ source install/setup.bash
 ros2 run fleet_agent fleet_agent_node --ros-args -p agent_id:=agent_01
 ```
 
-### 설정 파일
+### 외부 서버 연결 설정
 
-`fleet_agent_cpp/config/agent.yaml` 수정:
+#### 1. 설정 파일 수정
+
+`fleet_agent_cpp/config/agent.yaml`:
 
 ```yaml
 agent:
@@ -180,13 +182,86 @@ agent:
 
 server:
   quic:
-    server_address: "192.168.0.100"  # Central Server IP
-    server_port: 9443
+    server_address: "192.168.0.100"  # Central Server IP (변경 필요)
+    server_port: 9444                 # Raw QUIC 포트
+    alpn: "fleet-agent-raw"
+    ca_cert: "/etc/fleet_agent/certs/ca.crt"
+    client_cert: "/etc/fleet_agent/certs/agent.crt"
+    client_key: "/etc/fleet_agent/certs/agent.key"
+    idle_timeout_ms: 30000
+    keepalive_interval_ms: 10000
+    enable_0rtt: true
+    enable_datagrams: true
 
 robots:
   - id: "robot_001"
     namespace: "/robot_001"
     name: "AMR Robot 1"
+```
+
+#### 2. TLS 인증서 복사
+
+Central Server의 인증서를 로봇으로 복사:
+
+```bash
+# 로봇에서 실행
+sudo mkdir -p /etc/fleet_agent/certs
+
+# Central Server에서 인증서 복사 (scp 사용)
+scp user@central-server:/path/to/central_server_go/certs/ca.crt /etc/fleet_agent/certs/
+scp user@central-server:/path/to/central_server_go/certs/agent.crt /etc/fleet_agent/certs/
+scp user@central-server:/path/to/central_server_go/certs/agent.key /etc/fleet_agent/certs/
+
+# 또는 fleet_agent_cpp/certs에서 복사
+cp fleet_agent_cpp/certs/* /etc/fleet_agent/certs/
+```
+
+#### 3. 방화벽 설정
+
+Central Server에서 UDP 포트 열기:
+
+```bash
+# Central Server에서 실행
+sudo ufw allow 9444/udp  # Raw QUIC
+sudo ufw allow 9443/udp  # gRPC over QUIC
+```
+
+#### 4. 연결 확인
+
+```bash
+# Agent 실행
+cd fleet_agent_cpp
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 run fleet_agent fleet_agent_node
+
+# 로그에서 연결 확인
+# [INFO] Connected to server at 192.168.0.100:9444
+```
+
+#### 5. 네트워크 구성 예시
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Central Server                            │
+│                  192.168.0.100                               │
+│         ┌─────────────────────────────┐                     │
+│         │  Docker Compose Stack       │                     │
+│         │  - Neo4j     :7474, 7687    │                     │
+│         │  - Backend   :8081, 9444    │                     │
+│         │  - Frontend  :3000          │                     │
+│         └─────────────────────────────┘                     │
+└─────────────────────────┬───────────────────────────────────┘
+                          │ QUIC (UDP 9444)
+         ┌────────────────┼────────────────┐
+         ▼                ▼                ▼
+  ┌────────────┐   ┌────────────┐   ┌────────────┐
+  │ Robot 1    │   │ Robot 2    │   │ Robot 3    │
+  │ 192.168.0.10│  │ 192.168.0.11│  │ 192.168.0.12│
+  │            │   │            │   │            │
+  │ Fleet Agent│   │ Fleet Agent│   │ Fleet Agent│
+  │ + ROS2     │   │ + ROS2     │   │ + ROS2     │
+  └────────────┘   └────────────┘   └────────────┘
 ```
 
 ---
