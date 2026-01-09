@@ -130,10 +130,12 @@ sudo apt install -y \
   libspdlog-dev \
   nlohmann-json3-dev
 
-# MsQuic (QUIC transport)
-wget https://github.com/microsoft/msquic/releases/download/v2.2.3/libmsquic_2.2.3_amd64.deb
-sudo dpkg -i libmsquic_2.2.3_amd64.deb
-rm libmsquic_2.2.3_amd64.deb
+# MsQuic (QUIC transport) - Microsoft 패키지 저장소 사용
+wget -q https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb
+sudo dpkg -i packages-microsoft-prod.deb
+rm packages-microsoft-prod.deb
+sudo apt-get update
+sudo apt-get install -y libmsquic
 ```
 
 ---

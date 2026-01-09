@@ -1,0 +1,48 @@
+# Build artifacts
+build/
+install/
+log/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.pyc
+.env
+
+# Node.js
+node_modules/
+dist/
+
+# C++
+*.o
+*.a
+*.so
+*.out
+
+# ROS2
+*.bag
+*.db3
+
+# PID files
+.pids/
+
+# Temporary files
+*.tmp
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test workspaces
+test_ros2_ws/build/
+test_ros2_ws/install/
+test_ros2_ws/log/
+fleet_agent_cpp/build/
+fleet_agent_cpp/install/
+fleet_agent_cpp/log/
