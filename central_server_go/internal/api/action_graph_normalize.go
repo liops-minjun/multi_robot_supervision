@@ -53,6 +53,22 @@ func normalizeActionGraphStep(step map[string]interface{}) {
 	}
 	delete(step, "duringStates")
 
+	duringTargets := normalizeStateTargets(step["during_state_targets"])
+	if len(duringTargets) == 0 {
+		duringTargets = normalizeStateTargets(step["duringStateTargets"])
+	}
+	if len(duringTargets) > 0 {
+		step["during_state_targets"] = duringTargets
+	}
+	delete(step, "duringStateTargets")
+
+	if len(duringStates) == 0 && len(duringTargets) > 0 {
+		selfStates := extractSelfStatesFromTargets(duringTargets)
+		if len(selfStates) > 0 {
+			step["during_states"] = selfStates
+		}
+	}
+
 	successStates := extractStateList(step["success_states"])
 	if len(successStates) == 0 {
 		successStates = extractStateList(step["successStates"])
@@ -152,6 +168,76 @@ func normalizeStartConditionKeys(cond map[string]interface{}) {
 		}
 		cond["quantifier"] = q
 	}
+}
+
+func normalizeStateTargets(raw interface{}) []map[string]interface{} {
+	if raw == nil {
+		return nil
+	}
+	if strList := extractStringList(raw); len(strList) > 0 && len(extractMapList(raw)) == 0 {
+		out := make([]map[string]interface{}, 0, len(strList))
+		for _, state := range strList {
+			out = append(out, map[string]interface{}{
+				"state":       state,
+				"target_type": "self",
+			})
+		}
+		return out
+	}
+
+	targets := extractMapList(raw)
+	if len(targets) == 0 {
+		return nil
+	}
+	normalized := make([]map[string]interface{}, 0, len(targets))
+	for _, target := range targets {
+		if target == nil {
+			continue
+		}
+		out := make(map[string]interface{}, len(target))
+		for k, v := range target {
+			out[k] = v
+		}
+		normalizeStateTargetKeys(out)
+		if targetType := extractString(out, "target_type"); targetType != "" {
+			out["target_type"] = strings.ToLower(targetType)
+		} else {
+			out["target_type"] = "self"
+		}
+		normalized = append(normalized, out)
+	}
+	return normalized
+}
+
+func normalizeStateTargetKeys(target map[string]interface{}) {
+	if v, ok := target["targetType"]; ok {
+		target["target_type"] = v
+		delete(target, "targetType")
+	}
+	if v, ok := target["agentId"]; ok {
+		target["agent_id"] = v
+		delete(target, "agentId")
+	}
+}
+
+func extractSelfStatesFromTargets(targets []map[string]interface{}) []string {
+	if len(targets) == 0 {
+		return nil
+	}
+	for _, target := range targets {
+		if target == nil {
+			continue
+		}
+		targetType := strings.ToLower(extractString(target, "target_type"))
+		if targetType != "" && targetType != "self" && targetType != "all" {
+			continue
+		}
+		state := extractString(target, "state")
+		if state != "" {
+			return []string{state}
+		}
+	}
+	return nil
 }
 
 func normalizeTransition(step map[string]interface{}) {

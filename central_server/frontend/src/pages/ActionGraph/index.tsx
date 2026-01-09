@@ -25,7 +25,7 @@ import { templateApi, stateDefinitionApi, agentApi, capabilityApi } from '../../
 import type {
   ActionGraph, StateDefinition, ActionMapping,
   AssignmentInfo, AgentOverviewInfo, Agent, TemplateListItem,
-  StartCondition, StartStateConfig, EndStateConfig, ActionOutcome, OutcomeTransition
+  StartCondition, StartStateConfig, EndStateConfig, ActionOutcome, OutcomeTransition, DuringStateTarget
 } from '../../types'
 
 // State-based Node Components
@@ -117,6 +117,26 @@ const inferOutcome = (endState: EndStateConfig, index: number): ActionOutcome =>
   if (label.includes('success') || label.includes('complete') || stateValue.includes('idle') || stateValue.includes('ready')) return 'success'
 
   return index === 0 ? 'success' : 'failed'
+}
+
+const normalizeDuringStateTargets = (
+  targets?: DuringStateTarget[] | null,
+  fallbackStates?: string[]
+): DuringStateTarget[] => {
+  if (targets && targets.length > 0) {
+    return targets.map(target => ({
+      ...target,
+      target_type: target.target_type || 'self',
+    }))
+  }
+  if (!fallbackStates || fallbackStates.length === 0) {
+    return []
+  }
+  const fallbackState = fallbackStates.find(Boolean)
+  if (!fallbackState) {
+    return []
+  }
+  return [{ state: fallbackState, target_type: 'self' }]
 }
 
 const outcomeCategory = (outcome: ActionOutcome): 'success' | 'failure' => {
@@ -294,6 +314,7 @@ function ActionGraphEditor() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showAssignModal, setShowAssignModal] = useState(false)
   const [showAddStateModal, setShowAddStateModal] = useState(false)
+  const [showCreateStateDefModal, setShowCreateStateDefModal] = useState(false)
 
   // Search
   const [searchTerm, setSearchTerm] = useState('')
@@ -343,12 +364,14 @@ function ActionGraphEditor() {
   })
 
   // Fetch first state definition (for states reference - legacy support)
-  const { data: stateDefinitions = [] } = useQuery({
+  const { data: stateDefinitions = [], refetch: refetchStateDefinitions } = useQuery({
     queryKey: ['state-definitions'],
     queryFn: () => stateDefinitionApi.list(),
   })
   const selectedStateDef = stateDefinitions.length > 0 ? stateDefinitions[0] : undefined
-  const refetchStateDef = () => {}
+  const refetchStateDef = () => {
+    refetchStateDefinitions()
+  }
 
   // Fetch assignments for selected template
   const { data: templateAssignments = [] } = useQuery({
@@ -595,6 +618,16 @@ function ActionGraphEditor() {
           .filter(Boolean)
         : []
 
+      const normalizedDuringTargets = normalizeDuringStateTargets(
+        node.data.duringStateTargets,
+        node.data.duringStates
+      )
+      const selfDuringTarget = normalizedDuringTargets.find(target =>
+        (!target.target_type || target.target_type === 'self' || target.target_type === 'all') &&
+        target.state
+      )
+      const selfDuringStates = selfDuringTarget?.state ? [selfDuringTarget.state] : []
+
       const step: ActionGraph['steps'][0] = {
         id: node.id,
         name: node.data.label,
@@ -609,7 +642,8 @@ function ActionGraphEditor() {
         },
         start_conditions: mapStartStatesToConditions(node.data.startStates || []),
         pre_states: preStates,
-        during_states: node.data.duringStates || [],
+        during_states: selfDuringStates,
+        during_state_targets: normalizedDuringTargets.length > 0 ? normalizedDuringTargets : undefined,
         end_states: endStates,
         success_states: resolvedSuccessStates,
         failure_states: resolvedFailureStates,
@@ -716,7 +750,9 @@ function ActionGraphEditor() {
           actionType: data.actionType,
           server: data.server,
           preStates: [],
-          duringStates: data.duringState ? [data.duringState] : [],
+          duringStateTargets: data.duringState
+            ? [{ state: data.duringState, target_type: 'self' }]
+            : [],
           successStates: [defaultSuccessState],
           failureStates: [defaultFailureState],
           duringState: data.duringState,
@@ -1038,36 +1074,51 @@ function ActionGraphEditor() {
       {selectedTemplate && (
         <div className="w-56 bg-[#16162a] border-r border-[#2a2a4a] flex flex-col">
           {/* States Management */}
-          {selectedStateDef && (
-            <div className="px-3 py-3 border-b border-[#2a2a4a]">
-              <button
-                onClick={() => setShowAddStateModal(true)}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-gradient-to-r from-green-600/20 to-green-500/10 border border-green-500/40 rounded-lg text-green-400 hover:from-green-600/30 hover:to-green-500/20 hover:border-green-500/60 transition-all"
-              >
-                <Plus size={14} />
-                <span className="text-xs font-medium">Manage States</span>
-              </button>
-              <div className="mt-2 flex flex-wrap gap-1">
-                {availableStates.slice(0, 5).map(state => (
-                  <span
-                    key={state}
-                    className="px-2 py-0.5 rounded text-[10px]"
-                    style={{
-                      backgroundColor: `${getStateColor(state)}20`,
-                      color: getStateColor(state),
-                    }}
-                  >
-                    {state}
-                  </span>
-                ))}
-                {availableStates.length > 5 && (
-                  <span className="px-2 py-0.5 rounded text-[10px] text-gray-500">
-                    +{availableStates.length - 5}
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
+          <div className="px-3 py-3 border-b border-[#2a2a4a]">
+            {selectedStateDef ? (
+              <>
+                <button
+                  onClick={() => setShowAddStateModal(true)}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-gradient-to-r from-green-600/20 to-green-500/10 border border-green-500/40 rounded-lg text-green-400 hover:from-green-600/30 hover:to-green-500/20 hover:border-green-500/60 transition-all"
+                >
+                  <Plus size={14} />
+                  <span className="text-xs font-medium">Manage States</span>
+                </button>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {availableStates.slice(0, 5).map(state => (
+                    <span
+                      key={state}
+                      className="px-2 py-0.5 rounded text-[10px]"
+                      style={{
+                        backgroundColor: `${getStateColor(state)}20`,
+                        color: getStateColor(state),
+                      }}
+                    >
+                      {state}
+                    </span>
+                  ))}
+                  {availableStates.length > 5 && (
+                    <span className="px-2 py-0.5 rounded text-[10px] text-gray-500">
+                      +{availableStates.length - 5}
+                    </span>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={() => setShowCreateStateDefModal(true)}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-gradient-to-r from-blue-600/20 to-blue-500/10 border border-blue-500/40 rounded-lg text-blue-400 hover:from-blue-600/30 hover:to-blue-500/20 hover:border-blue-500/60 transition-all"
+                >
+                  <Plus size={14} />
+                  <span className="text-xs font-medium">Create State Definition</span>
+                </button>
+                <div className="mt-2 text-[10px] text-gray-500">
+                  No state definition yet. Create one to manage states.
+                </div>
+              </>
+            )}
+          </div>
 
           {/* Search */}
           <div className="p-3 border-b border-[#2a2a4a]">
@@ -1295,6 +1346,17 @@ function ActionGraphEditor() {
         />
       )}
 
+      {/* Create State Definition Modal */}
+      {showCreateStateDefModal && (
+        <CreateStateDefinitionModal
+          onClose={() => setShowCreateStateDefModal(false)}
+          onCreated={() => {
+            setShowCreateStateDefModal(false)
+            refetchStateDef()
+          }}
+        />
+      )}
+
       {/* Add State Modal */}
       {showAddStateModal && selectedStateDef && (
         <AddStateModal
@@ -1344,6 +1406,10 @@ function convertActionGraphToGraph(
 
     const stepStartStates = step.startStates || mapStartConditionsToStates(step.start_conditions || [])
     const stepDuringStates = step.duringStates || step.during_states || duringStates
+    const stepDuringTargets = normalizeDuringStateTargets(
+      step.duringStateTargets || step.during_state_targets,
+      stepDuringStates
+    )
     const stepSuccessStates = step.successStates || step.success_states || [defaultState]
     const stepFailureStates = step.failureStates || step.failure_states || [errorState]
     const stepPreStates = step.preStates || step.pre_states || []
@@ -1391,6 +1457,7 @@ function convertActionGraphToGraph(
         server: step.action?.server,
         startStates: stepStartStates,
         preStates: stepPreStates,
+        duringStateTargets: stepDuringTargets,
         duringStates: stepDuringStates,
         successStates: stepSuccessStates,
         failureStates: stepFailureStates,
@@ -1884,6 +1951,234 @@ function AssignTemplateModal({
   )
 }
 
+function CreateStateDefinitionModal({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void
+  onCreated: () => void
+}) {
+  const [formData, setFormData] = useState({
+    id: '',
+    name: '',
+    description: '',
+  })
+  const [states, setStates] = useState<string[]>([])
+  const [newState, setNewState] = useState('')
+  const [defaultState, setDefaultState] = useState('')
+  const [error, setError] = useState('')
+  const queryClient = useQueryClient()
+
+  useEffect(() => {
+    if (states.length === 0) {
+      if (defaultState !== '') {
+        setDefaultState('')
+      }
+      return
+    }
+    if (!defaultState || !states.includes(defaultState)) {
+      setDefaultState(states[0])
+    }
+  }, [states, defaultState])
+
+  const createStateDef = useMutation({
+    mutationFn: (payload: Partial<StateDefinition>) => stateDefinitionApi.create(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['state-definitions'] })
+      onCreated()
+    },
+    onError: (err: any) => setError(err.response?.data?.detail || 'Failed to create state definition'),
+  })
+
+  const handleAddState = () => {
+    const trimmed = newState.trim().toLowerCase().replace(/\s+/g, '_')
+    if (!trimmed) {
+      setError('State name is required')
+      return
+    }
+    if (states.includes(trimmed)) {
+      setError('State already exists')
+      return
+    }
+    setStates(prev => [...prev, trimmed])
+    if (!defaultState) {
+      setDefaultState(trimmed)
+    }
+    setNewState('')
+    setError('')
+  }
+
+  const handleRemoveState = (stateToRemove: string) => {
+    const nextStates = states.filter(state => state !== stateToRemove)
+    setStates(nextStates)
+    if (defaultState === stateToRemove) {
+      setDefaultState(nextStates[0] || '')
+    }
+    setError('')
+  }
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    const id = formData.id.trim()
+    const name = formData.name.trim()
+    if (!id || !name) {
+      setError('ID and Name are required')
+      return
+    }
+    if (states.length === 0) {
+      setError('At least one state is required')
+      return
+    }
+
+    const payload: Partial<StateDefinition> = {
+      id,
+      name,
+      states,
+      default_state: defaultState || states[0],
+    }
+    const description = formData.description.trim()
+    if (description) {
+      payload.description = description
+    }
+
+    createStateDef.mutate(payload)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+      <div className="bg-[#16162a] rounded-xl shadow-2xl w-full max-w-lg border border-[#2a2a4a]">
+        <div className="px-6 py-4 border-b border-[#2a2a4a] flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-white">Create State Definition</h2>
+          <button onClick={onClose} className="text-gray-500 hover:text-white">
+            <X size={20} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {error && (
+            <div className="p-3 bg-red-500/20 border border-red-500/50 rounded-lg text-red-400 text-sm">
+              {error}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Definition ID</label>
+            <input
+              type="text"
+              value={formData.id}
+              onChange={e => setFormData(prev => ({ ...prev, id: e.target.value }))}
+              placeholder="e.g., default_states"
+              className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white placeholder-gray-600"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Name</label>
+            <input
+              type="text"
+              value={formData.name}
+              onChange={e => setFormData(prev => ({ ...prev, name: e.target.value }))}
+              placeholder="e.g., Fleet States"
+              className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white placeholder-gray-600"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Description</label>
+            <textarea
+              value={formData.description}
+              onChange={e => setFormData(prev => ({ ...prev, description: e.target.value }))}
+              placeholder="Optional description..."
+              className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white resize-none placeholder-gray-600"
+              rows={2}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-300">States</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newState}
+                onChange={e => {
+                  setNewState(e.target.value)
+                  setError('')
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    handleAddState()
+                  }
+                }}
+                placeholder="State name"
+                className="flex-1 px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white text-sm"
+              />
+              <button
+                type="button"
+                onClick={handleAddState}
+                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm"
+              >
+                Add
+              </button>
+            </div>
+
+            {states.length === 0 ? (
+              <div className="text-xs text-gray-500 italic">No states added yet</div>
+            ) : (
+              <div className="space-y-2 max-h-40 overflow-y-auto">
+                {states.map(state => (
+                  <div key={state} className="flex items-center justify-between px-3 py-2 bg-[#1a1a2e] rounded-lg">
+                    <span className="text-sm text-white">{state}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveState(state)}
+                      className="p-1 text-gray-500 hover:text-red-400 hover:bg-red-500/20 rounded"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Default State</label>
+            <select
+              value={defaultState}
+              onChange={e => setDefaultState(e.target.value)}
+              disabled={states.length === 0}
+              className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white disabled:opacity-50"
+            >
+              <option value="">-- Select default state --</option>
+              {states.map(state => (
+                <option key={state} value={state}>
+                  {state}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex justify-end gap-3 pt-4">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white">
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={createStateDef.isPending}
+              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+            >
+              {createStateDef.isPending ? 'Creating...' : 'Create'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 function AddStateModal({
   stateDef,
   onClose,
@@ -1915,7 +2210,7 @@ function AddStateModal({
     },
     onSuccess: () => {
       Object.assign(stateColorsMap, localColors)
-      queryClient.invalidateQueries({ queryKey: ['state-definition', stateDef.id] })
+      queryClient.invalidateQueries({ queryKey: ['state-definitions'] })
       onAdded()
     },
     onError: (err: any) => {

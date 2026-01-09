@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -53,6 +54,10 @@ type RawQUICHandler struct {
 	configWaiters map[string]chan *ConfigUpdateResult
 	configMu      sync.RWMutex
 
+	// Graph execution state overrides (execution_id -> override state)
+	graphOverrides map[string]*graphOverrideState
+	graphOverrideMu sync.Mutex
+
 	// Ping interval for latency tracking
 	pingInterval time.Duration
 
@@ -93,6 +98,11 @@ type OutboundCommand struct {
 	Timeout   time.Duration
 }
 
+type graphOverrideState struct {
+	StepID   string
+	RobotIDs []string
+}
+
 // CommandCallback is called when action result/feedback is received
 type CommandCallback func(result *ActionResult, feedback *ActionFeedbackMsg, err error)
 
@@ -112,6 +122,7 @@ func NewRawQUICHandler(
 		resultCallbacks: make(map[string]CommandCallback),
 		deployWaiters:   make(map[string]chan *DeployResult),
 		configWaiters:   make(map[string]chan *ConfigUpdateResult),
+		graphOverrides:  make(map[string]*graphOverrideState),
 		pingInterval:    time.Second,
 		ctx:             ctx,
 		cancel:          cancel,
@@ -2704,6 +2715,12 @@ func (h *RawQUICHandler) handleGraphStatus(agentConn *agentConnection, status *G
 	}
 
 	if taskStatus == "completed" || taskStatus == "failed" || taskStatus == "cancelled" {
+		h.clearGraphStateOverrides(taskID)
+	} else if status.GraphID != "" && stepID != "" && status.RobotID != "" {
+		h.updateGraphStateOverrides(taskID, status.GraphID, status.RobotID, stepID)
+	}
+
+	if taskStatus == "completed" || taskStatus == "failed" || taskStatus == "cancelled" {
 		if status.RobotID != "" {
 			h.stateManager.CompleteExecution(status.RobotID, nil)
 		}
@@ -2727,6 +2744,181 @@ func (h *RawQUICHandler) handleGraphStatus(agentConn *agentConnection, status *G
 			}
 		}
 	}
+}
+
+func (h *RawQUICHandler) updateGraphStateOverrides(executionID, graphID, robotID, stepID string) {
+	if executionID == "" || graphID == "" || stepID == "" {
+		return
+	}
+
+	h.graphOverrideMu.Lock()
+	prev := h.graphOverrides[executionID]
+	if prev != nil && prev.StepID == stepID {
+		h.graphOverrideMu.Unlock()
+		return
+	}
+	h.graphOverrides[executionID] = &graphOverrideState{StepID: stepID}
+	h.graphOverrideMu.Unlock()
+
+	if prev != nil && len(prev.RobotIDs) > 0 {
+		h.clearDuringStateTargets(executionID, prev.RobotIDs)
+	}
+
+	steps, err := h.repo.GetActionGraphSteps(graphID)
+	if err != nil {
+		log.Printf("[RawQUIC] Failed to load graph steps for %s: %v", graphID, err)
+		return
+	}
+
+	var step *db.ActionGraphStep
+	for i := range steps {
+		if steps[i].ID == stepID {
+			step = &steps[i]
+			break
+		}
+	}
+	if step == nil {
+		return
+	}
+
+	applied := h.applyDuringStateTargets(
+		robotID,
+		executionID,
+		step.DuringStateTargets,
+		step.DuringStates,
+	)
+
+	if len(applied) == 0 {
+		return
+	}
+
+	h.graphOverrideMu.Lock()
+	if current, ok := h.graphOverrides[executionID]; ok && current.StepID == stepID {
+		current.RobotIDs = applied
+	}
+	h.graphOverrideMu.Unlock()
+}
+
+func (h *RawQUICHandler) clearGraphStateOverrides(executionID string) {
+	if executionID == "" {
+		return
+	}
+
+	h.graphOverrideMu.Lock()
+	state := h.graphOverrides[executionID]
+	delete(h.graphOverrides, executionID)
+	h.graphOverrideMu.Unlock()
+
+	if state != nil && len(state.RobotIDs) > 0 {
+		h.clearDuringStateTargets(executionID, state.RobotIDs)
+	}
+}
+
+func (h *RawQUICHandler) applyDuringStateTargets(
+	executingRobotID string,
+	sourceID string,
+	targets []db.StateTarget,
+	fallbackStates []string,
+) []string {
+	overrides := h.resolveDuringStateOverrides(executingRobotID, targets, fallbackStates)
+	if len(overrides) == 0 {
+		return nil
+	}
+
+	applied := make([]string, 0, len(overrides))
+	for robotID, state := range overrides {
+		if err := h.stateManager.SetRobotStateOverride(robotID, sourceID, state); err == nil {
+			applied = append(applied, robotID)
+		}
+	}
+	if len(applied) == 0 {
+		return nil
+	}
+	return applied
+}
+
+func (h *RawQUICHandler) clearDuringStateTargets(sourceID string, robotIDs []string) {
+	for _, robotID := range robotIDs {
+		_ = h.stateManager.ClearRobotStateOverride(robotID, sourceID)
+	}
+}
+
+func normalizeStateTargetsForOverrides(targets []db.StateTarget, fallbackStates []string) []db.StateTarget {
+	if len(targets) > 0 {
+		return targets
+	}
+	for _, state := range fallbackStates {
+		if state == "" {
+			continue
+		}
+		return []db.StateTarget{{
+			State:      state,
+			TargetType: "self",
+		}}
+	}
+	return nil
+}
+
+func orderStateTargetsForOverrides(targets []db.StateTarget) []db.StateTarget {
+	if len(targets) == 0 {
+		return nil
+	}
+	ordered := make([]db.StateTarget, 0, len(targets))
+	appendMatches := func(match func(string) bool) {
+		for _, target := range targets {
+			targetType := strings.ToLower(target.TargetType)
+			if targetType == "" {
+				targetType = "self"
+			}
+			if match(targetType) {
+				ordered = append(ordered, target)
+			}
+		}
+	}
+
+	appendMatches(func(tt string) bool { return tt == "self" })
+	appendMatches(func(tt string) bool { return tt == "agent" || tt == "specific" })
+	appendMatches(func(tt string) bool { return tt == "all" })
+	appendMatches(func(tt string) bool {
+		return tt != "self" && tt != "agent" && tt != "specific" && tt != "all"
+	})
+
+	return ordered
+}
+
+func (h *RawQUICHandler) resolveDuringStateOverrides(
+	executingRobotID string,
+	targets []db.StateTarget,
+	fallbackStates []string,
+) map[string]string {
+	effectiveTargets := normalizeStateTargetsForOverrides(targets, fallbackStates)
+	if len(effectiveTargets) == 0 {
+		return nil
+	}
+	orderedTargets := orderStateTargetsForOverrides(effectiveTargets)
+	overrides := make(map[string]string)
+
+	for _, target := range orderedTargets {
+		if target.State == "" {
+			continue
+		}
+		targetType := strings.ToLower(target.TargetType)
+		if targetType == "" {
+			targetType = "self"
+		}
+		robotIDs := h.stateManager.ResolveTargetRobots(executingRobotID, targetType, target.AgentID)
+		for _, robotID := range robotIDs {
+			if _, exists := overrides[robotID]; exists {
+				continue
+			}
+			overrides[robotID] = target.State
+		}
+	}
+
+	if len(overrides) == 0 {
+		return nil
+	}
+	return overrides
 }
 
 // handleDeployResponse resolves pending deploy waiters by correlation_id.

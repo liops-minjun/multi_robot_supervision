@@ -332,6 +332,7 @@ type ActionGraphStep struct {
 
 	PreStates     []string `json:"pre_states,omitempty"`
 	DuringStates  []string `json:"during_states,omitempty"`
+	DuringStateTargets []StateTarget `json:"during_state_targets,omitempty"`
 	SuccessStates []string `json:"success_states,omitempty"`
 	FailureStates []string `json:"failure_states,omitempty"`
 
@@ -392,6 +393,13 @@ type EndState struct {
 	Color     string `json:"color,omitempty"`
 	Outcome   string `json:"outcome,omitempty"`
 	Condition string `json:"condition,omitempty"`
+}
+
+// StateTarget defines which robots receive a state during execution.
+type StateTarget struct {
+	State      string `json:"state"`
+	TargetType string `json:"target_type,omitempty"` // self, all, agent
+	AgentID    string `json:"agent_id,omitempty"`
 }
 
 // StartCondition represents a structured start condition (AND/OR list).

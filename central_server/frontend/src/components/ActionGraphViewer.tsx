@@ -245,8 +245,12 @@ function ActionGraphViewerInner({
       } else if (step.action?.type) {
         color = getActionColor(step.action.type)
       }
+      const stepDuringTargets = step.duringStateTargets || step.during_state_targets
       const stepDuringStates = step.duringStates || step.during_states
-      if (stepDuringStates && stepDuringStates.length > 0) {
+      if (stepDuringTargets && stepDuringTargets.length > 0) {
+        const selfTarget = stepDuringTargets.find(target => !target.target_type || target.target_type === 'self')
+        duringState = (selfTarget || stepDuringTargets[0]).state
+      } else if (stepDuringStates && stepDuringStates.length > 0) {
         duringState = stepDuringStates[0]
       }
 

@@ -508,6 +508,19 @@ func (s *Scheduler) executeAction(ctx context.Context, task *RunningTask, step *
 
 	// Create command
 	commandID := uuid.New().String()
+
+	overrideRobots := s.applyDuringStateTargets(
+		task.RobotID,
+		commandID,
+		step.DuringStateTargets,
+		step.DuringStates,
+	)
+	if len(overrideRobots) > 0 {
+		defer s.clearDuringStateTargets(commandID, overrideRobots)
+	}
+
+	cmdDuringStates := s.selectSelfDuringState(task.RobotID, step.DuringStateTargets, step.DuringStates)
+
 	cmd := &fleetgrpc.ExecuteCommand{
 		CommandID:    commandID,
 		RobotID:      task.RobotID,
@@ -518,7 +531,7 @@ func (s *Scheduler) executeAction(ctx context.Context, task *RunningTask, step *
 		Params:       params,
 		TimeoutSec:   float32(timeout),
 		DeadlineMs:   time.Now().Add(time.Duration(timeout) * time.Second).UnixMilli(),
-		DuringStates:  step.DuringStates,
+		DuringStates:  cmdDuringStates,
 		SuccessStates: step.SuccessStates,
 		FailureStates: step.FailureStates,
 	}
@@ -658,6 +671,129 @@ func (s *Scheduler) handleStepResult(task *RunningTask, step *db.ActionGraphStep
 		task.Status = TaskFailed
 		return ""
 	}
+}
+
+func (s *Scheduler) applyDuringStateTargets(
+	executingRobotID string,
+	sourceID string,
+	targets []db.StateTarget,
+	fallbackStates []string,
+) []string {
+	overrides := s.resolveDuringStateOverrides(executingRobotID, targets, fallbackStates)
+	if len(overrides) == 0 {
+		return nil
+	}
+
+	applied := make([]string, 0, len(overrides))
+	for robotID, state := range overrides {
+		if err := s.stateManager.SetRobotStateOverride(robotID, sourceID, state); err == nil {
+			applied = append(applied, robotID)
+		}
+	}
+	if len(applied) == 0 {
+		return nil
+	}
+	return applied
+}
+
+func (s *Scheduler) clearDuringStateTargets(sourceID string, robotIDs []string) {
+	for _, robotID := range robotIDs {
+		_ = s.stateManager.ClearRobotStateOverride(robotID, sourceID)
+	}
+}
+
+func normalizeStateTargetsForOverrides(targets []db.StateTarget, fallbackStates []string) []db.StateTarget {
+	if len(targets) > 0 {
+		return targets
+	}
+	for _, state := range fallbackStates {
+		if state == "" {
+			continue
+		}
+		return []db.StateTarget{{
+			State:      state,
+			TargetType: "self",
+		}}
+	}
+	return nil
+}
+
+func orderStateTargetsForOverrides(targets []db.StateTarget) []db.StateTarget {
+	if len(targets) == 0 {
+		return nil
+	}
+	ordered := make([]db.StateTarget, 0, len(targets))
+	appendMatches := func(match func(string) bool) {
+		for _, target := range targets {
+			targetType := strings.ToLower(target.TargetType)
+			if targetType == "" {
+				targetType = "self"
+			}
+			if match(targetType) {
+				ordered = append(ordered, target)
+			}
+		}
+	}
+
+	appendMatches(func(tt string) bool { return tt == "self" })
+	appendMatches(func(tt string) bool { return tt == "agent" || tt == "specific" })
+	appendMatches(func(tt string) bool { return tt == "all" })
+	appendMatches(func(tt string) bool {
+		return tt != "self" && tt != "agent" && tt != "specific" && tt != "all"
+	})
+
+	return ordered
+}
+
+func (s *Scheduler) resolveDuringStateOverrides(
+	executingRobotID string,
+	targets []db.StateTarget,
+	fallbackStates []string,
+) map[string]string {
+	effectiveTargets := normalizeStateTargetsForOverrides(targets, fallbackStates)
+	if len(effectiveTargets) == 0 {
+		return nil
+	}
+	orderedTargets := orderStateTargetsForOverrides(effectiveTargets)
+	overrides := make(map[string]string)
+
+	for _, target := range orderedTargets {
+		if target.State == "" {
+			continue
+		}
+		targetType := strings.ToLower(target.TargetType)
+		if targetType == "" {
+			targetType = "self"
+		}
+		robotIDs := s.stateManager.ResolveTargetRobots(executingRobotID, targetType, target.AgentID)
+		for _, robotID := range robotIDs {
+			if _, exists := overrides[robotID]; exists {
+				continue
+			}
+			overrides[robotID] = target.State
+		}
+	}
+
+	if len(overrides) == 0 {
+		return nil
+	}
+	return overrides
+}
+
+func (s *Scheduler) selectSelfDuringState(
+	executingRobotID string,
+	targets []db.StateTarget,
+	fallbackStates []string,
+) []string {
+	overrides := s.resolveDuringStateOverrides(executingRobotID, targets, fallbackStates)
+	if len(overrides) == 0 {
+		return nil
+	}
+	state, ok := overrides[executingRobotID]
+	if !ok || state == "" {
+		return nil
+	}
+	return []string{state}
 }
 
 // resolveTransition resolves a transition to a step ID

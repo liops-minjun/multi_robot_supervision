@@ -1,7 +1,7 @@
 import { memo, useState, useEffect } from 'react'
 import { Handle, Position, NodeProps, useReactFlow } from 'reactflow'
 import { ChevronDown, ChevronUp, Plus, X, Filter, Settings, Loader2 } from 'lucide-react'
-import type { StartStateConfig, EndStateConfig, ActionField, ActionOutcome } from '../../../types'
+import type { StartStateConfig, EndStateConfig, ActionField, ActionOutcome, DuringStateTarget } from '../../../types'
 import { capabilityApi } from '../../../api/client'
 
 // Convert capability goal_schema to ActionField format
@@ -103,6 +103,12 @@ const OUTCOME_OPTIONS: Array<{ value: ActionOutcome; label: string }> = [
   { value: 'rejected', label: 'Rejected' },
 ]
 
+const DURING_TARGET_OPTIONS: Array<{ value: NonNullable<DuringStateTarget['target_type']>; label: string }> = [
+  { value: 'self', label: 'Self' },
+  { value: 'all', label: 'All' },
+  { value: 'agent', label: 'Agent' },
+]
+
 const inferOutcomeFromEndState = (endState: EndStateConfig): ActionOutcome => {
   const label = (endState.label || '').toLowerCase()
   const stateValue = (endState.state || '').toLowerCase()
@@ -143,11 +149,18 @@ interface StateActionNodeData {
   // New State ActionGraph Configuration
   startStates?: StartStateConfig[]
   duringStates?: string[]
+  duringStateTargets?: DuringStateTarget[]
   endStates?: EndStateConfig[]
   // Available data
   availableStates?: string[]
   availableAgents?: Array<{ id: string; name: string }>
   availableWaypoints?: Array<{ id: string; name: string }>
+}
+
+type NormalizedDuringStateTarget = {
+  state: string
+  target_type: NonNullable<DuringStateTarget['target_type']>
+  agent_id?: string
 }
 
 const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeData>) => {
@@ -283,7 +296,15 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
 
   // State configurations with defaults
   const startStates = data.startStates || []
-  const duringStates = data.duringStates || []
+  const duringStateTargets: NormalizedDuringStateTarget[] = (data.duringStateTargets && data.duringStateTargets.length > 0)
+    ? data.duringStateTargets.map(target => ({
+      ...target,
+      target_type: (target.target_type || 'self') as NormalizedDuringStateTarget['target_type'],
+    }))
+    : (data.duringStates || [])
+      .filter(Boolean)
+      .slice(0, 1)
+      .map(state => ({ state, target_type: 'self' as const }))
   const endStates = data.endStates || []
 
   const updateData = (field: string, value: unknown) => {
@@ -391,10 +412,13 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
 
   // Add during state
   const addDuringState = () => {
-    const available = states.filter(s => !duringStates.includes(s))
-    if (available.length > 0) {
-      updateData('duringStates', [...duringStates, available[0]])
+    if (states.length === 0) {
+      return
     }
+    updateData('duringStateTargets', [
+      ...duringStateTargets,
+      { state: states[0], target_type: 'self' },
+    ])
   }
 
   // Calculate handle positions for end states (positioned in End States section area)
@@ -869,28 +893,76 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
           </button>
         </div>
         <div className="flex flex-wrap gap-1">
-          {duringStates.length === 0 ? (
+          {duringStateTargets.length === 0 ? (
             <span className="text-[9px] text-gray-600 italic">No states during execution</span>
           ) : (
-            duringStates.map((state, i) => (
+            duringStateTargets.map((target, i) => (
               <div key={i} className="flex items-center gap-1 px-2 py-0.5 bg-yellow-500/10 border border-yellow-500/30 rounded-full group">
                 <select
-                  value={state}
+                  value={target.state}
                   onChange={(e) => {
                     e.stopPropagation()
-                    const newStates = [...duringStates]
-                    newStates[i] = e.target.value
-                    updateData('duringStates', newStates)
+                    const next = [...duringStateTargets]
+                    next[i] = { ...next[i], state: e.target.value }
+                    updateData('duringStateTargets', next)
                   }}
                   onClick={(e) => e.stopPropagation()}
                   className="bg-[#1a1a2e] text-[9px] text-yellow-400 font-medium focus:outline-none cursor-pointer rounded px-1"
                 >
                   {states.map(s => <option key={s} value={s} className="bg-[#1a1a2e]">{s}</option>)}
                 </select>
+                <select
+                  value={target.target_type || 'self'}
+                  onChange={(e) => {
+                    e.stopPropagation()
+                    const next = [...duringStateTargets]
+                    const nextTarget: NormalizedDuringStateTarget = {
+                      ...next[i],
+                      target_type: e.target.value as NormalizedDuringStateTarget['target_type'],
+                    }
+                    if (nextTarget.target_type !== 'agent') {
+                      nextTarget.agent_id = undefined
+                    } else if (!nextTarget.agent_id && availableAgents.length > 0) {
+                      nextTarget.agent_id = availableAgents[0].id
+                    }
+                    next[i] = nextTarget
+                    updateData('duringStateTargets', next)
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="bg-[#1a1a2e] text-[9px] text-yellow-300 font-medium focus:outline-none cursor-pointer rounded px-1"
+                >
+                  {DURING_TARGET_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value} className="bg-[#1a1a2e]">
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                {target.target_type === 'agent' && (
+                  <select
+                    value={target.agent_id || ''}
+                    onChange={(e) => {
+                      e.stopPropagation()
+                      const next = [...duringStateTargets]
+                      next[i] = { ...next[i], agent_id: e.target.value }
+                      updateData('duringStateTargets', next)
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="bg-[#1a1a2e] text-[9px] text-yellow-300 font-medium focus:outline-none cursor-pointer rounded px-1"
+                  >
+                    {availableAgents.length === 0 && (
+                      <option value="" className="bg-[#1a1a2e]">No agents</option>
+                    )}
+                    {availableAgents.map(agent => (
+                      <option key={agent.id} value={agent.id} className="bg-[#1a1a2e]">
+                        {agent.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
-                    updateData('duringStates', duringStates.filter((_, idx) => idx !== i))
+                    updateData('duringStateTargets', duringStateTargets.filter((_, idx) => idx !== i))
                   }}
                   className="opacity-0 group-hover:opacity-100 transition-opacity"
                 >

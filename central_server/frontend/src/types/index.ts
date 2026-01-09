@@ -84,6 +84,12 @@ export interface StartCondition {
 
 export type ActionOutcome = 'success' | 'failed' | 'aborted' | 'cancelled' | 'timeout' | 'rejected'
 
+export interface DuringStateTarget {
+  state: string
+  target_type?: 'self' | 'all' | 'agent'
+  agent_id?: string
+}
+
 // End State - possible outcome that can connect to next action
 export interface EndStateConfig {
   id: string
@@ -134,6 +140,8 @@ export interface GraphStep {
   start_conditions?: StartCondition[]
   duringStates?: string[]           // States during execution
   during_states?: string[]
+  duringStateTargets?: DuringStateTarget[]
+  during_state_targets?: DuringStateTarget[]
   endStates?: EndStateConfig[]      // Possible outcomes, each can connect to different action
   end_states?: EndStateConfig[]
   // Legacy multi-state (for backward compatibility)

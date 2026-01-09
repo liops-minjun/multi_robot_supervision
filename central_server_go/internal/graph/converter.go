@@ -134,7 +134,7 @@ func stepToVertex(step *db.ActionGraphStep) Vertex {
 		stepData := &StepData{
 			States: &StateConfig{
 				Pre:     step.PreStates,
-				During:  step.DuringStates,
+				During:  selectPrimaryDuringStates(step),
 				Success: step.SuccessStates,
 				Failure: step.FailureStates,
 			},
@@ -172,6 +172,26 @@ func stepToVertex(step *db.ActionGraphStep) Vertex {
 	}
 
 	return vertex
+}
+
+func selectPrimaryDuringStates(step *db.ActionGraphStep) []string {
+	if step == nil {
+		return nil
+	}
+	for _, target := range step.DuringStateTargets {
+		targetType := strings.ToLower(target.TargetType)
+		if targetType == "" || targetType == "self" || targetType == "all" {
+			if target.State != "" {
+				return []string{target.State}
+			}
+		}
+	}
+	for _, state := range step.DuringStates {
+		if state != "" {
+			return []string{state}
+		}
+	}
+	return nil
 }
 
 // extractEdges extracts edges from step transitions

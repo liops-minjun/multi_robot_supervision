@@ -590,6 +590,9 @@ void Agent::start_heartbeat_thread() {
                     }
                 }
 
+                const std::string debug_state = state_name.empty() ? "idle" : state_name;
+                log.debug("[Heartbeat] Robot {} state: {}", robot.id, debug_state);
+
                 robot_hb->set_state(base_state_from_name(state_name, is_executing));
                 robot_hb->set_is_executing(is_executing);
                 if (!current_action.empty()) {

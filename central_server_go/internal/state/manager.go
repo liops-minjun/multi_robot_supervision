@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -14,6 +15,7 @@ type RobotState struct {
 	Name          string
 	AgentID       string
 	CurrentState  string
+	ReportedState string
 	IsOnline      bool
 	IsExecuting   bool
 	CurrentTaskID string
@@ -75,6 +77,9 @@ type GlobalStateManager struct {
 	// Robot states indexed by robot ID
 	robots map[string]*RobotState
 
+	// Active state overrides per robot (robotID -> sourceID -> override)
+	stateOverrides map[string]map[string]StateOverride
+
 	// Zone reservations indexed by zone ID
 	zones map[string]*ZoneReservation
 
@@ -99,11 +104,18 @@ type GlobalStateManager struct {
 	wg     sync.WaitGroup
 }
 
+// StateOverride represents a temporary coordination state.
+type StateOverride struct {
+	State string
+	SetAt time.Time
+}
+
 // NewGlobalStateManager creates a new state manager
 func NewGlobalStateManager() *GlobalStateManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &GlobalStateManager{
 		robots:             make(map[string]*RobotState),
+		stateOverrides:     make(map[string]map[string]StateOverride),
 		zones:              make(map[string]*ZoneReservation),
 		agents:             make(map[string]*AgentConnection),
 		zoneExpiryDuration: 30 * time.Second,
@@ -261,6 +273,7 @@ func (m *GlobalStateManager) RegisterRobot(id, name, agentID, initialState strin
 		Name:         name,
 		AgentID:      agentID,
 		CurrentState: initialState,
+		ReportedState: initialState,
 		IsOnline:     true,
 		LastSeen:     time.Now(),
 	}
@@ -272,6 +285,7 @@ func (m *GlobalStateManager) UnregisterRobot(id string) {
 	defer m.mu.Unlock()
 
 	delete(m.robots, id)
+	delete(m.stateOverrides, id)
 	// Also release any zone reservations
 	for zoneID, res := range m.zones {
 		if res.RobotID == id {
@@ -304,9 +318,135 @@ func (m *GlobalStateManager) UpdateRobotState(robotID, newState string) error {
 		return fmt.Errorf("robot %s not found", robotID)
 	}
 
-	robot.CurrentState = newState
+	robot.ReportedState = newState
+	if !m.hasStateOverrideLocked(robotID) {
+		robot.CurrentState = newState
+	} else {
+		if override := m.effectiveOverrideLocked(robotID); override != "" {
+			robot.CurrentState = override
+		}
+	}
 	robot.LastSeen = time.Now()
 	return nil
+}
+
+// SetRobotStateOverride applies a temporary coordination state for a robot.
+func (m *GlobalStateManager) SetRobotStateOverride(robotID, sourceID, state string) error {
+	if state == "" {
+		return fmt.Errorf("state override is empty")
+	}
+	if sourceID == "" {
+		return fmt.Errorf("state override source is empty")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	robot, exists := m.robots[robotID]
+	if !exists {
+		return fmt.Errorf("robot %s not found", robotID)
+	}
+
+	if m.stateOverrides[robotID] == nil {
+		m.stateOverrides[robotID] = make(map[string]StateOverride)
+	}
+	m.stateOverrides[robotID][sourceID] = StateOverride{
+		State: state,
+		SetAt: time.Now(),
+	}
+	robot.CurrentState = m.effectiveOverrideLocked(robotID)
+	robot.LastSeen = time.Now()
+	return nil
+}
+
+// ClearRobotStateOverride removes a temporary coordination state for a robot.
+func (m *GlobalStateManager) ClearRobotStateOverride(robotID, sourceID string) error {
+	if sourceID == "" {
+		return fmt.Errorf("state override source is empty")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	robot, exists := m.robots[robotID]
+	if !exists {
+		return fmt.Errorf("robot %s not found", robotID)
+	}
+
+	if overrides, ok := m.stateOverrides[robotID]; ok {
+		delete(overrides, sourceID)
+		if len(overrides) == 0 {
+			delete(m.stateOverrides, robotID)
+		}
+	}
+
+	if m.hasStateOverrideLocked(robotID) {
+		if override := m.effectiveOverrideLocked(robotID); override != "" {
+			robot.CurrentState = override
+		}
+	} else if robot.ReportedState != "" {
+		robot.CurrentState = robot.ReportedState
+	}
+	robot.LastSeen = time.Now()
+	return nil
+}
+
+func (m *GlobalStateManager) hasStateOverrideLocked(robotID string) bool {
+	overrides, ok := m.stateOverrides[robotID]
+	return ok && len(overrides) > 0
+}
+
+func (m *GlobalStateManager) effectiveOverrideLocked(robotID string) string {
+	overrides, ok := m.stateOverrides[robotID]
+	if !ok || len(overrides) == 0 {
+		return ""
+	}
+	var latest StateOverride
+	found := false
+	for _, override := range overrides {
+		if !found || override.SetAt.After(latest.SetAt) {
+			latest = override
+			found = true
+		}
+	}
+	if found {
+		return latest.State
+	}
+	return ""
+}
+
+// ResolveTargetRobots returns robot IDs for a state target selection.
+func (m *GlobalStateManager) ResolveTargetRobots(executingRobotID, targetType, agentID string) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	targetType = strings.ToLower(targetType)
+	var ids []string
+
+	switch targetType {
+	case "", "self":
+		if _, exists := m.robots[executingRobotID]; exists {
+			ids = append(ids, executingRobotID)
+		}
+	case "all":
+		ids = make([]string, 0, len(m.robots))
+		for id := range m.robots {
+			ids = append(ids, id)
+		}
+	case "agent", "specific":
+		if agentID == "" {
+			return nil
+		}
+		for id, robot := range m.robots {
+			if robot.AgentID == agentID {
+				ids = append(ids, id)
+			}
+		}
+	default:
+		if _, exists := m.robots[executingRobotID]; exists {
+			ids = append(ids, executingRobotID)
+		}
+	}
+
+	return ids
 }
 
 // UpdateRobotExecution atomically updates a robot's execution state
