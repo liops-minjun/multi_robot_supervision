@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  # Neo4j Community (Single instance)
+  neo4j:
+    image: neo4j:5
+    container_name: fleet_neo4j
+    environment:
+      NEO4J_AUTH: "neo4j/neo4j123"
+      NEO4J_dbms_memory_pagecache_size: "512M"
+      NEO4J_dbms_memory_heap_initial__size: "512M"
+      NEO4J_dbms_memory_heap_max__size: "512M"
+    volumes:
+      - neo4j_data:/data
+    ports:
+      - "7474:7474" # Neo4j Browser
+      - "7687:7687" # Bolt
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p neo4j123 'RETURN 1'"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  # Go Backend - Single unified backend server
+  # Provides: REST API, WebSocket, gRPC over QUIC
+  # Memory: ~20-50MB (vs Python ~150-300MB)
+  # Throughput: ~50,000 req/s (vs Python ~1,000 req/s)
+  go-backend:
+    build:
+      context: ./central_server_go
+      dockerfile: Dockerfile
+    container_name: fleet_go_backend
+    environment:
+      # Neo4j
+      NEO4J_URI: neo4j://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: neo4j123
+      NEO4J_DATABASE: neo4j
+      # Server
+      HTTP_PORT: "8081"
+      GRPC_PORT: "9090"
+      DEFINITIONS_PATH: /app/definitions
+    ports:
+      - "9090:9090"    # gRPC TCP (Agent communication)
+      - "8081:8081"    # HTTP REST API + WebSocket
+      - "9443:9443/udp" # gRPC over QUIC (UDP)
+      - "9444:9444/udp" # Raw QUIC for C++ agents (UDP)
+    volumes:
+      - ./central_server_go/certs:/app/certs:ro
+      - ./definitions:/app/definitions:ro
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    restart: unless-stopped
+    # Resource limits (Go is very efficient)
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+
+  # Frontend Web UI (nginx + React SPA)
+  frontend:
+    build:
+      context: ./central_server/frontend
+      dockerfile: Dockerfile
+    container_name: fleet_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - go-backend
+    restart: unless-stopped
+
+volumes:
+  neo4j_data:
+
+networks:
+  default:
+    name: fleet_network

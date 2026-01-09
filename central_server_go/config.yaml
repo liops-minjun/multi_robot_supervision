@@ -1,0 +1,33 @@
+# Fleet Server Configuration
+
+server:
+  grpc_port: 9090     # TCP fallback
+  quic_port: 9443     # QUIC (primary transport, UDP)
+  raw_quic_port: 9444 # Raw QUIC for C++ agents (UDP)
+  http_port: 8081     # REST API + WebSocket
+
+neo4j:
+  uri: neo4j://localhost:7687
+  username: neo4j
+  password: neo4j123
+  database: neo4j
+
+tls:
+  enabled: true
+  ca_cert: certs/ca.crt
+  server_cert: certs/server.crt
+  server_key: certs/server.key
+  # mTLS - require client certificate
+  require_client_cert: true
+
+quic:
+  max_idle_timeout: 30s
+  keepalive_period: 10s
+  enable_0rtt: true
+  quic_only: false           # Set true to disable TCP fallback
+  max_incoming_streams: 1000
+  connection_migration: true # Allow IP change without reconnect
+
+logging:
+  level: info  # debug, info, warn, error
+  format: json

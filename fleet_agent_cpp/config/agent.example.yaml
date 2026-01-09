@@ -1,0 +1,67 @@
+# Fleet Agent Configuration Example
+# Agent-based capability model: all visible action servers belong to this agent
+#
+# Copy this file to agent.yaml and modify as needed
+
+# Agent identification (required)
+agent:
+  id: "agent_01"
+  name: "Factory Agent"
+
+# Server connection (QUIC required)
+server:
+  quic:
+    server_address: "192.168.0.200"
+    server_port: 9444
+    ca_cert: "/etc/fleet_agent/certs/ca.crt"
+    client_cert: "/etc/fleet_agent/certs/client.crt"
+    client_key: "/etc/fleet_agent/certs/client.key"
+    idle_timeout_ms: 30000
+    keepalive_interval_ms: 10000
+    handshake_timeout_ms: 10000
+    max_bidi_streams: 1000
+    max_uni_streams: 100
+    enable_0rtt: true
+    enable_datagrams: true
+    resumption_ticket_path: "/var/lib/fleet_agent/quic_ticket"
+
+# Storage paths
+storage:
+  action_graphs_path: "/var/lib/fleet_agent/graphs"
+  state_persistence_path: "/var/lib/fleet_agent/state"
+
+# Logging
+logging:
+  level: "info"
+  file: "/var/log/fleet_agent/agent.log"
+  console: true
+
+# Capability scanner
+capability:
+  discovery_timeout_sec: 10
+  infer_success_criteria: true
+
+# ============================================================
+# Robots (optional)
+# ============================================================
+# Only needed if you want to:
+# - Declare robot IDs and namespaces for execution
+# - Prefer namespace-matching action servers
+#
+# Capabilities are discovered from ALL visible action servers
+# regardless of robot configuration.
+#
+# robots:
+#   - id: "robot_001"
+#     name: "AMR Robot 1"
+#     namespace: "/robot_001"
+#     tags:
+#       - mobile
+#       - navigation
+#
+#   - id: "robot_002"
+#     name: "AMR Robot 2"
+#     namespace: "/robot_002"
+#     tags:
+#       - mobile
+#       - navigation

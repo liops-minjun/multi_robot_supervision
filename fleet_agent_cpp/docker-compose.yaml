@@ -1,0 +1,50 @@
+# Fleet Agent C++ Docker Compose
+# For development and testing
+
+version: "3.8"
+
+services:
+  fleet_agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fleet_agent_cpp
+    restart: unless-stopped
+    network_mode: host  # Required for ROS2 DDS discovery
+
+    environment:
+      - FLEET_AGENT_CONFIG=/etc/fleet_agent/agent.yaml
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      # QUIC server connection (required)
+      - FLEET_QUIC_SERVER=${FLEET_QUIC_SERVER:-192.168.0.200}
+      - FLEET_QUIC_PORT=${FLEET_QUIC_PORT:-9443}
+
+    volumes:
+      # Config
+      - ./config/agent.yaml:/etc/fleet_agent/agent.yaml:ro
+      # TLS certificates
+      - ./certs:/etc/fleet_agent/certs:ro
+      # Persistent storage
+      - fleet_agent_graphs:/var/lib/fleet_agent/graphs
+      - fleet_agent_logs:/var/log/fleet_agent
+
+    # For GPU access (if needed for perception)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+    healthcheck:
+      test: ["CMD", "ros2", "node", "list", "|", "grep", "fleet_agent"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  fleet_agent_graphs:
+  fleet_agent_logs:

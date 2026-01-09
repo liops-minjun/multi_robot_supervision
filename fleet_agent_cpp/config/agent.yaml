@@ -1,0 +1,65 @@
+# Fleet Agent Configuration - Test/Development
+# Agent-based capability model: all visible action servers belong to this agent
+
+# Agent identification (required)
+agent:
+  id: "agent_01"
+  name: "Test Agent"
+
+# Server connection
+server:
+  url: "http://localhost:8081"
+  quic:
+    server_address: "localhost"
+    server_port: 9444
+    alpn: "fleet-agent-raw"
+    ca_cert: "/home/sy/Downloads/multi-robot-supervision/fleet_agent_cpp/certs/ca.crt"
+    client_cert: "/home/sy/Downloads/multi-robot-supervision/fleet_agent_cpp/certs/agent.crt"
+    client_key: "/home/sy/Downloads/multi-robot-supervision/fleet_agent_cpp/certs/agent.key"
+    idle_timeout_ms: 30000
+    keepalive_interval_ms: 10000
+    handshake_timeout_ms: 10000
+    max_bidi_streams: 1000
+    max_uni_streams: 100
+    enable_0rtt: false
+    enable_datagrams: false
+
+# Communication settings
+communication:
+  heartbeat_interval_ms: 1000
+  command_timeout_sec: 30
+
+# Execution settings
+execution:
+  action_default_timeout_sec: 120.0
+  precondition_check_interval_ms: 100
+  max_concurrent_per_robot: 1
+
+# Storage paths
+storage:
+  action_graphs_path: "/tmp/fleet_agent/graphs"
+  state_definitions_path: "/tmp/fleet_agent/state_definitions"
+  state_persistence_path: "/tmp/fleet_agent/state"
+  message_queue_path: "/tmp/fleet_agent/queue"
+  enable_state_persistence: false
+  enable_message_persistence: false
+
+# ROS settings
+ros:
+  node_name: "fleet_agent"
+  use_intra_process: true
+  executor_thread_count: 2
+
+# Logging
+logging:
+  level: "debug"
+  file: ""
+  console: true
+  include_timestamp: true
+
+# Robots (optional) - declare IDs and namespaces for execution
+# Capabilities are discovered from ALL visible action servers, regardless of robots
+# robots:
+#   - id: "robot_001"
+#     name: "Test Robot 1"
+#     namespace: "/robot_001"

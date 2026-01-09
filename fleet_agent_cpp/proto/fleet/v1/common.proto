@@ -1,0 +1,97 @@
+// Copyright 2026 Multi-Robot Supervision System
+// Common types used across all proto files
+
+syntax = "proto3";
+
+package fleet.v1;
+
+option cc_enable_arenas = true;
+
+// ============================================================
+// Common Types
+// ============================================================
+
+message Timestamp {
+  int64 seconds = 1;
+  int32 nanos = 2;
+}
+
+// ============================================================
+// Start Conditions
+// ============================================================
+
+message StartCondition {
+  string id = 1;
+  string operator = 2;         // and, or
+  string quantifier = 3;       // self, all, any, none, specific
+  string target_type = 4;      // self, robot, agent, all
+  string robot_id = 5;
+  string agent_id = 6;
+  string state = 7;
+  string state_operator = 8;   // ==, !=, in, not_in
+  repeated string allowed_states = 9;
+  float max_staleness_sec = 10;
+  bool require_online = 11;
+  string message = 12;
+}
+
+// ============================================================
+// Robot State
+// ============================================================
+
+enum RobotState {
+  ROBOT_STATE_UNKNOWN = 0;
+  ROBOT_STATE_IDLE = 1;
+  ROBOT_STATE_EXECUTING = 2;
+  ROBOT_STATE_ERROR = 3;
+  ROBOT_STATE_CHARGING = 4;
+  ROBOT_STATE_MANUAL = 5;
+  ROBOT_STATE_EMERGENCY = 6;
+}
+
+// ============================================================
+// Action Status
+// ============================================================
+
+enum ActionStatus {
+  ACTION_STATUS_UNKNOWN = 0;
+  ACTION_STATUS_SUCCEEDED = 1;
+  ACTION_STATUS_FAILED = 2;
+  ACTION_STATUS_CANCELLED = 3;
+  ACTION_STATUS_TIMEOUT = 4;
+  ACTION_STATUS_REJECTED = 5;
+}
+
+// ============================================================
+// Agent State
+// ============================================================
+
+enum AgentState {
+  AGENT_STATE_UNKNOWN = 0;
+  AGENT_STATE_ONLINE = 1;
+  AGENT_STATE_OFFLINE = 2;
+  AGENT_STATE_RECONNECTING = 3;
+}
+
+// ============================================================
+// Graph Execution State
+// ============================================================
+
+enum GraphExecutionState {
+  GRAPH_EXECUTION_UNKNOWN = 0;
+  GRAPH_EXECUTION_RUNNING = 1;
+  GRAPH_EXECUTION_COMPLETED = 2;
+  GRAPH_EXECUTION_FAILED = 3;
+  GRAPH_EXECUTION_CANCELLED = 4;
+  GRAPH_EXECUTION_PAUSED = 5;
+}
+
+// ============================================================
+// Generic Acknowledgement
+// ============================================================
+
+message Ack {
+  bool success = 1;
+  string message_id = 2;
+  string error = 3;
+}

@@ -46,3 +46,8 @@ test_ros2_ws/log/
 fleet_agent_cpp/build/
 fleet_agent_cpp/install/
 fleet_agent_cpp/log/
+go1.22.0.linux-amd64.tar.gz
+
+# ROS2 workspaces
+ros2_ws/
+test_ros2_ws/

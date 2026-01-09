@@ -1,0 +1,278 @@
+// Copyright 2026 Multi-Robot Supervision System
+// gRPC Service definitions
+
+syntax = "proto3";
+
+package fleet.v1;
+
+import "fleet/v1/common.proto";
+import "fleet/v1/commands.proto";
+import "fleet/v1/graphs.proto";
+
+option cc_enable_arenas = true;
+
+// ============================================================
+// Fleet Control Service - Server-side API
+// ============================================================
+
+service FleetControl {
+  // Bidirectional streaming for real-time command/result exchange
+  rpc CommandStream(stream AgentMessage) returns (stream ServerMessage);
+
+  // Agent registration on connection
+  rpc RegisterAgent(RegisterAgentRequest) returns (RegisterAgentResponse);
+
+  // Direct result reporting (fallback for non-streaming)
+  rpc ReportResult(ActionResult) returns (Ack);
+
+  // Request task execution
+  rpc ExecuteTask(ExecuteTaskRequest) returns (ExecuteTaskResponse);
+
+  // Cancel running task
+  rpc CancelTask(CancelTaskRequest) returns (CancelTaskResponse);
+
+  // Get fleet state snapshot
+  rpc GetFleetState(FleetStateRequest) returns (FleetStateResponse);
+}
+
+// ============================================================
+// Agent → Server Messages (sent via CommandStream)
+// ============================================================
+
+message AgentMessage {
+  string agent_id = 1;
+  int64 timestamp_ms = 2;
+
+  oneof payload {
+    // Heartbeat
+    AgentHeartbeat heartbeat = 10;
+
+    // Action results
+    ActionResult action_result = 11;
+    ActionFeedback action_feedback = 12;
+
+    // Status
+    AgentStatusUpdate status_update = 13;
+
+    // Graph responses
+    DeployGraphResponse deploy_response = 14;
+    GraphExecutionStatus graph_status = 15;
+
+    // Ping/Pong
+    PongResponse pong = 16;
+
+    // Config responses
+    ConfigUpdateAck config_ack = 17;
+
+    // Capability registration
+    CapabilityRegistration capability_registration = 18;
+  }
+}
+
+// ============================================================
+// Agent → Server: Heartbeat
+// ============================================================
+
+message RobotHeartbeat {
+  string robot_id = 1;
+  RobotState state = 2;           // Base operational state (enum)
+  bool is_executing = 3;
+  string current_action = 4;
+  reserved 5, 6;
+
+  // Execution context
+  optional string current_task_id = 7;
+  optional string current_step_id = 8;
+  optional float action_progress = 9;
+
+  // State definition tracking
+  optional string state_name = 10;       // Custom state from StateDefinition
+  optional string state_def_id = 11;     // Applied StateDefinition ID
+  optional int32 state_def_version = 12; // Applied version
+}
+
+message AgentHeartbeat {
+  string agent_id = 1;
+  int64 timestamp_ms = 2;
+  AgentState state = 3;
+  map<string, RobotHeartbeat> robots = 4;
+  optional uint32 network_latency_ms = 5;
+  optional uint32 network_latency_us = 6;
+}
+
+message AgentStatusUpdate {
+  AgentState state = 1;
+  repeated string online_robots = 2;
+  string message = 3;
+}
+
+// ============================================================
+// Agent → Server: Capability Registration
+// ============================================================
+
+message CapabilityRegistration {
+  string robot_id = 1;
+  repeated ActionCapability capabilities = 2;
+}
+
+// ============================================================
+// Server → Agent Messages (received via CommandStream)
+// ============================================================
+
+message ServerMessage {
+  string message_id = 1;
+  int64 sequence = 2;
+  int64 timestamp_ms = 3;
+
+  oneof payload {
+    // Commands
+    ExecuteCommand execute = 10;
+    CancelCommand cancel = 11;
+
+    // Graph operations
+    DeployGraphRequest deploy_graph = 12;
+    ExecuteGraphRequest execute_graph = 13;
+
+    // Acknowledgements
+    ServerAck ack = 14;
+
+    // Config
+    ConfigUpdate config_update = 15;
+
+    // Ping
+    PingRequest ping = 16;
+  }
+}
+
+message ServerAck {
+  string acked_message_id = 1;
+  bool success = 2;
+  string error = 3;
+}
+
+// ============================================================
+// Registration Messages
+// ============================================================
+
+message RegisterAgentRequest {
+  string agent_id = 1;
+  string name = 2;
+  repeated RobotInfo robots = 3;
+  string client_version = 4;
+
+  // Capabilities discovered by agent
+  repeated RobotCapabilities robot_capabilities = 5;
+}
+
+message RobotInfo {
+  string robot_id = 1;
+  reserved 2;
+  string ros_namespace = 3;
+  string name = 4;
+  repeated string tags = 5;
+}
+
+message RobotCapabilities {
+  string robot_id = 1;
+  repeated ActionCapability capabilities = 2;
+}
+
+message ActionCapability {
+  string action_type = 1;        // "nav2_msgs/NavigateToPose"
+  string action_server = 2;      // "/robot_001/navigate_to_pose"
+  string package = 3;            // "nav2_msgs"
+  string action_name = 4;        // "NavigateToPose"
+
+  // JSON Schemas
+  string goal_schema = 5;
+  string result_schema = 6;
+  string feedback_schema = 7;
+
+  // Success criteria
+  SuccessCriteria success_criteria = 8;
+}
+
+message SuccessCriteria {
+  string field = 1;              // e.g., "success", "error_code"
+  string operator = 2;           // "==", "!=", "<", ">"
+  string value = 3;              // Expected value
+}
+
+message RegisterAgentResponse {
+  bool success = 1;
+  string error = 2;
+  repeated RobotConfig robot_configs = 3;
+  int64 server_time_ms = 4;
+
+  // Graphs to deploy
+  repeated ActionGraph graphs_to_deploy = 5;
+}
+
+message RobotConfig {
+  string robot_id = 1;
+  bytes state_definition = 2;    // JSON-encoded
+  bytes action_definitions = 3;  // JSON-encoded
+}
+
+// ============================================================
+// Task Execution Messages
+// ============================================================
+
+message ExecuteTaskRequest {
+  string action_graph_id = 1;
+  string robot_id = 2;
+  bytes params = 3;              // JSON-encoded parameters
+  string requester = 4;
+}
+
+message ExecuteTaskResponse {
+  bool success = 1;
+  string task_id = 2;
+  string error = 3;
+}
+
+message CancelTaskRequest {
+  string task_id = 1;
+  string reason = 2;
+}
+
+message CancelTaskResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// ============================================================
+// Fleet State Messages
+// ============================================================
+
+message FleetStateRequest {
+  repeated string robot_ids = 1;  // Empty = all robots
+  bool include_zones = 2;
+}
+
+message FleetStateResponse {
+  int64 timestamp_ms = 1;
+  map<string, RobotStateSnapshot> robots = 2;
+  repeated ZoneReservation zones = 3;
+}
+
+message RobotStateSnapshot {
+  string robot_id = 1;
+  string robot_name = 2;
+  string agent_id = 3;
+  reserved 4;
+  RobotState state = 5;
+  bool is_online = 6;
+  bool is_executing = 7;
+  float staleness_sec = 8;
+  reserved 9, 10;
+  optional string current_task_id = 11;
+  optional string current_step_id = 12;
+}
+
+message ZoneReservation {
+  string zone_id = 1;
+  string robot_id = 2;
+  int64 reserved_at_ms = 3;
+  int64 expires_at_ms = 4;
+}

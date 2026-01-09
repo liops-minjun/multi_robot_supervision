@@ -1,0 +1,13 @@
+# Goal: Parameters for the test action
+string task_name          # Name of the task to execute
+float32 timeout_sec 30.0  # Timeout in seconds (default 30)
+---
+# Result: Outcome of the action
+bool success              # True if action succeeded
+string message            # Result message
+float32 execution_time    # How long the action took
+---
+# Feedback: Progress during execution
+float32 progress          # Progress percentage (0.0 to 1.0)
+string status             # Current status message
+float32 elapsed_time      # Elapsed time in seconds
