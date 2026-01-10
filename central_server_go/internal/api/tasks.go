@@ -12,10 +12,10 @@ import (
 
 // ListTasks returns all tasks
 func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request) {
-	robotID := r.URL.Query().Get("robot_id")
+	agentID := r.URL.Query().Get("agent_id")
 	status := r.URL.Query().Get("status")
 
-	tasks, err := s.repo.GetTasks(robotID, status)
+	tasks, err := s.repo.GetTasks(agentID, status)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -138,12 +138,12 @@ func taskToResponse(task *db.Task, repo *db.Repository) TaskResponse {
 			response.ActionGraphName = graph.Name
 		}
 	}
-	if task.RobotID.Valid {
-		response.RobotID = task.RobotID.String
-		// Get robot name
-		robot, _ := repo.GetRobot(task.RobotID.String)
-		if robot != nil {
-			response.RobotName = robot.Name
+	if task.AgentID.Valid {
+		response.AgentID = task.AgentID.String
+		// Get agent name
+		agent, _ := repo.GetAgent(task.AgentID.String)
+		if agent != nil {
+			response.AgentName = agent.Name
 		}
 	}
 	if task.CurrentStepID.Valid {

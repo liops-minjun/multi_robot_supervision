@@ -266,8 +266,8 @@ func (s *Server) buildFleetStateJSON() []byte {
 			if task.ActionGraphID.Valid {
 				t.ActionGraphID = task.ActionGraphID.String
 			}
-			if task.RobotID.Valid {
-				t.RobotID = task.RobotID.String
+			if task.AgentID.Valid {
+				t.AgentID = task.AgentID.String
 			}
 			if task.CurrentStepID.Valid {
 				t.CurrentStepID = task.CurrentStepID.String
@@ -323,7 +323,7 @@ type TaskInfoWS struct {
 type TaskStateWS struct {
 	ID            string `json:"id"`
 	ActionGraphID string `json:"action_graph_id,omitempty"`
-	RobotID       string `json:"robot_id,omitempty"`
+	AgentID       string `json:"agent_id,omitempty"`
 	Status        string `json:"status"`
 	CurrentStepID string `json:"current_step_id,omitempty"`
 	CurrentStep   int    `json:"current_step"`
@@ -363,19 +363,19 @@ type TaskUpdateMessage struct {
 	Type      string `json:"type"`
 	Timestamp int64  `json:"timestamp"`
 	TaskID    string `json:"task_id"`
-	RobotID   string `json:"robot_id"`
+	AgentID   string `json:"agent_id"`
 	Status    string `json:"status"`
 	StepID    string `json:"step_id,omitempty"`
 	Message   string `json:"message,omitempty"`
 }
 
 // BroadcastTaskUpdate sends a task update to all clients
-func (s *Server) BroadcastTaskUpdate(taskID, robotID, status, stepID, message string) {
+func (s *Server) BroadcastTaskUpdate(taskID, agentID, status, stepID, message string) {
 	msg := TaskUpdateMessage{
 		Type:      "task_update",
 		Timestamp: time.Now().UnixMilli(),
 		TaskID:    taskID,
-		RobotID:   robotID,
+		AgentID:   agentID,
 		Status:    status,
 		StepID:    stepID,
 		Message:   message,
@@ -385,21 +385,19 @@ func (s *Server) BroadcastTaskUpdate(taskID, robotID, status, stepID, message st
 
 // AgentUpdateMessage represents an agent status update message
 type AgentUpdateMessage struct {
-	Type      string   `json:"type"`
-	Timestamp int64    `json:"timestamp"`
-	AgentID   string   `json:"agent_id"`
-	Status    string   `json:"status"`
-	Robots    []string `json:"robots,omitempty"`
+	Type      string `json:"type"`
+	Timestamp int64  `json:"timestamp"`
+	AgentID   string `json:"agent_id"`
+	Status    string `json:"status"`
 }
 
 // BroadcastAgentUpdate sends an agent update to all clients
-func (h *WebSocketHub) BroadcastAgentUpdate(agentID string, status string, robots []string) {
+func (h *WebSocketHub) BroadcastAgentUpdate(agentID string, status string) {
 	msg := AgentUpdateMessage{
 		Type:      "agent_update",
 		Timestamp: time.Now().UnixMilli(),
 		AgentID:   agentID,
 		Status:    status,
-		Robots:    robots,
 	}
 	h.Broadcast(msg)
 }
@@ -408,16 +406,16 @@ func (h *WebSocketHub) BroadcastAgentUpdate(agentID string, status string, robot
 type CapabilityUpdateMessage struct {
 	Type         string      `json:"type"`
 	Timestamp    int64       `json:"timestamp"`
-	RobotID      string      `json:"robot_id"`
+	AgentID      string      `json:"agent_id"`
 	Capabilities interface{} `json:"capabilities"`
 }
 
 // BroadcastCapabilityUpdate sends a capability update to all clients
-func (h *WebSocketHub) BroadcastCapabilityUpdate(robotID string, capabilities interface{}) {
+func (h *WebSocketHub) BroadcastCapabilityUpdate(agentID string, capabilities interface{}) {
 	msg := CapabilityUpdateMessage{
 		Type:         "capability_update",
 		Timestamp:    time.Now().UnixMilli(),
-		RobotID:      robotID,
+		AgentID:      agentID,
 		Capabilities: capabilities,
 	}
 	h.Broadcast(msg)

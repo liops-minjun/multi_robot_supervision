@@ -169,14 +169,14 @@ message ExecuteGraphRequest {
   string correlation_id = 1;
   string execution_id = 2;
   string graph_id = 3;
-  string robot_id = 4;
+  string agent_id = 4;
   bytes params = 5;            // JSON-encoded execution parameters
 }
 
 message GraphExecutionStatus {
   string execution_id = 1;
   string graph_id = 2;
-  string robot_id = 3;
+  string agent_id = 3;
   GraphExecutionState state = 4;
 
   // Current position in graph

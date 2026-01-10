@@ -7,7 +7,6 @@
 #include "fleet_agent/state/state_definition.hpp"
 #include "fleet_agent/state/state_tracker.hpp"
 #include "fleet_agent/graph/storage.hpp"
-#include "fleet_agent/graph/executor.hpp"
 
 #include <functional>
 #include <memory>
@@ -23,7 +22,6 @@ class CancelCommand;
 class ConfigUpdate;
 class PingRequest;
 class DeployGraphRequest;
-class ExecuteGraphRequest;
 }
 }
 
@@ -52,7 +50,6 @@ public:
         state::StateDefinitionStorage* state_storage{nullptr};
         state::StateTrackerManager* state_tracker_mgr{nullptr};
         graph::GraphStorage* graph_storage{nullptr};
-        graph::GraphExecutor* graph_executor{nullptr};
         executor::CommandProcessor* command_processor{nullptr};
         CommandQueue* command_queue{nullptr};
         QuicOutboundQueue* quic_outbound_queue{nullptr};
@@ -124,13 +121,6 @@ public:
      */
     HandleResult handle_deploy_graph(const fleet::v1::DeployGraphRequest& deploy);
 
-    /**
-     * Handle ExecuteGraphRequest message.
-     *
-     * Starts graph execution on robot.
-     */
-    HandleResult handle_execute_graph(const fleet::v1::ExecuteGraphRequest& exec);
-
     // ============================================================
     // Response Builders
     // ============================================================
@@ -156,19 +146,6 @@ public:
     );
 
     /**
-     * Build graph execution status message.
-     */
-    std::shared_ptr<fleet::v1::AgentMessage> build_graph_status(
-        const std::string& execution_id,
-        const std::string& graph_id,
-        const std::string& robot_id,
-        int state,
-        const std::string& current_vertex_id,
-        float progress,
-        const std::string& error = ""
-    );
-
-    /**
      * Build action result message.
      */
     std::shared_ptr<fleet::v1::AgentMessage> build_action_result(
@@ -179,10 +156,8 @@ public:
      * Build config update acknowledgment.
      */
     std::shared_ptr<fleet::v1::AgentMessage> build_config_ack(
-        const std::string& robot_id,
-        const std::string& state_def_id,
+        const std::string& agent_id,
         int version,
-        const std::string& correlation_id,
         bool success,
         const std::string& error = ""
     );
@@ -220,12 +195,12 @@ public:
     /**
      * Register capabilities for a robot.
      *
-     * @param robot_id Robot identifier
+     * @param agent_id Robot identifier
      * @param capabilities List of discovered capabilities
      * @return true if registration message sent
      */
     bool register_capabilities(
-        const std::string& robot_id,
+        const std::string& agent_id,
         const std::vector<ActionCapability>& capabilities
     );
 
@@ -241,7 +216,7 @@ private:
     std::string agent_id_;
 
     std::shared_ptr<fleet::v1::AgentMessage> build_registration_message(
-        const std::string& robot_id,
+        const std::string& agent_id,
         const std::vector<ActionCapability>& capabilities
     );
 };

@@ -23,7 +23,7 @@ type RobotState struct {
 	LastSeen      time.Time
 }
 
-// AgentConnection represents a connected agent
+// AgentConnection represents a connected agent (1:1 model: agent = robot)
 type AgentConnection struct {
 	ID            string
 	Name          string
@@ -32,13 +32,12 @@ type AgentConnection struct {
 	LastHeartbeat time.Time
 	LastPing      time.Time
 	PingLatency   time.Duration
-	RobotIDs      []string
 }
 
 // ZoneReservation represents a zone lock
 type ZoneReservation struct {
 	ZoneID     string
-	RobotID    string
+	AgentID    string // In 1:1 model, agent_id = robot_id
 	ReservedAt time.Time
 	ExpiresAt  time.Time
 }
@@ -66,7 +65,8 @@ func DefaultHeartbeatConfig() HeartbeatConfig {
 }
 
 // AgentDisconnectCallback is called when an agent is detected as disconnected
-type AgentDisconnectCallback func(agentID string, robotIDs []string)
+// In 1:1 model, agent_id = robot_id, so only agentID is needed
+type AgentDisconnectCallback func(agentID string)
 
 // GlobalStateManager manages all fleet state with thread-safe operations
 // This is the SINGLE SOURCE OF TRUTH for runtime state
@@ -77,7 +77,7 @@ type GlobalStateManager struct {
 	// Robot states indexed by robot ID
 	robots map[string]*RobotState
 
-	// Active state overrides per robot (robotID -> sourceID -> override)
+	// Active state overrides per robot (agentID -> sourceID -> override)
 	stateOverrides map[string]map[string]StateOverride
 
 	// Zone reservations indexed by zone ID
@@ -203,38 +203,27 @@ func (m *GlobalStateManager) checkStaleAgents() {
 
 	now := time.Now()
 	timeout := m.heartbeatConfig.Timeout
-	staleAgents := make([]struct {
-		ID       string
-		RobotIDs []string
-	}, 0)
+	staleAgentIDs := make([]string, 0)
 
 	// Find stale agents
 	for agentID, agent := range m.agents {
 		timeSinceHeartbeat := now.Sub(agent.LastHeartbeat)
 		if timeSinceHeartbeat > timeout {
-			staleAgents = append(staleAgents, struct {
-				ID       string
-				RobotIDs []string
-			}{
-				ID:       agentID,
-				RobotIDs: append([]string{}, agent.RobotIDs...), // Copy slice
-			})
+			staleAgentIDs = append(staleAgentIDs, agentID)
 		}
 	}
 
-	// Mark stale agents and their robots as offline
-	for _, stale := range staleAgents {
-		log.Printf("[Heartbeat] Agent %s timed out (last heartbeat > %v ago)", stale.ID, timeout)
+	// Mark stale agents as offline (1:1 model: agent_id = robot_id)
+	for _, agentID := range staleAgentIDs {
+		log.Printf("[Heartbeat] Agent %s timed out (last heartbeat > %v ago)", agentID, timeout)
 
-		// Mark all robots as offline
-		for _, robotID := range stale.RobotIDs {
-			if robot, exists := m.robots[robotID]; exists {
-				robot.IsOnline = false
-			}
+		// In 1:1 model, agent_id = robot_id, so mark the robot with same ID as offline
+		if robot, exists := m.robots[agentID]; exists {
+			robot.IsOnline = false
 		}
 
 		// Remove agent from connected list
-		delete(m.agents, stale.ID)
+		delete(m.agents, agentID)
 	}
 
 	// Get callback reference while holding lock
@@ -243,14 +232,14 @@ func (m *GlobalStateManager) checkStaleAgents() {
 
 	// Call disconnect callbacks outside of lock to prevent deadlock
 	if callback != nil {
-		for _, stale := range staleAgents {
-			callback(stale.ID, stale.RobotIDs)
+		for _, agentID := range staleAgentIDs {
+			callback(agentID)
 		}
 	}
 
 	// Invalidate graph caches for disconnected agents
-	for _, stale := range staleAgents {
-		m.graphCache.InvalidateAgentCache(stale.ID)
+	for _, agentID := range staleAgentIDs {
+		m.graphCache.InvalidateAgentCache(agentID)
 	}
 }
 
@@ -280,6 +269,7 @@ func (m *GlobalStateManager) RegisterRobot(id, name, agentID, initialState strin
 }
 
 // UnregisterRobot removes a robot from the state manager
+// In 1:1 model, id = agent_id = robot_id
 func (m *GlobalStateManager) UnregisterRobot(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -288,18 +278,18 @@ func (m *GlobalStateManager) UnregisterRobot(id string) {
 	delete(m.stateOverrides, id)
 	// Also release any zone reservations
 	for zoneID, res := range m.zones {
-		if res.RobotID == id {
+		if res.AgentID == id {
 			delete(m.zones, zoneID)
 		}
 	}
 }
 
 // GetRobotState returns a copy of the robot state (thread-safe read)
-func (m *GlobalStateManager) GetRobotState(robotID string) (*RobotState, bool) {
+func (m *GlobalStateManager) GetRobotState(agentID string) (*RobotState, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	state, exists := m.robots[robotID]
+	state, exists := m.robots[agentID]
 	if !exists {
 		return nil, false
 	}
@@ -309,20 +299,20 @@ func (m *GlobalStateManager) GetRobotState(robotID string) (*RobotState, bool) {
 }
 
 // UpdateRobotState atomically updates a robot's state
-func (m *GlobalStateManager) UpdateRobotState(robotID, newState string) error {
+func (m *GlobalStateManager) UpdateRobotState(agentID, newState string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	robot, exists := m.robots[robotID]
+	robot, exists := m.robots[agentID]
 	if !exists {
-		return fmt.Errorf("robot %s not found", robotID)
+		return fmt.Errorf("robot %s not found", agentID)
 	}
 
 	robot.ReportedState = newState
-	if !m.hasStateOverrideLocked(robotID) {
+	if !m.hasStateOverrideLocked(agentID) {
 		robot.CurrentState = newState
 	} else {
-		if override := m.effectiveOverrideLocked(robotID); override != "" {
+		if override := m.effectiveOverrideLocked(agentID); override != "" {
 			robot.CurrentState = override
 		}
 	}
@@ -331,7 +321,7 @@ func (m *GlobalStateManager) UpdateRobotState(robotID, newState string) error {
 }
 
 // SetRobotStateOverride applies a temporary coordination state for a robot.
-func (m *GlobalStateManager) SetRobotStateOverride(robotID, sourceID, state string) error {
+func (m *GlobalStateManager) SetRobotStateOverride(agentID, sourceID, state string) error {
 	if state == "" {
 		return fmt.Errorf("state override is empty")
 	}
@@ -341,45 +331,45 @@ func (m *GlobalStateManager) SetRobotStateOverride(robotID, sourceID, state stri
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	robot, exists := m.robots[robotID]
+	robot, exists := m.robots[agentID]
 	if !exists {
-		return fmt.Errorf("robot %s not found", robotID)
+		return fmt.Errorf("robot %s not found", agentID)
 	}
 
-	if m.stateOverrides[robotID] == nil {
-		m.stateOverrides[robotID] = make(map[string]StateOverride)
+	if m.stateOverrides[agentID] == nil {
+		m.stateOverrides[agentID] = make(map[string]StateOverride)
 	}
-	m.stateOverrides[robotID][sourceID] = StateOverride{
+	m.stateOverrides[agentID][sourceID] = StateOverride{
 		State: state,
 		SetAt: time.Now(),
 	}
-	robot.CurrentState = m.effectiveOverrideLocked(robotID)
+	robot.CurrentState = m.effectiveOverrideLocked(agentID)
 	robot.LastSeen = time.Now()
 	return nil
 }
 
 // ClearRobotStateOverride removes a temporary coordination state for a robot.
-func (m *GlobalStateManager) ClearRobotStateOverride(robotID, sourceID string) error {
+func (m *GlobalStateManager) ClearRobotStateOverride(agentID, sourceID string) error {
 	if sourceID == "" {
 		return fmt.Errorf("state override source is empty")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	robot, exists := m.robots[robotID]
+	robot, exists := m.robots[agentID]
 	if !exists {
-		return fmt.Errorf("robot %s not found", robotID)
+		return fmt.Errorf("robot %s not found", agentID)
 	}
 
-	if overrides, ok := m.stateOverrides[robotID]; ok {
+	if overrides, ok := m.stateOverrides[agentID]; ok {
 		delete(overrides, sourceID)
 		if len(overrides) == 0 {
-			delete(m.stateOverrides, robotID)
+			delete(m.stateOverrides, agentID)
 		}
 	}
 
-	if m.hasStateOverrideLocked(robotID) {
-		if override := m.effectiveOverrideLocked(robotID); override != "" {
+	if m.hasStateOverrideLocked(agentID) {
+		if override := m.effectiveOverrideLocked(agentID); override != "" {
 			robot.CurrentState = override
 		}
 	} else if robot.ReportedState != "" {
@@ -389,13 +379,13 @@ func (m *GlobalStateManager) ClearRobotStateOverride(robotID, sourceID string) e
 	return nil
 }
 
-func (m *GlobalStateManager) hasStateOverrideLocked(robotID string) bool {
-	overrides, ok := m.stateOverrides[robotID]
+func (m *GlobalStateManager) hasStateOverrideLocked(agentID string) bool {
+	overrides, ok := m.stateOverrides[agentID]
 	return ok && len(overrides) > 0
 }
 
-func (m *GlobalStateManager) effectiveOverrideLocked(robotID string) string {
-	overrides, ok := m.stateOverrides[robotID]
+func (m *GlobalStateManager) effectiveOverrideLocked(agentID string) string {
+	overrides, ok := m.stateOverrides[agentID]
 	if !ok || len(overrides) == 0 {
 		return ""
 	}
@@ -413,8 +403,9 @@ func (m *GlobalStateManager) effectiveOverrideLocked(robotID string) string {
 	return ""
 }
 
-// ResolveTargetRobots returns robot IDs for a state target selection.
-func (m *GlobalStateManager) ResolveTargetRobots(executingRobotID, targetType, agentID string) []string {
+// ResolveTargetAgents returns agent IDs for a state target selection.
+// In 1:1 model, agent_id = robot_id, so this returns the same IDs.
+func (m *GlobalStateManager) ResolveTargetAgents(executingAgentID, targetType, targetAgentID string) []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -423,8 +414,8 @@ func (m *GlobalStateManager) ResolveTargetRobots(executingRobotID, targetType, a
 
 	switch targetType {
 	case "", "self":
-		if _, exists := m.robots[executingRobotID]; exists {
-			ids = append(ids, executingRobotID)
+		if _, exists := m.robots[executingAgentID]; exists {
+			ids = append(ids, executingAgentID)
 		}
 	case "all":
 		ids = make([]string, 0, len(m.robots))
@@ -432,17 +423,16 @@ func (m *GlobalStateManager) ResolveTargetRobots(executingRobotID, targetType, a
 			ids = append(ids, id)
 		}
 	case "agent", "specific":
-		if agentID == "" {
+		if targetAgentID == "" {
 			return nil
 		}
-		for id, robot := range m.robots {
-			if robot.AgentID == agentID {
-				ids = append(ids, id)
-			}
+		// In 1:1 model, robot.ID = agent_id
+		if _, exists := m.robots[targetAgentID]; exists {
+			ids = append(ids, targetAgentID)
 		}
 	default:
-		if _, exists := m.robots[executingRobotID]; exists {
-			ids = append(ids, executingRobotID)
+		if _, exists := m.robots[executingAgentID]; exists {
+			ids = append(ids, executingAgentID)
 		}
 	}
 
@@ -450,13 +440,13 @@ func (m *GlobalStateManager) ResolveTargetRobots(executingRobotID, targetType, a
 }
 
 // UpdateRobotExecution atomically updates a robot's execution state
-func (m *GlobalStateManager) UpdateRobotExecution(robotID string, isExecuting bool, taskID, stepID string) error {
+func (m *GlobalStateManager) UpdateRobotExecution(agentID string, isExecuting bool, taskID, stepID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	robot, exists := m.robots[robotID]
+	robot, exists := m.robots[agentID]
 	if !exists {
-		return fmt.Errorf("robot %s not found", robotID)
+		return fmt.Errorf("robot %s not found", agentID)
 	}
 
 	robot.IsExecuting = isExecuting
@@ -467,13 +457,13 @@ func (m *GlobalStateManager) UpdateRobotExecution(robotID string, isExecuting bo
 }
 
 // SetRobotOnline sets a robot's online status
-func (m *GlobalStateManager) SetRobotOnline(robotID string, isOnline bool) error {
+func (m *GlobalStateManager) SetRobotOnline(agentID string, isOnline bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	robot, exists := m.robots[robotID]
+	robot, exists := m.robots[agentID]
 	if !exists {
-		return fmt.Errorf("robot %s not found", robotID)
+		return fmt.Errorf("robot %s not found", agentID)
 	}
 
 	robot.IsOnline = isOnline
@@ -488,7 +478,8 @@ func (m *GlobalStateManager) SetRobotOnline(robotID string, isOnline bool) error
 // TryReserveZone attempts to reserve a zone for a robot atomically
 // Returns (success, current_holder) - if already reserved, returns false and the holder
 // This is the key operation that prevents race conditions!
-func (m *GlobalStateManager) TryReserveZone(zoneID, robotID string) (bool, string) {
+// In 1:1 model, agentID = agentID
+func (m *GlobalStateManager) TryReserveZone(zoneID, agentID string) (bool, string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -499,10 +490,10 @@ func (m *GlobalStateManager) TryReserveZone(zoneID, robotID string) (bool, strin
 		// Check if reservation has expired
 		if now.Before(existing.ExpiresAt) {
 			// Zone is reserved by someone else
-			if existing.RobotID != robotID {
-				return false, existing.RobotID
+			if existing.AgentID != agentID {
+				return false, existing.AgentID
 			}
-			// Same robot already has it - extend reservation
+			// Same agent already has it - extend reservation
 			existing.ExpiresAt = now.Add(m.zoneExpiryDuration)
 			return true, ""
 		}
@@ -512,7 +503,7 @@ func (m *GlobalStateManager) TryReserveZone(zoneID, robotID string) (bool, strin
 	// Reserve the zone
 	m.zones[zoneID] = &ZoneReservation{
 		ZoneID:     zoneID,
-		RobotID:    robotID,
+		AgentID:    agentID,
 		ReservedAt: now,
 		ExpiresAt:  now.Add(m.zoneExpiryDuration),
 	}
@@ -521,7 +512,8 @@ func (m *GlobalStateManager) TryReserveZone(zoneID, robotID string) (bool, strin
 }
 
 // ReleaseZone releases a zone reservation
-func (m *GlobalStateManager) ReleaseZone(zoneID, robotID string) bool {
+// In 1:1 model, agentID = agentID
+func (m *GlobalStateManager) ReleaseZone(zoneID, agentID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -531,7 +523,7 @@ func (m *GlobalStateManager) ReleaseZone(zoneID, robotID string) bool {
 	}
 
 	// Only the holder can release
-	if existing.RobotID != robotID {
+	if existing.AgentID != agentID {
 		return false
 	}
 
@@ -539,7 +531,7 @@ func (m *GlobalStateManager) ReleaseZone(zoneID, robotID string) bool {
 	return true
 }
 
-// GetZoneHolder returns the current holder of a zone
+// GetZoneHolder returns the current holder of a zone (returns agent_id)
 func (m *GlobalStateManager) GetZoneHolder(zoneID string) (string, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -554,7 +546,7 @@ func (m *GlobalStateManager) GetZoneHolder(zoneID string) (string, bool) {
 		return "", false
 	}
 
-	return existing.RobotID, true
+	return existing.AgentID, true
 }
 
 // CleanupExpiredZones removes expired zone reservations
@@ -580,7 +572,8 @@ func (m *GlobalStateManager) CleanupExpiredZones() int {
 // ============================================================
 
 // RegisterAgent adds or updates an agent connection
-func (m *GlobalStateManager) RegisterAgent(id, name, ipAddress string, robotIDs []string) {
+// In 1:1 model, agent_id = robot_id, so no separate agentIDs needed
+func (m *GlobalStateManager) RegisterAgent(id, name, ipAddress string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -590,7 +583,6 @@ func (m *GlobalStateManager) RegisterAgent(id, name, ipAddress string, robotIDs 
 		// Update existing
 		existing.Name = name
 		existing.IPAddress = ipAddress
-		existing.RobotIDs = robotIDs
 		existing.LastHeartbeat = now
 	} else {
 		// New agent
@@ -602,34 +594,30 @@ func (m *GlobalStateManager) RegisterAgent(id, name, ipAddress string, robotIDs 
 			LastHeartbeat: now,
 			LastPing:      time.Time{},
 			PingLatency:   0,
-			RobotIDs:      robotIDs,
 		}
 	}
 
-	// Mark all robots as online
-	for _, robotID := range robotIDs {
-		if robot, exists := m.robots[robotID]; exists {
-			robot.IsOnline = true
-			robot.LastSeen = now
-		}
+	// In 1:1 model, agent_id = robot_id, so mark the robot with same ID as online
+	if robot, exists := m.robots[id]; exists {
+		robot.IsOnline = true
+		robot.LastSeen = now
 	}
 }
 
-// UnregisterAgent removes an agent and marks its robots as offline
+// UnregisterAgent removes an agent and marks it as offline
+// In 1:1 model, agent_id = robot_id
 func (m *GlobalStateManager) UnregisterAgent(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	agent, exists := m.agents[id]
+	_, exists := m.agents[id]
 	if !exists {
 		return
 	}
 
-	// Mark all robots as offline
-	for _, robotID := range agent.RobotIDs {
-		if robot, exists := m.robots[robotID]; exists {
-			robot.IsOnline = false
-		}
+	// In 1:1 model, agent_id = robot_id, so mark the robot with same ID as offline
+	if robot, exists := m.robots[id]; exists {
+		robot.IsOnline = false
 	}
 
 	delete(m.agents, id)
@@ -678,8 +666,6 @@ func (m *GlobalStateManager) GetAgent(id string) (*AgentConnection, bool) {
 	}
 
 	agentCopy := *agent
-	agentCopy.RobotIDs = make([]string, len(agent.RobotIDs))
-	copy(agentCopy.RobotIDs, agent.RobotIDs)
 	return &agentCopy, true
 }
 
@@ -693,6 +679,7 @@ func (m *GlobalStateManager) IsAgentOnline(id string) bool {
 }
 
 // AgentStatus represents the status of an agent with heartbeat info
+// In 1:1 model, agent_id = robot_id, so no separate RobotIDs needed
 type AgentStatus struct {
 	ID              string        `json:"id"`
 	Name            string        `json:"name"`
@@ -703,7 +690,6 @@ type AgentStatus struct {
 	HeartbeatAge    time.Duration `json:"heartbeat_age"` // Time since last heartbeat
 	LastPing        time.Time     `json:"last_ping"`
 	PingLatency     time.Duration `json:"ping_latency"`
-	RobotIDs        []string      `json:"robot_ids"`
 	HeartbeatHealth string        `json:"heartbeat_health"` // "healthy", "warning", "critical"
 }
 
@@ -738,10 +724,8 @@ func (m *GlobalStateManager) GetAllAgentStatus() []AgentStatus {
 			HeartbeatAge:    heartbeatAge,
 			LastPing:        agent.LastPing,
 			PingLatency:     agent.PingLatency,
-			RobotIDs:        make([]string, len(agent.RobotIDs)),
 			HeartbeatHealth: health,
 		}
-		copy(status.RobotIDs, agent.RobotIDs)
 		result = append(result, status)
 	}
 
@@ -780,10 +764,8 @@ func (m *GlobalStateManager) GetAgentStatus(agentID string) (*AgentStatus, bool)
 		HeartbeatAge:    heartbeatAge,
 		LastPing:        agent.LastPing,
 		PingLatency:     agent.PingLatency,
-		RobotIDs:        make([]string, len(agent.RobotIDs)),
 		HeartbeatHealth: health,
 	}
-	copy(status.RobotIDs, agent.RobotIDs)
 
 	return status, true
 }
@@ -795,13 +777,13 @@ func (m *GlobalStateManager) GetAgentStatus(agentID string) (*AgentStatus, bool)
 // EvaluatePreconditions checks preconditions atomically
 // Returns (success, error_message)
 // This is critical for preventing TOCTOU race conditions!
-func (m *GlobalStateManager) EvaluatePreconditions(robotID string, conditions []Precondition) (bool, string) {
+func (m *GlobalStateManager) EvaluatePreconditions(agentID string, conditions []Precondition) (bool, string) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	robot, exists := m.robots[robotID]
+	robot, exists := m.robots[agentID]
 	if !exists {
-		return false, fmt.Sprintf("robot %s not found", robotID)
+		return false, fmt.Sprintf("robot %s not found", agentID)
 	}
 
 	for _, cond := range conditions {
@@ -811,7 +793,7 @@ func (m *GlobalStateManager) EvaluatePreconditions(robotID string, conditions []
 				return false, cond.Message
 			}
 		case "zone_free":
-			if !m.evaluateZoneCondition(robotID, cond.Condition) {
+			if !m.evaluateZoneCondition(agentID, cond.Condition) {
 				return false, cond.Message
 			}
 		case "robot_idle":
@@ -850,9 +832,8 @@ type StartCondition struct {
 
 	// Target selection
 	Quantifier StartConditionQuantifier `json:"quantifier"`  // self, all, any, none, specific
-	TargetType string                   `json:"target_type"` // self, robot, agent, all
-	RobotID    string                   `json:"robot_id"`    // For 'specific' quantifier
-	AgentID    string                   `json:"agent_id"`    // For 'agent' target
+	TargetType string                   `json:"target_type"` // self, agent, all
+	AgentID    string                   `json:"agent_id"`    // For 'specific' quantifier or agent target
 
 	// State condition
 	State         string   `json:"state"`          // Required state value
@@ -906,7 +887,7 @@ type StartConditionValidationResult struct {
 func (c *StartCondition) IsSelfOnly() bool {
 	return c.Quantifier == QuantifierSelf ||
 		(c.Quantifier == "" && c.TargetType == "self") ||
-		(c.Quantifier == "" && c.TargetType == "" && c.RobotID == "")
+		(c.Quantifier == "" && c.TargetType == "" && c.AgentID == "")
 }
 
 // Precondition represents a simple condition to check (legacy/simple format)
@@ -923,8 +904,9 @@ func (m *GlobalStateManager) evaluateStateCondition(robot *RobotState, condition
 	return robot.CurrentState == condition
 }
 
-// evaluateZoneCondition checks if a zone is free or owned by this robot
-func (m *GlobalStateManager) evaluateZoneCondition(robotID, zoneID string) bool {
+// evaluateZoneCondition checks if a zone is free or owned by this agent
+// In 1:1 model, agentID = agentID
+func (m *GlobalStateManager) evaluateZoneCondition(agentID, zoneID string) bool {
 	existing, exists := m.zones[zoneID]
 	if !exists {
 		return true // Zone is free
@@ -935,8 +917,8 @@ func (m *GlobalStateManager) evaluateZoneCondition(robotID, zoneID string) bool 
 		return true
 	}
 
-	// Zone is reserved - is it by this robot?
-	return existing.RobotID == robotID
+	// Zone is reserved - is it by this agent?
+	return existing.AgentID == agentID
 }
 
 // ============================================================
@@ -950,8 +932,8 @@ const (
 
 // EvaluateStartConditions evaluates rich start conditions with quantifier support
 // Returns: (allPassed, failedConditionID, errorMessage)
-func (m *GlobalStateManager) EvaluateStartConditions(executingRobotID string, conditions []StartCondition) (bool, string, string) {
-	result := m.ValidateStartConditions(executingRobotID, conditions)
+func (m *GlobalStateManager) EvaluateStartConditions(executingAgentID string, conditions []StartCondition) (bool, string, string) {
+	result := m.ValidateStartConditions(executingAgentID, conditions)
 	if !result.Passed {
 		// Find first failed condition
 		for _, cr := range result.ConditionResults {
@@ -965,17 +947,20 @@ func (m *GlobalStateManager) EvaluateStartConditions(executingRobotID string, co
 
 // EvaluateStartConditionList evaluates an ordered list with AND/OR operators.
 // Returns (passed, error_message).
-func (m *GlobalStateManager) EvaluateStartConditionList(executingRobotID string, conditions []StartCondition) (bool, string) {
+func (m *GlobalStateManager) EvaluateStartConditionList(executingAgentID string, conditions []StartCondition) (bool, string) {
 	if len(conditions) == 0 {
 		return true, ""
 	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
 	now := time.Now()
 	result := true
 	var errorMessage string
 
 	for i, cond := range conditions {
-		condResult := m.evaluateSingleConditionDetailed(executingRobotID, cond, now)
+		condResult := m.evaluateSingleConditionDetailed(executingAgentID, cond, now)
 		passed := condResult.Passed
 
 		if i == 0 {
@@ -1009,7 +994,7 @@ func (m *GlobalStateManager) EvaluateStartConditionList(executingRobotID string,
 }
 
 // ValidateStartConditions performs full validation with detailed results
-func (m *GlobalStateManager) ValidateStartConditions(executingRobotID string, conditions []StartCondition) StartConditionValidationResult {
+func (m *GlobalStateManager) ValidateStartConditions(executingAgentID string, conditions []StartCondition) StartConditionValidationResult {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -1019,7 +1004,7 @@ func (m *GlobalStateManager) ValidateStartConditions(executingRobotID string, co
 	var errors []string
 
 	for _, cond := range conditions {
-		result := m.evaluateSingleConditionDetailed(executingRobotID, cond, now)
+		result := m.evaluateSingleConditionDetailed(executingAgentID, cond, now)
 		results = append(results, result)
 		if !result.Passed {
 			allPassed = false
@@ -1057,7 +1042,7 @@ func (m *GlobalStateManager) ValidateStartConditions(executingRobotID string, co
 }
 
 // evaluateSingleConditionDetailed evaluates one condition with full detail tracking
-func (m *GlobalStateManager) evaluateSingleConditionDetailed(executingRobotID string, cond StartCondition, now time.Time) ConditionResult {
+func (m *GlobalStateManager) evaluateSingleConditionDetailed(executingAgentID string, cond StartCondition, now time.Time) ConditionResult {
 	result := ConditionResult{
 		ConditionID:    cond.ID,
 		TargetRobots:   []string{},
@@ -1068,7 +1053,7 @@ func (m *GlobalStateManager) evaluateSingleConditionDetailed(executingRobotID st
 	}
 
 	// Get target robots
-	targetRobots := m.getTargetRobots(executingRobotID, cond)
+	targetRobots := m.getTargetRobots(executingAgentID, cond)
 
 	if len(targetRobots) == 0 && cond.Quantifier != QuantifierNone {
 		result.Passed = false
@@ -1153,7 +1138,7 @@ func (m *GlobalStateManager) evaluateSingleConditionDetailed(executingRobotID st
 }
 
 // EvaluateConditionGroup evaluates a group of conditions with logical operator
-func (m *GlobalStateManager) EvaluateConditionGroup(executingRobotID string, group StartConditionGroup) ConditionResult {
+func (m *GlobalStateManager) EvaluateConditionGroup(executingAgentID string, group StartConditionGroup) ConditionResult {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -1161,7 +1146,7 @@ func (m *GlobalStateManager) EvaluateConditionGroup(executingRobotID string, gro
 	results := make([]ConditionResult, 0, len(group.Conditions))
 
 	for _, cond := range group.Conditions {
-		result := m.evaluateSingleConditionDetailed(executingRobotID, cond, now)
+		result := m.evaluateSingleConditionDetailed(executingAgentID, cond, now)
 		results = append(results, result)
 	}
 
@@ -1216,26 +1201,21 @@ func (m *GlobalStateManager) EvaluateConditionGroup(executingRobotID string, gro
 }
 
 // getTargetRobots returns the list of robots to check based on condition's target
-func (m *GlobalStateManager) getTargetRobots(executingRobotID string, cond StartCondition) []*RobotState {
+func (m *GlobalStateManager) getTargetRobots(executingAgentID string, cond StartCondition) []*RobotState {
 	var targets []*RobotState
 
 	switch cond.Quantifier {
 	case QuantifierSelf, "":
 		// Self or default: only the executing robot
-		if robot, exists := m.robots[executingRobotID]; exists {
+		if robot, exists := m.robots[executingAgentID]; exists {
 			targets = append(targets, robot)
 		}
 
 	case QuantifierSpecific:
-		// Specific agent or robot
+		// Specific agent (1 Agent = 1 Robot in this architecture)
 		if cond.AgentID != "" {
-			for _, robot := range m.robots {
-				if robot.AgentID == cond.AgentID {
-					targets = append(targets, robot)
-				}
-			}
-		} else if cond.RobotID != "" {
-			if robot, exists := m.robots[cond.RobotID]; exists {
+			// In 1:1 model, agent ID is also the robot ID
+			if robot, exists := m.robots[cond.AgentID]; exists {
 				targets = append(targets, robot)
 			}
 		}
@@ -1304,37 +1284,38 @@ func AreSelfOnlyConditions(conditions []StartCondition) bool {
 
 // TryStartExecution attempts to start execution atomically
 // This combines: precondition check + zone reservation + state update
+// In 1:1 model, agentID = agentID
 // Returns (success, error_message)
-func (m *GlobalStateManager) TryStartExecution(robotID, taskID, stepID string, requiredZones []string, preconditions []Precondition) (bool, string) {
+func (m *GlobalStateManager) TryStartExecution(agentID, taskID, stepID string, requiredZones []string, preconditions []Precondition) (bool, string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	robot, exists := m.robots[robotID]
+	robot, exists := m.robots[agentID]
 	if !exists {
-		return false, fmt.Sprintf("robot %s not found", robotID)
+		return false, fmt.Sprintf("agent %s not found", agentID)
 	}
 
 	// Check if already executing
 	if robot.IsExecuting {
-		return false, fmt.Sprintf("robot %s is already executing task %s", robotID, robot.CurrentTaskID)
+		return false, fmt.Sprintf("agent %s is already executing task %s", agentID, robot.CurrentTaskID)
 	}
 
 	// Check preconditions (while holding lock)
 	for _, cond := range preconditions {
 		switch cond.Type {
-		case "robot_state":
+		case "agent_state", "robot_state":
 			if !m.evaluateStateCondition(robot, cond.Condition) {
 				return false, cond.Message
 			}
 		case "zone_free":
-			if !m.evaluateZoneCondition(robotID, cond.Condition) {
+			if !m.evaluateZoneCondition(agentID, cond.Condition) {
 				return false, cond.Message
 			}
-		case "robot_idle":
+		case "agent_idle", "robot_idle":
 			if robot.IsExecuting {
 				return false, cond.Message
 			}
-		case "robot_online":
+		case "agent_online", "robot_online":
 			if !robot.IsOnline {
 				return false, cond.Message
 			}
@@ -1346,18 +1327,18 @@ func (m *GlobalStateManager) TryStartExecution(robotID, taskID, stepID string, r
 	reservedZones := make([]string, 0, len(requiredZones))
 	for _, zoneID := range requiredZones {
 		existing, exists := m.zones[zoneID]
-		if exists && now.Before(existing.ExpiresAt) && existing.RobotID != robotID {
+		if exists && now.Before(existing.ExpiresAt) && existing.AgentID != agentID {
 			// Zone is taken by someone else - rollback reserved zones
 			for _, reserved := range reservedZones {
 				delete(m.zones, reserved)
 			}
-			return false, fmt.Sprintf("zone %s is reserved by robot %s", zoneID, existing.RobotID)
+			return false, fmt.Sprintf("zone %s is reserved by agent %s", zoneID, existing.AgentID)
 		}
 
 		// Reserve the zone
 		m.zones[zoneID] = &ZoneReservation{
 			ZoneID:     zoneID,
-			RobotID:    robotID,
+			AgentID:    agentID,
 			ReservedAt: now,
 			ExpiresAt:  now.Add(m.zoneExpiryDuration),
 		}
@@ -1374,11 +1355,12 @@ func (m *GlobalStateManager) TryStartExecution(robotID, taskID, stepID string, r
 }
 
 // CompleteExecution marks execution as complete and releases zones
-func (m *GlobalStateManager) CompleteExecution(robotID string, releasedZones []string) {
+// In 1:1 model, agentID = agentID
+func (m *GlobalStateManager) CompleteExecution(agentID string, releasedZones []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	robot, exists := m.robots[robotID]
+	robot, exists := m.robots[agentID]
 	if !exists {
 		return
 	}
@@ -1391,7 +1373,7 @@ func (m *GlobalStateManager) CompleteExecution(robotID string, releasedZones []s
 	// Release zones
 	for _, zoneID := range releasedZones {
 		if existing, exists := m.zones[zoneID]; exists {
-			if existing.RobotID == robotID {
+			if existing.AgentID == agentID {
 				delete(m.zones, zoneID)
 			}
 		}
@@ -1432,8 +1414,6 @@ func (m *GlobalStateManager) GetSnapshot() *FleetSnapshot {
 	// Copy agents
 	for id, agent := range m.agents {
 		agentCopy := *agent
-		agentCopy.RobotIDs = make([]string, len(agent.RobotIDs))
-		copy(agentCopy.RobotIDs, agent.RobotIDs)
 		snapshot.Agents[id] = &agentCopy
 	}
 

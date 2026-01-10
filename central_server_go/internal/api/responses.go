@@ -105,7 +105,7 @@ type ActionGraphUpdateRequest struct {
 }
 
 type ActionGraphExecuteRequest struct {
-	RobotID string                 `json:"robot_id"`
+	AgentID string                 `json:"agent_id"`
 	Params  map[string]interface{} `json:"params,omitempty"`
 }
 
@@ -114,14 +114,16 @@ type ActionGraphExecuteRequest struct {
 // ============================================================
 
 type AgentResponse struct {
-	ID         string     `json:"id"`
-	Name       string     `json:"name"`
-	IPAddress  string     `json:"ip_address,omitempty"`
-	LastSeen   *time.Time `json:"last_seen,omitempty"`
-	Status     string     `json:"status"`
-	RobotCount int        `json:"robot_count"`
-	CreatedAt  time.Time  `json:"created_at"`
-	Robots     []string   `json:"robots,omitempty"`
+	ID           string     `json:"id"`
+	Name         string     `json:"name"`
+	Namespace    string     `json:"namespace,omitempty"`
+	IPAddress    string     `json:"ip_address,omitempty"`
+	LastSeen     *time.Time `json:"last_seen,omitempty"`
+	Status       string     `json:"status"`
+	CurrentState string     `json:"current_state,omitempty"`
+	RobotCount   int        `json:"robot_count"`
+	CreatedAt    time.Time  `json:"created_at"`
+	Robots       []string   `json:"robots,omitempty"` // In 1:1 model, contains single agent ID
 }
 
 type AgentActionGraphResponse struct {
@@ -165,8 +167,8 @@ type TaskResponse struct {
 	ID               string                   `json:"id"`
 	ActionGraphID    string                   `json:"action_graph_id,omitempty"`
 	ActionGraphName  string                   `json:"action_graph_name,omitempty"`
-	RobotID          string                   `json:"robot_id,omitempty"`
-	RobotName        string                   `json:"robot_name,omitempty"`
+	AgentID          string                   `json:"agent_id,omitempty"`
+	AgentName        string                   `json:"agent_name,omitempty"`
 	Status           string                   `json:"status"`
 	CurrentStepID    string                   `json:"current_step_id,omitempty"`
 	CurrentStepIndex int                      `json:"current_step_index"`
@@ -238,22 +240,21 @@ type RobotStateSnapshot struct {
 }
 
 type AgentStateSnapshot struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	IsOnline     bool     `json:"is_online"`
-	RobotIDs     []string `json:"robot_ids"`
-	StalenessSec float64  `json:"staleness_sec"`
+	ID           string  `json:"id"`
+	Name         string  `json:"name"`
+	IsOnline     bool    `json:"is_online"`
+	StalenessSec float64 `json:"staleness_sec"`
 }
 
 type ZoneReservationState struct {
 	ZoneID     string `json:"zone_id"`
-	RobotID    string `json:"robot_id"`
+	AgentID    string `json:"agent_id"`
 	ReservedAt int64  `json:"reserved_at"`
 	ExpiresAt  int64  `json:"expires_at"`
 }
 
 type ValidatePreconditionsRequest struct {
-	RobotID       string                   `json:"robot_id"`
+	AgentID       string                   `json:"agent_id"`
 	Preconditions []map[string]interface{} `json:"preconditions"`
 }
 
@@ -301,10 +302,10 @@ type CapabilityResponse struct {
 	DiscoveredAt    time.Time              `json:"discovered_at"`
 }
 
-// RobotCapabilitiesResponse represents all capabilities for a robot
-type RobotCapabilitiesResponse struct {
-	RobotID      string               `json:"robot_id"`
-	RobotName    string               `json:"robot_name"`
+// AgentCapabilitiesListResponse represents all capabilities for an agent
+type AgentCapabilitiesListResponse struct {
+	AgentID      string               `json:"agent_id"`
+	AgentName    string               `json:"agent_name"`
 	Namespace    string               `json:"namespace"`
 	Capabilities []CapabilityResponse `json:"capabilities"`
 	LastUpdated  time.Time            `json:"last_updated"`
@@ -312,7 +313,7 @@ type RobotCapabilitiesResponse struct {
 
 // CapabilityRegisterRequest represents a request to register capabilities
 type CapabilityRegisterRequest struct {
-	RobotID      string                   `json:"robot_id"`
+	AgentID      string                   `json:"agent_id"`
 	Capabilities []CapabilityRegisterItem `json:"capabilities"`
 	Timestamp    string                   `json:"timestamp,omitempty"`
 }
@@ -329,7 +330,7 @@ type CapabilityRegisterItem struct {
 
 // CapabilityStatusUpdateRequest represents a request to update capability status
 type CapabilityStatusUpdateRequest struct {
-	RobotID   string                      `json:"robot_id"`
+	AgentID   string                      `json:"agent_id"`
 	Status    map[string]CapabilityStatus `json:"status"` // action_type -> status
 	Timestamp string                      `json:"timestamp,omitempty"`
 }
@@ -340,17 +341,17 @@ type CapabilityStatus struct {
 	Status    string `json:"status"` // idle, executing
 }
 
-// AllCapabilitiesResponse represents capabilities aggregated across all robots
+// AllCapabilitiesResponse represents capabilities aggregated across all agents
 type AllCapabilitiesResponse struct {
 	ActionTypes   []ActionTypeInfo   `json:"action_types"`
 	ActionServers []ActionServerInfo `json:"action_servers"` // Individual action servers (not grouped)
-	TotalRobots   int                `json:"total_robots"`
+	TotalAgents   int                `json:"total_agents"`
 }
 
-// ActionTypeInfo represents info about a specific action type across robots
+// ActionTypeInfo represents info about a specific action type across agents
 type ActionTypeInfo struct {
 	ActionType     string   `json:"action_type"`
-	RobotIDs       []string `json:"robot_ids"`
+	AgentIDs       []string `json:"agent_ids"`
 	AvailableCount int      `json:"available_count"`
 	TotalCount     int      `json:"total_count"`
 }
@@ -466,5 +467,4 @@ type AgentConnectionStatusResponse struct {
 	LastPing        *time.Time `json:"last_ping,omitempty"`
 	PingLatencyMs   *int64     `json:"ping_latency_ms,omitempty"`
 	PingLatencyUs   *int64     `json:"ping_latency_us,omitempty"`
-	RobotIDs        []string   `json:"robot_ids"`
 }

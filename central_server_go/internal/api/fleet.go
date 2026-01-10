@@ -44,7 +44,6 @@ func (s *Server) GetFleetState(w http.ResponseWriter, r *http.Request) {
 			ID:           agent.ID,
 			Name:         agent.Name,
 			IsOnline:     true, // Agents in snapshot are online
-			RobotIDs:     agent.RobotIDs,
 			StalenessSec: now.Sub(agent.LastHeartbeat).Seconds(),
 		}
 	}
@@ -53,7 +52,7 @@ func (s *Server) GetFleetState(w http.ResponseWriter, r *http.Request) {
 	for id, zone := range snapshot.Zones {
 		response.Zones[id] = &ZoneReservationState{
 			ZoneID:     zone.ZoneID,
-			RobotID:    zone.RobotID,
+			AgentID:    zone.AgentID,
 			ReservedAt: zone.ReservedAt.UnixMilli(),
 			ExpiresAt:  zone.ExpiresAt.UnixMilli(),
 		}
@@ -62,7 +61,7 @@ func (s *Server) GetFleetState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-// ValidatePreconditions validates preconditions for a robot
+// ValidatePreconditions validates preconditions for an agent
 func (s *Server) ValidatePreconditions(w http.ResponseWriter, r *http.Request) {
 	var req ValidatePreconditionsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -70,8 +69,8 @@ func (s *Server) ValidatePreconditions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.RobotID == "" {
-		writeError(w, http.StatusBadRequest, "robot_id is required")
+	if req.AgentID == "" {
+		writeError(w, http.StatusBadRequest, "agent_id is required")
 		return
 	}
 
@@ -85,8 +84,8 @@ func (s *Server) ValidatePreconditions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Evaluate preconditions
-	passed, errorMsg := s.stateManager.EvaluatePreconditions(req.RobotID, preconditions)
+	// Evaluate preconditions (1:1 model: agent_id = robot_id)
+	passed, errorMsg := s.stateManager.EvaluatePreconditions(req.AgentID, preconditions)
 
 	response := ValidatePreconditionsResponse{
 		Valid:        passed,
@@ -95,10 +94,10 @@ func (s *Server) ValidatePreconditions(w http.ResponseWriter, r *http.Request) {
 
 	// Add detailed results
 	if !passed {
-		robotState, exists := s.stateManager.GetRobotState(req.RobotID)
+		robotState, exists := s.stateManager.GetRobotState(req.AgentID)
 		if exists {
 			response.Details = map[string]interface{}{
-				"robot_state":  robotState.CurrentState,
+				"agent_state":  robotState.CurrentState,
 				"is_online":    robotState.IsOnline,
 				"is_executing": robotState.IsExecuting,
 			}
@@ -117,12 +116,13 @@ func getString(m map[string]interface{}, key string) string {
 }
 
 // GetRobotState returns a single robot's state snapshot
+// In 1:1 model, agentID = robotID, URL param kept for backward compatibility
 func (s *Server) GetRobotState(w http.ResponseWriter, r *http.Request) {
-	robotID := chi.URLParam(r, "robotID")
+	agentID := chi.URLParam(r, "robotID") // URL param name kept for backward compatibility
 
-	robotState, exists := s.stateManager.GetRobotState(robotID)
+	robotState, exists := s.stateManager.GetRobotState(agentID)
 	if !exists {
-		writeError(w, http.StatusNotFound, "Robot not found: "+robotID)
+		writeError(w, http.StatusNotFound, "Agent not found: "+agentID)
 		return
 	}
 
@@ -207,10 +207,10 @@ func (s *Server) GetFleetSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Calculate agent distribution
+	// Calculate agent distribution (1:1 model: each agent = 1 robot)
 	agentCounts := make(map[string]int)
-	for agentID, agent := range snapshot.Agents {
-		agentCounts[agentID] = len(agent.RobotIDs)
+	for agentID := range snapshot.Agents {
+		agentCounts[agentID] = 1 // In 1:1 model, agent_id = robot_id
 	}
 
 	response := map[string]interface{}{

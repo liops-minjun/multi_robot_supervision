@@ -78,27 +78,27 @@ export const capabilityApi = {
     return data
   },
 
-  // Get all capabilities across all robots
+  // Get all capabilities across all agents
   listAll: async (): Promise<{
     action_types: Array<{
       action_type: string
-      robot_ids: string[]
+      agent_ids: string[]
       available_count: number
       total_count: number
     }>
     action_servers: ActionServerInfo[]  // Individual action servers (not grouped)
-    total_robots: number
+    total_agents: number
   }> => {
     const { data } = await api.get('/capabilities')
     return data
   },
 
-  // Get robots with a specific action type
+  // Get agents with a specific action type
   getByActionType: async (actionType: string): Promise<{
     action_type: string
-    robots: Array<{
-      robot_id: string
-      robot_name: string
+    agents: Array<{
+      agent_id: string
+      agent_name: string
       action_server: string
       status: string
       is_available: boolean
@@ -154,8 +154,8 @@ export const stateDefinitionApi = {
     await api.delete(`/state-definitions/${id}`)
   },
 
-  deploy: async (id: string, robotIds?: string[]): Promise<unknown> => {
-    const { data } = await api.post(`/state-definitions/${id}/deploy`, robotIds)
+  deploy: async (id: string, agentIds?: string[]): Promise<unknown> => {
+    const { data } = await api.post(`/state-definitions/${id}/deploy`, agentIds)
     return data
   },
 }
@@ -192,9 +192,9 @@ export const actionGraphApi = {
     await api.delete(`/action-graphs/${id}`)
   },
 
-  execute: async (id: string, robotId: string, params?: Record<string, unknown>): Promise<unknown> => {
+  execute: async (id: string, agentId: string, params?: Record<string, unknown>): Promise<unknown> => {
     const { data } = await api.post(`/action-graphs/${id}/execute`, null, {
-      params: { robot_id: robotId, ...params }
+      params: { agent_id: agentId, ...params }
     })
     return data
   },
@@ -207,10 +207,10 @@ export const actionGraphApi = {
 
 // Task APIs
 export const taskApi = {
-  list: async (status?: string, robotId?: string): Promise<Task[]> => {
+  list: async (status?: string, agentId?: string): Promise<Task[]> => {
     const params: Record<string, string> = {}
     if (status) params.status_filter = status
-    if (robotId) params.robot_id = robotId
+    if (agentId) params.agent_id = agentId
     const { data } = await api.get('/tasks', { params })
     return data
   },
@@ -265,8 +265,8 @@ export const waypointApi = {
     await api.delete(`/waypoints/${id}`)
   },
 
-  teach: async (robotId: string, request: { waypoint_type: string; name: string; description?: string; tags?: string[] }): Promise<Waypoint> => {
-    const { data } = await api.post(`/robots/${robotId}/teach`, request)
+  teach: async (agentId: string, request: { waypoint_type: string; name: string; description?: string; tags?: string[] }): Promise<Waypoint> => {
+    const { data } = await api.post(`/agents/${agentId}/teach`, request)
     return data
   },
 }
@@ -360,20 +360,18 @@ export const fleetApi = {
   // Get current fleet state snapshot
   getState: async (params?: {
     agentIds?: string[]
-    robotIds?: string[]
     maxStalenessSec?: number
   }): Promise<FleetStateSnapshot> => {
     const queryParams: Record<string, string | boolean | number> = {}
     if (params?.agentIds) queryParams.agent_ids = params.agentIds.join(',')
-    if (params?.robotIds) queryParams.robot_ids = params.robotIds.join(',')
     if (params?.maxStalenessSec !== undefined) queryParams.max_staleness_sec = params.maxStalenessSec
     const { data } = await api.get('/fleet/state', { params: queryParams })
     return data
   },
 
-  // Get single robot state
-  getRobotState: async (robotId: string): Promise<RobotStateSnapshot> => {
-    const { data } = await api.get(`/fleet/state/robot/${robotId}`)
+  // Get single agent state (1:1 model: agent = robot)
+  getAgentRobotState: async (agentId: string): Promise<RobotStateSnapshot> => {
+    const { data } = await api.get(`/fleet/state/agent/${agentId}`)
     return data
   },
 
@@ -391,11 +389,11 @@ export const fleetApi = {
 
   // Validate start state conditions
   validate: async (
-    executingRobotId: string,
+    executingAgentId: string,
     conditions: (EnhancedStartStateCondition | StartStateGroup)[]
   ): Promise<StartStateValidationResult> => {
     const { data } = await api.post('/fleet/validate', {
-      executing_robot_id: executingRobotId,
+      executing_agent_id: executingAgentId,
       conditions
     })
     return data

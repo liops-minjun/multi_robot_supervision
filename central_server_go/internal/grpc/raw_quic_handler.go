@@ -70,8 +70,8 @@ type RawQUICHandler struct {
 // WebSocketBroadcaster interface for broadcasting to frontend
 // This abstracts the WebSocketHub from api package to avoid circular imports
 type WebSocketBroadcaster interface {
-	BroadcastAgentUpdate(agentID string, status string, robots []string)
-	BroadcastCapabilityUpdate(robotID string, capabilities interface{})
+	BroadcastAgentUpdate(agentID string, status string)
+	BroadcastCapabilityUpdate(agentID string, capabilities interface{})
 }
 
 // agentConnection tracks an agent's QUIC connection with bidirectional support
@@ -87,8 +87,8 @@ type agentConnection struct {
 	commandStream   quic.Stream           // Primary stream for Server→Agent commands
 	sendChan        chan *OutboundCommand // Queue for outgoing commands
 	sendDone        chan struct{}         // Signal to stop sender goroutine
-	robotIDs        []string              // Robots managed by this agent
 	useHeartbeatRtt atomic.Bool           // Prefer latency from heartbeat stats
+	// In 1:1 model, agent_id = robot_id, so no separate robotIDs field needed
 }
 
 // OutboundCommand represents a command to send to agent
@@ -100,7 +100,7 @@ type OutboundCommand struct {
 
 type graphOverrideState struct {
 	StepID   string
-	RobotIDs []string
+	AgentIDs []string
 }
 
 // CommandCallback is called when action result/feedback is received
@@ -290,19 +290,12 @@ func (h *RawQUICHandler) handleConnection(conn quic.Connection) {
 	}
 }
 
-// RegisterAgentReq represents a parsed RegisterAgentRequest
+// RegisterAgentReq represents a parsed RegisterAgentRequest (1:1 model)
 type RegisterAgentReq struct {
 	AgentID       string
 	Name          string
-	Robots        []RobotInfoMsg
+	Namespace     string // ROS namespace
 	ClientVersion string
-}
-
-// RobotInfoMsg represents robot info from registration
-type RobotInfoMsg struct {
-	RobotID      string
-	ROSNamespace string
-	Name         string
 }
 
 // AgentMsg represents a parsed AgentMessage with all payload types
@@ -322,36 +315,26 @@ type AgentMsg struct {
 	CapabilityRegistration *CapabilityRegistrationMsg // field 18
 }
 
-// AgentHeartbeatMsg represents aggregated heartbeat from agent
+// AgentHeartbeatMsg represents heartbeat from agent (1:1 model)
 type AgentHeartbeatMsg struct {
 	AgentID             string
 	TimestampMs         int64
 	State               int32 // AgentState enum
-	Robots              map[string]*RobotHeartbeatMsg
+	IsExecuting         bool
+	CurrentAction       string
+	CurrentTaskID       string
+	CurrentStepID       string
+	ActionProgress      float32
 	NetworkLatencyMs    uint32
 	HasNetworkLatency   bool
 	NetworkLatencyUs    uint32
 	HasNetworkLatencyUs bool
 }
 
-// RobotHeartbeatMsg represents per-robot heartbeat status
-type RobotHeartbeatMsg struct {
-	RobotID        string
-	State          int32 // RobotState enum
-	IsExecuting    bool
-	CurrentAction  string
-	CurrentTaskID  string
-	CurrentStepID  string
-	ActionProgress float32
-	StateName      string
-	StateDefID     string
-	StateDefVer    int32
-}
-
 // ActionResultMsg represents action completion result
 type ActionResultMsg struct {
 	CommandID     string
-	RobotID       string
+	AgentID       string
 	TaskID        string
 	StepID        string
 	Status        int32 // ActionStatus enum
@@ -364,7 +347,7 @@ type ActionResultMsg struct {
 // ActionFeedbackMsg represents action progress feedback
 type ActionFeedbackMsg struct {
 	CommandID   string
-	RobotID     string
+	AgentID     string
 	TaskID      string
 	StepID      string
 	Progress    float32
@@ -372,11 +355,11 @@ type ActionFeedbackMsg struct {
 	TimestampMs int64
 }
 
-// AgentStatusUpdateMsg represents agent status change
+// AgentStatusUpdateMsg represents agent status change (1:1 model)
 type AgentStatusUpdateMsg struct {
-	State        int32 // AgentState enum
-	OnlineRobots []string
-	Message      string
+	State    int32 // AgentState enum
+	IsOnline bool
+	Message  string
 }
 
 // DeployGraphResponseMsg represents graph deployment response
@@ -393,7 +376,7 @@ type DeployGraphResponseMsg struct {
 type GraphExecutionStatusMsg struct {
 	ExecutionID      string
 	GraphID          string
-	RobotID          string
+	AgentID          string
 	State            int32 // GraphExecutionState enum
 	CurrentVertexID  string
 	CurrentStepIndex int32
@@ -414,7 +397,7 @@ type PongResponseMsg struct {
 
 // ConfigUpdateAckMsg represents config update acknowledgement
 type ConfigUpdateAckMsg struct {
-	RobotID       string
+	AgentID       string
 	StateDefID    string
 	Version       int32
 	Success       bool
@@ -422,9 +405,9 @@ type ConfigUpdateAckMsg struct {
 	CorrelationID string
 }
 
-// CapabilityRegistrationMsg represents capability registration from agent
+// CapabilityRegistrationMsg represents capability registration from agent (1:1 model)
 type CapabilityRegistrationMsg struct {
-	RobotID      string
+	AgentID      string
 	Capabilities []ActionCapabilityMsg
 }
 
@@ -448,7 +431,8 @@ type SuccessCriteriaMsg struct {
 	Value    string `json:"value"`
 }
 
-// parseRegisterAgentRequest manually parses protobuf RegisterAgentRequest
+// parseRegisterAgentRequest manually parses protobuf RegisterAgentRequest (1:1 model)
+// Proto fields: agent_id=1, name=2, namespace=3, client_version=4
 func parseRegisterAgentRequest(data []byte) (*RegisterAgentReq, error) {
 	req := &RegisterAgentReq{}
 	sawRegisterFields := false
@@ -482,18 +466,15 @@ func parseRegisterAgentRequest(data []byte) (*RegisterAgentReq, error) {
 			req.Name = v
 			data = data[n:]
 			sawRegisterFields = true
-		case 3: // robots (repeated RobotInfo)
+		case 3: // namespace (string) - ROS namespace
 			if wireType != protowire.BytesType {
-				return nil, fmt.Errorf("invalid robots wire type")
+				return nil, fmt.Errorf("invalid namespace wire type")
 			}
-			robotData, n := protowire.ConsumeBytes(data)
+			v, n := protowire.ConsumeString(data)
 			if n < 0 {
-				return nil, fmt.Errorf("invalid robot")
+				return nil, fmt.Errorf("invalid namespace")
 			}
-			robot, err := parseRobotInfo(robotData)
-			if err == nil {
-				req.Robots = append(req.Robots, *robot)
-			}
+			req.Namespace = v
 			data = data[n:]
 			sawRegisterFields = true
 		case 4: // client_version (string)
@@ -505,16 +486,6 @@ func parseRegisterAgentRequest(data []byte) (*RegisterAgentReq, error) {
 				return nil, fmt.Errorf("invalid client_version")
 			}
 			req.ClientVersion = v
-			data = data[n:]
-			sawRegisterFields = true
-		case 5: // robot_capabilities (repeated RobotCapabilities)
-			if wireType != protowire.BytesType {
-				return nil, fmt.Errorf("invalid robot_capabilities wire type")
-			}
-			_, n := protowire.ConsumeBytes(data)
-			if n < 0 {
-				return nil, fmt.Errorf("invalid robot_capabilities")
-			}
 			data = data[n:]
 			sawRegisterFields = true
 		default:
@@ -535,57 +506,6 @@ func parseRegisterAgentRequest(data []byte) (*RegisterAgentReq, error) {
 	}
 
 	return req, nil
-}
-
-// parseRobotInfo parses a single RobotInfo message
-func parseRobotInfo(data []byte) (*RobotInfoMsg, error) {
-	robot := &RobotInfoMsg{}
-
-	for len(data) > 0 {
-		fieldNum, wireType, n := protowire.ConsumeTag(data)
-		if n < 0 {
-			return nil, fmt.Errorf("invalid tag")
-		}
-		data = data[n:]
-
-		switch fieldNum {
-		case 1: // robot_id
-			if wireType == protowire.BytesType {
-				v, n := protowire.ConsumeString(data)
-				if n < 0 {
-					return nil, fmt.Errorf("invalid robot_id")
-				}
-				robot.RobotID = v
-				data = data[n:]
-			}
-		case 3: // ros_namespace
-			if wireType == protowire.BytesType {
-				v, n := protowire.ConsumeString(data)
-				if n < 0 {
-					return nil, fmt.Errorf("invalid ros_namespace")
-				}
-				robot.ROSNamespace = v
-				data = data[n:]
-			}
-		case 4: // name
-			if wireType == protowire.BytesType {
-				v, n := protowire.ConsumeString(data)
-				if n < 0 {
-					return nil, fmt.Errorf("invalid name")
-				}
-				robot.Name = v
-				data = data[n:]
-			}
-		default:
-			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
-			if n < 0 {
-				return nil, fmt.Errorf("invalid field")
-			}
-			data = data[n:]
-		}
-	}
-
-	return robot, nil
 }
 
 // parseAgentMessage parses an AgentMessage protobuf with all payload types
@@ -740,7 +660,7 @@ func parseAgentMessage(data []byte) (*AgentMsg, error) {
 }
 
 // parseCapabilityRegistration parses CapabilityRegistration protobuf
-// robot_id=1, capabilities=2 (repeated ActionCapability)
+// agent_id=1, capabilities=2 (repeated ActionCapability)
 func parseCapabilityRegistration(data []byte) (*CapabilityRegistrationMsg, error) {
 	reg := &CapabilityRegistrationMsg{}
 	log.Printf("[DEBUG] parseCapabilityRegistration: data length=%d, hex=%x", len(data), data[:min(len(data), 64)])
@@ -758,20 +678,20 @@ func parseCapabilityRegistration(data []byte) (*CapabilityRegistrationMsg, error
 			fieldCount, fieldNum, wireType, len(data))
 
 		switch fieldNum {
-		case 1: // robot_id
+		case 1: // agent_id
 			if wireType == protowire.BytesType {
 				v, n := protowire.ConsumeString(data)
 				if n < 0 {
-					return nil, fmt.Errorf("invalid robot_id")
+					return nil, fmt.Errorf("invalid agent_id")
 				}
-				reg.RobotID = v
+				reg.AgentID = v
 				data = data[n:]
-				log.Printf("[DEBUG] Parsed robot_id: %s", v)
+				log.Printf("[DEBUG] Parsed agent_id: %s", v)
 			} else {
 				// Skip unexpected wireType
 				n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
 				if n < 0 {
-					return nil, fmt.Errorf("invalid field value for robot_id")
+					return nil, fmt.Errorf("invalid field value for agent_id")
 				}
 				data = data[n:]
 			}
@@ -810,8 +730,8 @@ func parseCapabilityRegistration(data []byte) (*CapabilityRegistrationMsg, error
 		}
 	}
 
-	log.Printf("[DEBUG] parseCapabilityRegistration complete: robot_id=%s, capabilities=%d",
-		reg.RobotID, len(reg.Capabilities))
+	log.Printf("[DEBUG] parseCapabilityRegistration complete: agent_id=%s, capabilities=%d",
+		reg.AgentID, len(reg.Capabilities))
 	return reg, nil
 }
 
@@ -1084,7 +1004,7 @@ func (h *RawQUICHandler) handleStream(agentConn *agentConnection, stream quic.St
 
 			if agentMsg.ConfigAck != nil {
 				log.Printf("[RawQUIC] Received ConfigUpdateAck: robot=%s, success=%v",
-					agentMsg.ConfigAck.RobotID, agentMsg.ConfigAck.Success)
+					agentMsg.ConfigAck.AgentID, agentMsg.ConfigAck.Success)
 				h.handleConfigUpdateAck(agentMsg.ConfigAck)
 				handled = true
 			}
@@ -1126,24 +1046,16 @@ func (h *RawQUICHandler) handleRegisterAgent(
 	h.connections[req.AgentID] = agentConn
 	h.connMu.Unlock()
 
-	// Register in state manager
-	robotIDs := make([]string, len(req.Robots))
-	for i, r := range req.Robots {
-		robotIDs[i] = r.RobotID
+	// Register robot in state manager (agent_id = robot_id in 1:1 model)
+	h.stateManager.RegisterRobot(
+		req.AgentID,
+		req.Name,
+		req.AgentID,
+		"idle",
+	)
 
-		// Register robot in state manager
-		h.stateManager.RegisterRobot(
-			r.RobotID,
-			r.Name,
-			req.AgentID,
-			"idle",
-		)
-	}
-
-	// Store robot IDs in connection for robot->agent lookup
-	agentConn.robotIDs = robotIDs
-
-	h.stateManager.RegisterAgent(req.AgentID, req.Name, "", robotIDs)
+	// In 1:1 model, agent_id = robot_id, so no separate robotIDs needed
+	h.stateManager.RegisterAgent(req.AgentID, req.Name, req.Namespace)
 
 	// Update database - Agent
 	agent, _ := h.repo.GetAgent(req.AgentID)
@@ -1152,6 +1064,7 @@ func (h *RawQUICHandler) handleRegisterAgent(
 		agent = &db.Agent{
 			ID:        req.AgentID,
 			Name:      req.Name,
+			Namespace: req.Namespace,
 			Status:    "online",
 			CreatedAt: time.Now(),
 			LastSeen:  sql.NullTime{Time: time.Now(), Valid: true},
@@ -1162,30 +1075,15 @@ func (h *RawQUICHandler) handleRegisterAgent(
 		h.repo.UpdateAgentStatus(req.AgentID, "online", agentConn.quicConn.RemoteAddr().String())
 	}
 
-	// Update database - Robots
-	for _, r := range req.Robots {
-		robot := &db.Robot{
-			ID:        r.RobotID,
-			Name:      r.Name,
-			Namespace: r.ROSNamespace,
-			AgentID:   sql.NullString{String: req.AgentID, Valid: true},
-		}
-		if err := h.repo.CreateOrUpdateRobot(robot); err != nil {
-			log.Printf("[RawQUIC] Failed to create/update robot %s: %v", r.RobotID, err)
-		} else {
-			log.Printf("[RawQUIC] Created/updated robot: %s (namespace: %s)", r.RobotID, r.ROSNamespace)
-		}
-	}
-
 	// Broadcast to frontend via WebSocket
 	if h.wsHub != nil {
-		h.wsHub.BroadcastAgentUpdate(req.AgentID, "online", robotIDs)
+		h.wsHub.BroadcastAgentUpdate(req.AgentID, "online")
 	}
 
 	// Send response (length-prefixed protobuf RegisterAgentResponse)
 	h.sendRegisterResponse(stream, true, "")
 
-	log.Printf("[RawQUIC] Agent %s registered with %d robots", req.AgentID, len(req.Robots))
+	log.Printf("[RawQUIC] Agent %s registered (1:1 model)", req.AgentID)
 }
 
 // sendRegisterResponse sends a RegisterAgentResponse protobuf
@@ -1256,7 +1154,7 @@ func (h *RawQUICHandler) handleDisconnect(agentConn *agentConnection) {
 
 	// Broadcast to frontend
 	if h.wsHub != nil {
-		h.wsHub.BroadcastAgentUpdate(agentConn.agentID, "offline", nil)
+		h.wsHub.BroadcastAgentUpdate(agentConn.agentID, "offline")
 	}
 }
 
@@ -1313,7 +1211,7 @@ type DeployResult struct {
 type ConfigUpdateResult struct {
 	Success       bool
 	Error         string
-	RobotID       string
+	AgentID       string
 	StateDefID    string
 	Version       int32
 	CorrelationID string
@@ -1363,7 +1261,8 @@ func (h *RawQUICHandler) DeployCanonicalGraph(ctx context.Context, agentID strin
 }
 
 // SendConfigUpdate sends a state definition update to an agent via QUIC.
-func (h *RawQUICHandler) SendConfigUpdate(ctx context.Context, agentID, robotID, stateDefID string, version int32, stateDefJSON []byte) (*ConfigUpdateResult, error) {
+// In 1:1 model, targetAgentID is the same as agentID (kept for API compatibility).
+func (h *RawQUICHandler) SendConfigUpdate(ctx context.Context, agentID, targetAgentID, stateDefID string, version int32, stateDefJSON []byte) (*ConfigUpdateResult, error) {
 	h.connMu.RLock()
 	conn, exists := h.connections[agentID]
 	h.connMu.RUnlock()
@@ -1373,7 +1272,7 @@ func (h *RawQUICHandler) SendConfigUpdate(ctx context.Context, agentID, robotID,
 	}
 
 	correlationID := fmt.Sprintf("config-%s-%d", agentID, time.Now().UnixNano())
-	msgData := h.buildConfigUpdateMessage(correlationID, robotID, stateDefID, version, stateDefJSON)
+	msgData := h.buildConfigUpdateMessage(correlationID, targetAgentID, stateDefID, version, stateDefJSON)
 
 	respCh := make(chan *ConfigUpdateResult, 1)
 	h.configMu.Lock()
@@ -1407,7 +1306,8 @@ func (h *RawQUICHandler) SendConfigUpdate(ctx context.Context, agentID, robotID,
 }
 
 // SendExecuteGraph sends an ExecuteGraphRequest to an agent via QUIC.
-func (h *RawQUICHandler) SendExecuteGraph(ctx context.Context, agentID, executionID, graphID, robotID string, params map[string]interface{}) error {
+// In 1:1 model, targetAgentID is the same as agentID (kept for API compatibility).
+func (h *RawQUICHandler) SendExecuteGraph(ctx context.Context, agentID, executionID, graphID, targetAgentID string, params map[string]interface{}) error {
 	h.connMu.RLock()
 	conn, exists := h.connections[agentID]
 	h.connMu.RUnlock()
@@ -1422,7 +1322,7 @@ func (h *RawQUICHandler) SendExecuteGraph(ctx context.Context, agentID, executio
 	}
 
 	correlationID := fmt.Sprintf("exec-%s-%d", agentID, time.Now().UnixNano())
-	msgData := h.buildExecuteGraphMessage(correlationID, executionID, graphID, robotID, paramsJSON)
+	msgData := h.buildExecuteGraphMessage(correlationID, executionID, graphID, targetAgentID, paramsJSON)
 	return h.sendToAgent(conn, msgData)
 }
 
@@ -1457,12 +1357,12 @@ func (h *RawQUICHandler) buildDeployGraphMessage(correlationID string, graphJSON
 }
 
 // buildConfigUpdateMessage builds a ServerMessage with ConfigUpdate.
-func (h *RawQUICHandler) buildConfigUpdateMessage(correlationID, robotID, stateDefID string, version int32, stateDefJSON []byte) []byte {
+func (h *RawQUICHandler) buildConfigUpdateMessage(correlationID, agentID, stateDefID string, version int32, stateDefJSON []byte) []byte {
 	var update []byte
 
-	// Field 1: robot_id
+	// Field 1: agent_id
 	update = protowire.AppendTag(update, 1, protowire.BytesType)
-	update = protowire.AppendString(update, robotID)
+	update = protowire.AppendString(update, agentID)
 
 	// Field 2: state_def_id
 	if stateDefID != "" {
@@ -1490,7 +1390,7 @@ func (h *RawQUICHandler) buildConfigUpdateMessage(correlationID, robotID, stateD
 }
 
 // buildExecuteGraphMessage builds a ServerMessage with ExecuteGraphRequest.
-func (h *RawQUICHandler) buildExecuteGraphMessage(correlationID, executionID, graphID, robotID string, params []byte) []byte {
+func (h *RawQUICHandler) buildExecuteGraphMessage(correlationID, executionID, graphID, agentID string, params []byte) []byte {
 	var execReq []byte
 
 	// Field 1: correlation_id
@@ -1505,9 +1405,9 @@ func (h *RawQUICHandler) buildExecuteGraphMessage(correlationID, executionID, gr
 	execReq = protowire.AppendTag(execReq, 3, protowire.BytesType)
 	execReq = protowire.AppendString(execReq, graphID)
 
-	// Field 4: robot_id
+	// Field 4: agent_id
 	execReq = protowire.AppendTag(execReq, 4, protowire.BytesType)
-	execReq = protowire.AppendString(execReq, robotID)
+	execReq = protowire.AppendString(execReq, agentID)
 
 	// Field 5: params
 	if len(params) > 0 {
@@ -1723,12 +1623,10 @@ func statusFromAvailability(available bool) string {
 // Message Parsers for All AgentMessage Payload Types
 // ============================================================
 
-// parseAgentHeartbeat parses AgentHeartbeat protobuf
-// AgentHeartbeat: agent_id=1, timestamp_ms=2, state=3, robots=4 (map), network_latency_ms=5, network_latency_us=6
+// parseAgentHeartbeat parses AgentHeartbeat protobuf (1:1 model)
+// AgentHeartbeat: agent_id=1, state=2, is_executing=3, current_action=4
 func parseAgentHeartbeat(data []byte) (*AgentHeartbeatMsg, error) {
-	hb := &AgentHeartbeatMsg{
-		Robots: make(map[string]*RobotHeartbeatMsg),
-	}
+	hb := &AgentHeartbeatMsg{}
 
 	for len(data) > 0 {
 		fieldNum, wireType, n := protowire.ConsumeTag(data)
@@ -1747,17 +1645,16 @@ func parseAgentHeartbeat(data []byte) (*AgentHeartbeatMsg, error) {
 				hb.AgentID = v
 				data = data[n:]
 			}
-		case 2: // timestamp_ms
-			if wireType == protowire.VarintType {
-				v, n := protowire.ConsumeVarint(data)
+		case 2: // state (string)
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
 				if n < 0 {
-					return nil, fmt.Errorf("invalid timestamp_ms")
+					return nil, fmt.Errorf("invalid state")
 				}
-				hb.TimestampMs = int64(v)
+				// Convert state string to int if needed, or store as int directly
+				_ = v // State is stored as int32 in the struct
 				data = data[n:]
-			}
-		case 3: // state (AgentState enum)
-			if wireType == protowire.VarintType {
+			} else if wireType == protowire.VarintType {
 				v, n := protowire.ConsumeVarint(data)
 				if n < 0 {
 					return nil, fmt.Errorf("invalid state")
@@ -1765,19 +1662,25 @@ func parseAgentHeartbeat(data []byte) (*AgentHeartbeatMsg, error) {
 				hb.State = int32(v)
 				data = data[n:]
 			}
-		case 4: // robots (map<string, RobotHeartbeat>)
-			if wireType == protowire.BytesType {
-				mapData, n := protowire.ConsumeBytes(data)
+		case 3: // is_executing (bool)
+			if wireType == protowire.VarintType {
+				v, n := protowire.ConsumeVarint(data)
 				if n < 0 {
-					return nil, fmt.Errorf("invalid robots map entry")
+					return nil, fmt.Errorf("invalid is_executing")
 				}
-				key, robot, err := parseMapEntry(mapData)
-				if err == nil && key != "" {
-					hb.Robots[key] = robot
-				}
+				hb.IsExecuting = v != 0
 				data = data[n:]
 			}
-		case 5: // network_latency_ms
+		case 4: // current_action (string)
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid current_action")
+				}
+				hb.CurrentAction = v
+				data = data[n:]
+			}
+		case 5: // network_latency_ms (reserved in proto, but may be used)
 			if wireType == protowire.VarintType {
 				v, n := protowire.ConsumeVarint(data)
 				if n < 0 {
@@ -1787,7 +1690,7 @@ func parseAgentHeartbeat(data []byte) (*AgentHeartbeatMsg, error) {
 				hb.HasNetworkLatency = true
 				data = data[n:]
 			}
-		case 6: // network_latency_us
+		case 6: // network_latency_us (reserved in proto, but may be used)
 			if wireType == protowire.VarintType {
 				v, n := protowire.ConsumeVarint(data)
 				if n < 0 {
@@ -1809,165 +1712,6 @@ func parseAgentHeartbeat(data []byte) (*AgentHeartbeatMsg, error) {
 	return hb, nil
 }
 
-// parseMapEntry parses a map entry (key=1, value=2) for robots map
-func parseMapEntry(data []byte) (string, *RobotHeartbeatMsg, error) {
-	var key string
-	var robot *RobotHeartbeatMsg
-
-	for len(data) > 0 {
-		fieldNum, wireType, n := protowire.ConsumeTag(data)
-		if n < 0 {
-			return "", nil, fmt.Errorf("invalid tag")
-		}
-		data = data[n:]
-
-		switch fieldNum {
-		case 1: // key (string)
-			if wireType == protowire.BytesType {
-				v, n := protowire.ConsumeString(data)
-				if n < 0 {
-					return "", nil, fmt.Errorf("invalid key")
-				}
-				key = v
-				data = data[n:]
-			}
-		case 2: // value (RobotHeartbeat)
-			if wireType == protowire.BytesType {
-				valueData, n := protowire.ConsumeBytes(data)
-				if n < 0 {
-					return "", nil, fmt.Errorf("invalid value")
-				}
-				r, err := parseRobotHeartbeat(valueData)
-				if err == nil {
-					robot = r
-				}
-				data = data[n:]
-			}
-		default:
-			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
-			if n < 0 {
-				return "", nil, fmt.Errorf("invalid field")
-			}
-			data = data[n:]
-		}
-	}
-
-	return key, robot, nil
-}
-
-// parseRobotHeartbeat parses RobotHeartbeat protobuf
-func parseRobotHeartbeat(data []byte) (*RobotHeartbeatMsg, error) {
-	r := &RobotHeartbeatMsg{}
-
-	for len(data) > 0 {
-		fieldNum, wireType, n := protowire.ConsumeTag(data)
-		if n < 0 {
-			return nil, fmt.Errorf("invalid tag")
-		}
-		data = data[n:]
-
-		switch fieldNum {
-		case 1: // robot_id
-			if wireType == protowire.BytesType {
-				v, n := protowire.ConsumeString(data)
-				if n < 0 {
-					return nil, fmt.Errorf("invalid robot_id")
-				}
-				r.RobotID = v
-				data = data[n:]
-			}
-		case 2: // state (RobotState enum)
-			if wireType == protowire.VarintType {
-				v, n := protowire.ConsumeVarint(data)
-				if n < 0 {
-					return nil, fmt.Errorf("invalid state")
-				}
-				r.State = int32(v)
-				data = data[n:]
-			}
-		case 3: // is_executing
-			if wireType == protowire.VarintType {
-				v, n := protowire.ConsumeVarint(data)
-				if n < 0 {
-					return nil, fmt.Errorf("invalid is_executing")
-				}
-				r.IsExecuting = v != 0
-				data = data[n:]
-			}
-		case 4: // current_action
-			if wireType == protowire.BytesType {
-				v, n := protowire.ConsumeString(data)
-				if n < 0 {
-					return nil, fmt.Errorf("invalid current_action")
-				}
-				r.CurrentAction = v
-				data = data[n:]
-			}
-		case 7: // current_task_id
-			if wireType == protowire.BytesType {
-				v, n := protowire.ConsumeString(data)
-				if n < 0 {
-					return nil, fmt.Errorf("invalid current_task_id")
-				}
-				r.CurrentTaskID = v
-				data = data[n:]
-			}
-		case 8: // current_step_id
-			if wireType == protowire.BytesType {
-				v, n := protowire.ConsumeString(data)
-				if n < 0 {
-					return nil, fmt.Errorf("invalid current_step_id")
-				}
-				r.CurrentStepID = v
-				data = data[n:]
-			}
-		case 9: // action_progress
-			if wireType == protowire.Fixed32Type {
-				v, n := protowire.ConsumeFixed32(data)
-				if n < 0 {
-					return nil, fmt.Errorf("invalid action_progress")
-				}
-				r.ActionProgress = float32FromBits(v)
-				data = data[n:]
-			}
-		case 10: // state_name
-			if wireType == protowire.BytesType {
-				v, n := protowire.ConsumeString(data)
-				if n < 0 {
-					return nil, fmt.Errorf("invalid state_name")
-				}
-				r.StateName = v
-				data = data[n:]
-			}
-		case 11: // state_def_id
-			if wireType == protowire.BytesType {
-				v, n := protowire.ConsumeString(data)
-				if n < 0 {
-					return nil, fmt.Errorf("invalid state_def_id")
-				}
-				r.StateDefID = v
-				data = data[n:]
-			}
-		case 12: // state_def_version
-			if wireType == protowire.VarintType {
-				v, n := protowire.ConsumeVarint(data)
-				if n < 0 {
-					return nil, fmt.Errorf("invalid state_def_version")
-				}
-				r.StateDefVer = int32(v)
-				data = data[n:]
-			}
-		default:
-			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
-			if n < 0 {
-				return nil, fmt.Errorf("invalid field")
-			}
-			data = data[n:]
-		}
-	}
-
-	return r, nil
-}
 
 // parseActionResult parses ActionResult protobuf
 func parseActionResult(data []byte) (*ActionResultMsg, error) {
@@ -1990,13 +1734,13 @@ func parseActionResult(data []byte) (*ActionResultMsg, error) {
 				r.CommandID = v
 				data = data[n:]
 			}
-		case 2: // robot_id
+		case 2: // agent_id
 			if wireType == protowire.BytesType {
 				v, n := protowire.ConsumeString(data)
 				if n < 0 {
-					return nil, fmt.Errorf("invalid robot_id")
+					return nil, fmt.Errorf("invalid agent_id")
 				}
-				r.RobotID = v
+				r.AgentID = v
 				data = data[n:]
 			}
 		case 3: // task_id
@@ -2095,13 +1839,13 @@ func parseActionFeedback(data []byte) (*ActionFeedbackMsg, error) {
 				fb.CommandID = v
 				data = data[n:]
 			}
-		case 2: // robot_id
+		case 2: // agent_id
 			if wireType == protowire.BytesType {
 				v, n := protowire.ConsumeString(data)
 				if n < 0 {
-					return nil, fmt.Errorf("invalid robot_id")
+					return nil, fmt.Errorf("invalid agent_id")
 				}
-				fb.RobotID = v
+				fb.AgentID = v
 				data = data[n:]
 			}
 		case 3: // task_id
@@ -2163,9 +1907,7 @@ func parseActionFeedback(data []byte) (*ActionFeedbackMsg, error) {
 
 // parseAgentStatusUpdate parses AgentStatusUpdate protobuf
 func parseAgentStatusUpdate(data []byte) (*AgentStatusUpdateMsg, error) {
-	s := &AgentStatusUpdateMsg{
-		OnlineRobots: make([]string, 0),
-	}
+	s := &AgentStatusUpdateMsg{}
 
 	for len(data) > 0 {
 		fieldNum, wireType, n := protowire.ConsumeTag(data)
@@ -2184,13 +1926,13 @@ func parseAgentStatusUpdate(data []byte) (*AgentStatusUpdateMsg, error) {
 				s.State = int32(v)
 				data = data[n:]
 			}
-		case 2: // online_robots (repeated)
-			if wireType == protowire.BytesType {
-				v, n := protowire.ConsumeString(data)
+		case 2: // is_online
+			if wireType == protowire.VarintType {
+				v, n := protowire.ConsumeVarint(data)
 				if n < 0 {
-					return nil, fmt.Errorf("invalid online_robots")
+					return nil, fmt.Errorf("invalid is_online")
 				}
-				s.OnlineRobots = append(s.OnlineRobots, v)
+				s.IsOnline = v != 0
 				data = data[n:]
 			}
 		case 3: // message
@@ -2322,13 +2064,13 @@ func parseGraphExecutionStatus(data []byte) (*GraphExecutionStatusMsg, error) {
 				s.GraphID = v
 				data = data[n:]
 			}
-		case 3: // robot_id
+		case 3: // agent_id
 			if wireType == protowire.BytesType {
 				v, n := protowire.ConsumeString(data)
 				if n < 0 {
-					return nil, fmt.Errorf("invalid robot_id")
+					return nil, fmt.Errorf("invalid agent_id")
 				}
-				s.RobotID = v
+				s.AgentID = v
 				data = data[n:]
 			}
 		case 4: // state
@@ -2487,13 +2229,13 @@ func parseConfigUpdateAck(data []byte) (*ConfigUpdateAckMsg, error) {
 		data = data[n:]
 
 		switch fieldNum {
-		case 1: // robot_id
+		case 1: // agent_id
 			if wireType == protowire.BytesType {
 				v, n := protowire.ConsumeString(data)
 				if n < 0 {
-					return nil, fmt.Errorf("invalid robot_id")
+					return nil, fmt.Errorf("invalid agent_id")
 				}
-				a.RobotID = v
+				a.AgentID = v
 				data = data[n:]
 			}
 		case 2: // state_def_id
@@ -2589,23 +2331,18 @@ func (h *RawQUICHandler) handleHeartbeat(agentConn *agentConnection, hb *AgentHe
 		agentConn.useHeartbeatRtt.Store(true)
 	}
 
-	// Update robot states
-	for robotID, robotHB := range hb.Robots {
-		// Convert state enum to string
-		stateName := robotStateToString(robotHB.State)
-		if robotHB.StateName != "" {
-			stateName = robotHB.StateName
-		}
+	// Update agent state (1:1 model: agent_id = robot_id)
+	// Convert state enum to string
+	stateName := robotStateToString(hb.State)
 
-		// Update robot state
-		if err := h.stateManager.UpdateRobotState(robotID, stateName); err != nil {
-			log.Printf("[RawQUIC] Failed to update robot state for %s: %v", robotID, err)
-		}
+	// Update state (in 1:1 model, agent_id is used as robot_id)
+	if err := h.stateManager.UpdateRobotState(agentConn.agentID, stateName); err != nil {
+		log.Printf("[RawQUIC] Failed to update agent state for %s: %v", agentConn.agentID, err)
+	}
 
-		// Update execution state
-		if err := h.stateManager.UpdateRobotExecution(robotID, robotHB.IsExecuting, robotHB.CurrentTaskID, robotHB.CurrentStepID); err != nil {
-			log.Printf("[RawQUIC] Failed to update robot execution for %s: %v", robotID, err)
-		}
+	// Update execution state
+	if err := h.stateManager.UpdateRobotExecution(agentConn.agentID, hb.IsExecuting, hb.CurrentTaskID, hb.CurrentStepID); err != nil {
+		log.Printf("[RawQUIC] Failed to update agent execution for %s: %v", agentConn.agentID, err)
 	}
 
 	// Update last seen
@@ -2614,13 +2351,13 @@ func (h *RawQUICHandler) handleHeartbeat(agentConn *agentConnection, hb *AgentHe
 
 // handleActionResult processes action result and notifies pending commands
 func (h *RawQUICHandler) handleActionResult(agentConn *agentConnection, resultMsg *ActionResultMsg) {
-	log.Printf("[RawQUIC] Action result: command=%s robot=%s status=%d",
-		resultMsg.CommandID, resultMsg.RobotID, resultMsg.Status)
+	log.Printf("[RawQUIC] Action result: command=%s agent=%s status=%d",
+		resultMsg.CommandID, resultMsg.AgentID, resultMsg.Status)
 
 	// Convert ActionResultMsg to ActionResult (from handlers.go)
 	result := &ActionResult{
 		CommandID:     resultMsg.CommandID,
-		RobotID:       resultMsg.RobotID,
+		AgentID:       resultMsg.AgentID,
 		TaskID:        resultMsg.TaskID,
 		StepID:        resultMsg.StepID,
 		Status:        ActionStatus(resultMsg.Status),
@@ -2669,7 +2406,7 @@ func (h *RawQUICHandler) handleActionResult(agentConn *agentConnection, resultMs
 	// Update execution state in state manager
 	isTerminal := result.Status == ActionStatusSucceeded || result.Status == ActionStatusFailed || result.Status == ActionStatusCancelled
 	if isTerminal {
-		h.stateManager.CompleteExecution(result.RobotID, nil)
+		h.stateManager.CompleteExecution(result.AgentID, nil)
 	}
 }
 
@@ -2685,19 +2422,17 @@ func (h *RawQUICHandler) handleActionFeedback(agentConn *agentConnection, fb *Ac
 	}
 
 	// Update progress in state if needed
-	// h.stateManager.UpdateActionProgress(fb.RobotID, fb.Progress)
+	// h.stateManager.UpdateActionProgress(fb.AgentID, fb.Progress)
 }
 
 // handleStatusUpdate processes agent status update
 func (h *RawQUICHandler) handleStatusUpdate(agentConn *agentConnection, status *AgentStatusUpdateMsg) {
-	log.Printf("[RawQUIC] Agent status update: %s - state=%d, msg=%s",
-		agentConn.agentID, status.State, status.Message)
+	log.Printf("[RawQUIC] Agent status update: %s - state=%d, online=%v, msg=%s",
+		agentConn.agentID, status.State, status.IsOnline, status.Message)
 
-	// Update online robots
-	for _, robotID := range status.OnlineRobots {
-		if err := h.stateManager.SetRobotOnline(robotID, true); err != nil {
-			log.Printf("[RawQUIC] Failed to set robot online: %v", err)
-		}
+	// Update agent online status (1:1 model: agent_id = robot_id)
+	if err := h.stateManager.SetRobotOnline(agentConn.agentID, status.IsOnline); err != nil {
+		log.Printf("[RawQUIC] Failed to set agent online status: %v", err)
 	}
 }
 
@@ -2734,22 +2469,22 @@ func (h *RawQUICHandler) handleGraphStatus(agentConn *agentConnection, status *G
 		log.Printf("[RawQUIC] Failed to update task status: %v", err)
 	}
 
-	if status.RobotID != "" {
+	if status.AgentID != "" {
 		isExecuting := taskStatus == "running" || taskStatus == "paused"
-		if err := h.stateManager.UpdateRobotExecution(status.RobotID, isExecuting, taskID, stepID); err != nil {
-			log.Printf("[RawQUIC] Failed to update robot execution: %v", err)
+		if err := h.stateManager.UpdateRobotExecution(status.AgentID, isExecuting, taskID, stepID); err != nil {
+			log.Printf("[RawQUIC] Failed to update agent execution: %v", err)
 		}
 	}
 
 	if taskStatus == "completed" || taskStatus == "failed" || taskStatus == "cancelled" {
 		h.clearGraphStateOverrides(taskID)
-	} else if status.GraphID != "" && stepID != "" && status.RobotID != "" {
-		h.updateGraphStateOverrides(taskID, status.GraphID, status.RobotID, stepID)
+	} else if status.GraphID != "" && stepID != "" && status.AgentID != "" {
+		h.updateGraphStateOverrides(taskID, status.GraphID, status.AgentID, stepID)
 	}
 
 	if taskStatus == "completed" || taskStatus == "failed" || taskStatus == "cancelled" {
-		if status.RobotID != "" {
-			h.stateManager.CompleteExecution(status.RobotID, nil)
+		if status.AgentID != "" {
+			h.stateManager.CompleteExecution(status.AgentID, nil)
 		}
 		task, err := h.repo.GetTask(taskID)
 		if err != nil {
@@ -2773,7 +2508,7 @@ func (h *RawQUICHandler) handleGraphStatus(agentConn *agentConnection, status *G
 	}
 }
 
-func (h *RawQUICHandler) updateGraphStateOverrides(executionID, graphID, robotID, stepID string) {
+func (h *RawQUICHandler) updateGraphStateOverrides(executionID, graphID, agentID, stepID string) {
 	if executionID == "" || graphID == "" || stepID == "" {
 		return
 	}
@@ -2787,8 +2522,8 @@ func (h *RawQUICHandler) updateGraphStateOverrides(executionID, graphID, robotID
 	h.graphOverrides[executionID] = &graphOverrideState{StepID: stepID}
 	h.graphOverrideMu.Unlock()
 
-	if prev != nil && len(prev.RobotIDs) > 0 {
-		h.clearDuringStateTargets(executionID, prev.RobotIDs)
+	if prev != nil && len(prev.AgentIDs) > 0 {
+		h.clearDuringStateTargets(executionID, prev.AgentIDs)
 	}
 
 	steps, err := h.repo.GetActionGraphSteps(graphID)
@@ -2809,7 +2544,7 @@ func (h *RawQUICHandler) updateGraphStateOverrides(executionID, graphID, robotID
 	}
 
 	applied := h.applyDuringStateTargets(
-		robotID,
+		agentID,
 		executionID,
 		step.DuringStateTargets,
 		step.DuringStates,
@@ -2821,7 +2556,7 @@ func (h *RawQUICHandler) updateGraphStateOverrides(executionID, graphID, robotID
 
 	h.graphOverrideMu.Lock()
 	if current, ok := h.graphOverrides[executionID]; ok && current.StepID == stepID {
-		current.RobotIDs = applied
+		current.AgentIDs = applied
 	}
 	h.graphOverrideMu.Unlock()
 }
@@ -2836,26 +2571,26 @@ func (h *RawQUICHandler) clearGraphStateOverrides(executionID string) {
 	delete(h.graphOverrides, executionID)
 	h.graphOverrideMu.Unlock()
 
-	if state != nil && len(state.RobotIDs) > 0 {
-		h.clearDuringStateTargets(executionID, state.RobotIDs)
+	if state != nil && len(state.AgentIDs) > 0 {
+		h.clearDuringStateTargets(executionID, state.AgentIDs)
 	}
 }
 
 func (h *RawQUICHandler) applyDuringStateTargets(
-	executingRobotID string,
+	executingAgentID string,
 	sourceID string,
 	targets []db.StateTarget,
 	fallbackStates []string,
 ) []string {
-	overrides := h.resolveDuringStateOverrides(executingRobotID, targets, fallbackStates)
+	overrides := h.resolveDuringStateOverrides(executingAgentID, targets, fallbackStates)
 	if len(overrides) == 0 {
 		return nil
 	}
 
 	applied := make([]string, 0, len(overrides))
-	for robotID, state := range overrides {
-		if err := h.stateManager.SetRobotStateOverride(robotID, sourceID, state); err == nil {
-			applied = append(applied, robotID)
+	for agentID, state := range overrides {
+		if err := h.stateManager.SetRobotStateOverride(agentID, sourceID, state); err == nil {
+			applied = append(applied, agentID)
 		}
 	}
 	if len(applied) == 0 {
@@ -2864,9 +2599,9 @@ func (h *RawQUICHandler) applyDuringStateTargets(
 	return applied
 }
 
-func (h *RawQUICHandler) clearDuringStateTargets(sourceID string, robotIDs []string) {
-	for _, robotID := range robotIDs {
-		_ = h.stateManager.ClearRobotStateOverride(robotID, sourceID)
+func (h *RawQUICHandler) clearDuringStateTargets(sourceID string, agentIDs []string) {
+	for _, agentID := range agentIDs {
+		_ = h.stateManager.ClearRobotStateOverride(agentID, sourceID)
 	}
 }
 
@@ -2914,7 +2649,7 @@ func orderStateTargetsForOverrides(targets []db.StateTarget) []db.StateTarget {
 }
 
 func (h *RawQUICHandler) resolveDuringStateOverrides(
-	executingRobotID string,
+	executingAgentID string,
 	targets []db.StateTarget,
 	fallbackStates []string,
 ) map[string]string {
@@ -2933,12 +2668,12 @@ func (h *RawQUICHandler) resolveDuringStateOverrides(
 		if targetType == "" {
 			targetType = "self"
 		}
-		robotIDs := h.stateManager.ResolveTargetRobots(executingRobotID, targetType, target.AgentID)
-		for _, robotID := range robotIDs {
-			if _, exists := overrides[robotID]; exists {
+		agentIDs := h.stateManager.ResolveTargetAgents(executingAgentID, targetType, target.AgentID)
+		for _, agentID := range agentIDs {
+			if _, exists := overrides[agentID]; exists {
 				continue
 			}
-			overrides[robotID] = target.State
+			overrides[agentID] = target.State
 		}
 	}
 
@@ -2985,7 +2720,7 @@ func (h *RawQUICHandler) handleConfigUpdateAck(ack *ConfigUpdateAckMsg) {
 	result := &ConfigUpdateResult{
 		Success:       ack.Success,
 		Error:         ack.Error,
-		RobotID:       ack.RobotID,
+		AgentID:       ack.AgentID,
 		StateDefID:    ack.StateDefID,
 		Version:       ack.Version,
 		CorrelationID: ack.CorrelationID,
@@ -3050,7 +2785,7 @@ func robotStateToString(state int32) string {
 // ExecuteCommandReq represents a command execution request
 type ExecuteCommandReq struct {
 	CommandID       string
-	RobotID         string
+	AgentID         string
 	TaskID          string
 	StepID          string
 	ActionType      string
@@ -3082,7 +2817,8 @@ func (h *RawQUICHandler) SendCommand(agentID string, cmd *ExecuteCommandReq) err
 }
 
 // SendCancelCommand sends a CancelCommand to an agent
-func (h *RawQUICHandler) SendCancelCommand(agentID, commandID, robotID, taskID, reason string) error {
+// In 1:1 model, targetAgentID is the same as agentID (kept for API compatibility).
+func (h *RawQUICHandler) SendCancelCommand(agentID, commandID, targetAgentID, taskID, reason string) error {
 	h.connMu.RLock()
 	conn, exists := h.connections[agentID]
 	h.connMu.RUnlock()
@@ -3091,7 +2827,7 @@ func (h *RawQUICHandler) SendCancelCommand(agentID, commandID, robotID, taskID, 
 		return fmt.Errorf("agent %s not connected", agentID)
 	}
 
-	msgData := h.buildCancelCommandMessage(commandID, robotID, taskID, reason)
+	msgData := h.buildCancelCommandMessage(commandID, targetAgentID, taskID, reason)
 	return h.sendToAgent(conn, msgData)
 }
 
@@ -3115,7 +2851,7 @@ func (h *RawQUICHandler) SendCommandAndWait(ctx context.Context, agentID string,
 	resultChan := make(chan *ActionResult, 1)
 	pending := &PendingCommand{
 		CommandID:  cmd.CommandID,
-		RobotID:    cmd.RobotID,
+		AgentID:    cmd.AgentID,
 		TaskID:     cmd.TaskID,
 		StepID:     cmd.StepID,
 		SentAt:     time.Now(),
@@ -3192,9 +2928,9 @@ func (h *RawQUICHandler) buildExecuteCommandMessage(cmd *ExecuteCommandReq) []by
 	execCmd = protowire.AppendTag(execCmd, 1, protowire.BytesType)
 	execCmd = protowire.AppendString(execCmd, cmd.CommandID)
 
-	// Field 2: robot_id
+	// Field 2: agent_id
 	execCmd = protowire.AppendTag(execCmd, 2, protowire.BytesType)
-	execCmd = protowire.AppendString(execCmd, cmd.RobotID)
+	execCmd = protowire.AppendString(execCmd, cmd.AgentID)
 
 	// Field 3: task_id
 	if cmd.TaskID != "" {
@@ -3252,10 +2988,6 @@ func (h *RawQUICHandler) buildExecuteCommandMessage(cmd *ExecuteCommandReq) []by
 		if cond.TargetType != "" {
 			condMsg = protowire.AppendTag(condMsg, 4, protowire.BytesType)
 			condMsg = protowire.AppendString(condMsg, cond.TargetType)
-		}
-		if cond.RobotID != "" {
-			condMsg = protowire.AppendTag(condMsg, 5, protowire.BytesType)
-			condMsg = protowire.AppendString(condMsg, cond.RobotID)
 		}
 		if cond.AgentID != "" {
 			condMsg = protowire.AppendTag(condMsg, 6, protowire.BytesType)
@@ -3324,14 +3056,16 @@ func (h *RawQUICHandler) buildExecuteCommandMessage(cmd *ExecuteCommandReq) []by
 }
 
 // buildCancelCommandMessage builds a ServerMessage with CancelCommand
-func (h *RawQUICHandler) buildCancelCommandMessage(commandID, robotID, taskID, reason string) []byte {
+func (h *RawQUICHandler) buildCancelCommandMessage(commandID, agentID, taskID, reason string) []byte {
 	var cancelCmd []byte
 
+	// Field 1: command_id
 	cancelCmd = protowire.AppendTag(cancelCmd, 1, protowire.BytesType)
 	cancelCmd = protowire.AppendString(cancelCmd, commandID)
 
+	// Field 2: agent_id
 	cancelCmd = protowire.AppendTag(cancelCmd, 2, protowire.BytesType)
-	cancelCmd = protowire.AppendString(cancelCmd, robotID)
+	cancelCmd = protowire.AppendString(cancelCmd, agentID)
 
 	if taskID != "" {
 		cancelCmd = protowire.AppendTag(cancelCmd, 3, protowire.BytesType)
@@ -3384,16 +3118,14 @@ func float32ToBits(f float32) uint32 {
 }
 
 // GetAgentForRobot finds which agent manages a robot
-func (h *RawQUICHandler) GetAgentForRobot(robotID string) (string, bool) {
+// In 1:1 model, agent_id = robot_id, so this just checks if the agent exists
+func (h *RawQUICHandler) GetAgentForRobot(agentID string) (string, bool) {
 	h.connMu.RLock()
 	defer h.connMu.RUnlock()
 
-	for agentID, conn := range h.connections {
-		for _, rid := range conn.robotIDs {
-			if rid == robotID {
-				return agentID, true
-			}
-		}
+	// In 1:1 model, robot_id = agent_id
+	if _, exists := h.connections[agentID]; exists {
+		return agentID, true
 	}
 	return "", false
 }

@@ -196,8 +196,7 @@ type StartCondition struct {
 
 	Operator   string `json:"operator,omitempty"`    // and, or
 	Quantifier string `json:"quantifier,omitempty"`  // self, all, any, none, specific
-	TargetType string `json:"target_type,omitempty"` // self, robot, agent, all
-	RobotID    string `json:"robot_id,omitempty"`
+	TargetType string `json:"target_type,omitempty"` // self, agent, all
 	AgentID    string `json:"agent_id,omitempty"`
 
 	State         string   `json:"state,omitempty"`

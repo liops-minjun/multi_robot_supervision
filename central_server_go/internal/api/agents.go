@@ -377,7 +377,6 @@ func (s *Server) GetAgentConnectionStatus(w http.ResponseWriter, r *http.Request
 			Name:     agent.Name,
 			Status:   "offline",
 			IsOnline: false,
-			RobotIDs: make([]string, 0),
 		}
 
 		if agent.IPAddress.Valid {
@@ -392,7 +391,6 @@ func (s *Server) GetAgentConnectionStatus(w http.ResponseWriter, r *http.Request
 			status.LastHeartbeat = &live.LastHeartbeat
 			status.HeartbeatAgeMs = int64(live.HeartbeatAge.Milliseconds())
 			status.HeartbeatHealth = live.HeartbeatHealth
-			status.RobotIDs = live.RobotIDs
 			status.IPAddress = live.IPAddress
 			if !live.LastPing.IsZero() {
 				status.LastPing = &live.LastPing
@@ -446,7 +444,6 @@ func (s *Server) GetAgentConnectionStatus(w http.ResponseWriter, r *http.Request
 					v := int64(live.PingLatency / time.Microsecond)
 					return &v
 				}(),
-				RobotIDs: live.RobotIDs,
 			})
 		}
 	}
@@ -469,7 +466,6 @@ func (s *Server) GetSingleAgentConnectionStatus(w http.ResponseWriter, r *http.R
 		ID:       agentID,
 		Status:   "offline",
 		IsOnline: false,
-		RobotIDs: make([]string, 0),
 	}
 
 	if agent != nil {
@@ -489,7 +485,6 @@ func (s *Server) GetSingleAgentConnectionStatus(w http.ResponseWriter, r *http.R
 		status.LastHeartbeat = &live.LastHeartbeat
 		status.HeartbeatAgeMs = int64(live.HeartbeatAge.Milliseconds())
 		status.HeartbeatHealth = live.HeartbeatHealth
-		status.RobotIDs = live.RobotIDs
 		if !live.LastPing.IsZero() {
 			status.LastPing = &live.LastPing
 			pingMs := int64(live.PingLatency.Milliseconds())
@@ -936,8 +931,9 @@ func agentToResponse(agent *db.Agent, sm *state.GlobalStateManager) AgentRespons
 	response := AgentResponse{
 		ID:         agent.ID,
 		Name:       agent.Name,
+		Namespace:  agent.Namespace,
 		Status:     agent.Status,
-		RobotCount: len(agent.Robots),
+		RobotCount: 1, // 1 Agent = 1 Robot in this architecture
 		CreatedAt:  agent.CreatedAt,
 	}
 
@@ -948,9 +944,14 @@ func agentToResponse(agent *db.Agent, sm *state.GlobalStateManager) AgentRespons
 		response.LastSeen = &agent.LastSeen.Time
 	}
 
-	// Get robot IDs
-	for _, robot := range agent.Robots {
-		response.Robots = append(response.Robots, robot.ID)
+	// In 1:1 model, agent ID is also the robot ID
+	response.Robots = []string{agent.ID}
+
+	// Get current state from state manager
+	if robotState, exists := sm.GetRobotState(agent.ID); exists {
+		response.CurrentState = robotState.CurrentState
+	} else {
+		response.CurrentState = agent.CurrentState
 	}
 
 	return response

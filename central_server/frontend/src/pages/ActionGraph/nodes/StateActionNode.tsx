@@ -267,10 +267,10 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
     // Get schema from discovered capabilities
     capabilityApi.getByActionType(data.actionType)
       .then((capData) => {
-        if (capData.robots && capData.robots.length > 0) {
-          // Use schema from first robot with this capability
-          const firstRobot = capData.robots[0]
-          const goalFields = schemaToFields(firstRobot.goal_schema)
+        if (capData.agents && capData.agents.length > 0) {
+          // Use schema from first agent with this capability
+          const firstAgent = capData.agents[0]
+          const goalFields = schemaToFields(firstAgent.goal_schema)
           setGoalFields(goalFields)
           setResultFields([])
 
@@ -352,21 +352,18 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
     updateData('startStates', startStates.map((ss, idx) => {
       if (ss.id !== startStateId) return ss
       const updated = { ...ss, [field]: value }
-      // If changing to 'self', clear agent and legacy robotId
+      // If changing to 'self', clear agent
       if (field === 'quantifier' && value === 'self') {
         updated.agentId = undefined
-        updated.robotId = undefined
       }
-      // If changing to 'every' or 'any', set default agent and clear legacy robotId
+      // If changing to 'every' or 'any', set default agent
       if (field === 'quantifier' && (value === 'every' || value === 'any')) {
-        updated.robotId = undefined
         if (!ss.agentId && availableAgents.length > 0) {
           updated.agentId = availableAgents[0].id
         }
       }
-      // If changing to 'specific', set default agent and clear legacy robotId
+      // If changing to 'specific', set default agent
       if (field === 'quantifier' && value === 'specific') {
-        updated.robotId = undefined
         if (!ss.agentId && availableAgents.length > 0) {
           updated.agentId = availableAgents[0].id
         }

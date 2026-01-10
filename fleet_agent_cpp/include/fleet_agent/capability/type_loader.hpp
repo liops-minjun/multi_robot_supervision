@@ -9,6 +9,7 @@
 #include <string>
 #include <unordered_map>
 
+#include <rosidl_runtime_c/action_type_support_struct.h>
 #include <rosidl_typesupport_introspection_cpp/message_introspection.hpp>
 
 namespace fleet_agent {
@@ -34,10 +35,12 @@ public:
      * Loaded action type information.
      */
     struct ActionTypeInfo {
+        const rosidl_action_type_support_t* action_ts{nullptr};
         const rosidl_message_type_support_t* goal_ts{nullptr};
         const rosidl_message_type_support_t* result_ts{nullptr};
         const rosidl_message_type_support_t* feedback_ts{nullptr};
         void* library_handle{nullptr};
+        void* action_library_handle{nullptr};
         std::string package;
         std::string action_name;
         bool valid{false};
@@ -83,6 +86,7 @@ public:
 private:
     // Library cache: package name -> library handle
     std::unordered_map<std::string, void*> lib_cache_;
+    std::unordered_map<std::string, void*> action_lib_cache_;
 
     // Type info cache: action_type -> ActionTypeInfo
     std::unordered_map<std::string, ActionTypeInfo> type_cache_;
@@ -104,11 +108,13 @@ private:
      *   /opt/ros/<distro>/lib/lib<pkg>__rosidl_typesupport_introspection_cpp.so
      */
     std::string resolve_library_path(const std::string& package);
+    std::string resolve_action_library_path(const std::string& package);
 
     /**
      * Get or load library handle.
      */
     void* get_or_load_library(const std::string& package);
+    void* get_or_load_action_library(const std::string& package);
 
     /**
      * Get type support handle from library.
@@ -123,6 +129,12 @@ private:
         const std::string& package,
         const std::string& action_name,
         const std::string& suffix
+    );
+
+    const rosidl_action_type_support_t* get_action_type_support(
+        void* lib_handle,
+        const std::string& package,
+        const std::string& action_name
     );
 };
 

@@ -169,9 +169,6 @@ const mapStartStatesToConditions = (startStates: StartStateConfig[] = []): Start
         if (state.agentId || state.agentType) {
           condition.target_type = 'agent'
           condition.agent_id = state.agentId || state.agentType
-        } else if (state.robotId) {
-          condition.target_type = 'robot'
-          condition.robot_id = state.robotId
         } else {
           condition.target_type = 'agent'
         }
@@ -209,8 +206,6 @@ const mapStartConditionsToStates = (conditions: StartCondition[] = []): StartSta
       if (quantifier === 'specific') {
         if (cond.agent_id) {
           state.agentId = cond.agent_id
-        } else if (cond.robot_id) {
-          state.robotId = cond.robot_id
         }
       } else if (quantifier === 'every' || quantifier === 'any') {
         state.agentId = cond.agent_id

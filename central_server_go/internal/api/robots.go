@@ -12,23 +12,23 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// ListRobots returns all robots
+// ListRobots returns all agents (legacy robot endpoint, 1 Agent = 1 Robot)
 func (s *Server) ListRobots(w http.ResponseWriter, r *http.Request) {
-	robots, err := s.repo.GetAllRobots()
+	agents, err := s.repo.GetAllAgents()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	responses := make([]RobotResponse, len(robots))
-	for i, robot := range robots {
-		responses[i] = robotToResponse(&robot, s.stateManager)
+	responses := make([]RobotResponse, len(agents))
+	for i, agent := range agents {
+		responses[i] = agentToRobotResponse(&agent, s.stateManager)
 	}
 
 	writeJSON(w, http.StatusOK, responses)
 }
 
-// ConnectRobot registers or reconnects a robot
+// ConnectRobot registers or reconnects an agent (legacy robot endpoint)
 func (s *Server) ConnectRobot(w http.ResponseWriter, r *http.Request) {
 	var req RobotConnectRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -41,72 +41,69 @@ func (s *Server) ConnectRobot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create or update robot in database
-	robot := &db.Robot{
-		ID:           req.ID,
+	// In 1:1 model, use ID as agent ID if AgentID not specified
+	agentID := req.AgentID
+	if agentID == "" {
+		agentID = req.ID
+	}
+
+	// Create or update agent in database (1 Agent = 1 Robot)
+	agent := &db.Agent{
+		ID:           agentID,
 		Name:         req.Name,
 		CurrentState: "idle",
+		Status:       "online",
 		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
 	}
 
-	if req.AgentID != "" {
-		robot.AgentID = sql.NullString{String: req.AgentID, Valid: true}
-
-		// Auto-create agent if not exists
-		agent, _ := s.repo.GetAgent(req.AgentID)
-		if agent == nil {
-			newAgent := &db.Agent{
-				ID:        req.AgentID,
-				Name:      req.AgentID,
-				Status:    "online",
-				CreatedAt: time.Now(),
-			}
-			s.repo.CreateOrUpdateAgent(newAgent)
-		}
-	}
 	if req.IPAddress != "" {
-		robot.IPAddress = sql.NullString{String: req.IPAddress, Valid: true}
+		agent.IPAddress = sql.NullString{String: req.IPAddress, Valid: true}
 	}
 
-	robot.LastSeen = sql.NullTime{Time: time.Now(), Valid: true}
+	agent.LastSeen = sql.NullTime{Time: time.Now(), Valid: true}
 
-	if err := s.repo.CreateOrUpdateRobot(robot); err != nil {
+	if err := s.repo.CreateOrUpdateAgent(agent); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	// Register in state manager
+	// Register in state manager (agent ID is also robot ID in 1:1 model)
 	s.stateManager.RegisterRobot(
-		robot.ID,
-		robot.Name,
-		req.AgentID,
+		agentID,
+		agent.Name,
+		agentID,
 		"idle",
 	)
 
-	response := robotToResponse(robot, s.stateManager)
+	response := agentToRobotResponse(agent, s.stateManager)
 	writeJSON(w, http.StatusOK, response)
 }
 
-// GetRobot returns a single robot
+// GetRobot returns a single agent (legacy robot endpoint)
 func (s *Server) GetRobot(w http.ResponseWriter, r *http.Request) {
-	robotID := chi.URLParam(r, "robotID")
+	// Support both agentID and robotID URL params
+	agentID := chi.URLParam(r, "agentID")
+	if agentID == "" {
+		agentID = chi.URLParam(r, "robotID")
+	}
 
-	robot, err := s.repo.GetRobot(robotID)
+	agent, err := s.repo.GetAgent(agentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if robot == nil {
-		writeError(w, http.StatusNotFound, "Robot not found")
+	if agent == nil {
+		writeError(w, http.StatusNotFound, "Agent not found")
 		return
 	}
 
 	response := RobotDetailResponse{
-		RobotResponse: robotToResponse(robot, s.stateManager),
+		RobotResponse: agentToRobotResponse(agent, s.stateManager),
 	}
 
-	// Add auto-discovered capabilities (capability-based model)
-	capabilities, err := s.repo.GetRobotCapabilities(robotID)
+	// Add auto-discovered capabilities
+	capabilities, err := s.repo.GetAgentCapabilities(agentID)
 	if err == nil && len(capabilities) > 0 {
 		response.Capabilities = make([]CapabilityResponse, len(capabilities))
 		for i, cap := range capabilities {
@@ -141,28 +138,33 @@ func (s *Server) GetRobot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-// DeleteRobot deletes a robot
+// DeleteRobot deletes an agent (legacy robot endpoint)
 func (s *Server) DeleteRobot(w http.ResponseWriter, r *http.Request) {
-	robotID := chi.URLParam(r, "robotID")
+	// Support both agentID and robotID URL params
+	agentID := chi.URLParam(r, "agentID")
+	if agentID == "" {
+		agentID = chi.URLParam(r, "robotID")
+	}
 
-	if err := s.repo.DeleteRobot(robotID); err != nil {
+	if err := s.repo.DeleteAgent(agentID); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	s.stateManager.UnregisterRobot(robotID)
+	s.stateManager.UnregisterRobot(agentID)
 
 	writeJSON(w, http.StatusOK, map[string]string{
-		"message": "Robot deleted",
+		"message": "Agent deleted",
 	})
 }
 
 
-// GetCommands returns pending commands for a robot
+// GetCommands returns pending commands for an agent
+// In 1:1 model, agentID = robotID, URL param kept for backward compatibility
 func (s *Server) GetCommands(w http.ResponseWriter, r *http.Request) {
-	robotID := chi.URLParam(r, "robotID")
+	agentID := chi.URLParam(r, "robotID") // URL param name kept for backward compatibility
 
-	commands, err := s.repo.GetPendingCommands(robotID)
+	commands, err := s.repo.GetPendingCommands(agentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -225,40 +227,38 @@ func (s *Server) ReportCommandResult(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Helper function to convert db.Robot to RobotResponse
-func robotToResponse(robot *db.Robot, sm *state.GlobalStateManager) RobotResponse {
+// Helper function to convert db.Agent to RobotResponse (legacy support, 1 Agent = 1 Robot)
+func agentToRobotResponse(agent *db.Agent, sm *state.GlobalStateManager) RobotResponse {
 	response := RobotResponse{
-		ID:           robot.ID,
-		Name:         robot.Name,
-		Namespace:    robot.Namespace,
-		CurrentState: robot.CurrentState,
-		CreatedAt:    robot.CreatedAt,
+		ID:           agent.ID,
+		Name:         agent.Name,
+		Namespace:    agent.Namespace,
+		CurrentState: agent.CurrentState,
+		AgentID:      agent.ID, // In 1:1 model, agent ID is also robot ID
+		CreatedAt:    agent.CreatedAt,
 	}
 
-	if robot.AgentID.Valid {
-		response.AgentID = robot.AgentID.String
+	if agent.IPAddress.Valid {
+		response.IPAddress = agent.IPAddress.String
 	}
-	if robot.IPAddress.Valid {
-		response.IPAddress = robot.IPAddress.String
+	if agent.LastSeen.Valid {
+		response.LastSeen = &agent.LastSeen.Time
 	}
-	if robot.LastSeen.Valid {
-		response.LastSeen = &robot.LastSeen.Time
-	}
-	if robot.Tags != nil {
-		json.Unmarshal(robot.Tags, &response.Tags)
+	if agent.Tags != nil {
+		json.Unmarshal(agent.Tags, &response.Tags)
 	}
 
 	now := time.Now()
 
 	// Get online status from state manager
-	if robotState, exists := sm.GetRobotState(robot.ID); exists {
+	if robotState, exists := sm.GetRobotState(agent.ID); exists {
 		response.IsOnline = robotState.IsOnline
 		response.CurrentState = robotState.CurrentState
 		if !robotState.LastSeen.IsZero() {
 			response.StalenessSec = now.Sub(robotState.LastSeen).Seconds()
 		}
-	} else if robot.LastSeen.Valid {
-		response.StalenessSec = now.Sub(robot.LastSeen.Time).Seconds()
+	} else if agent.LastSeen.Valid {
+		response.StalenessSec = now.Sub(agent.LastSeen.Time).Seconds()
 	}
 
 	if response.StalenessSec < 0 {

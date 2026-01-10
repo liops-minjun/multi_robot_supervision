@@ -144,12 +144,17 @@ func normalizeStartConditionKeys(cond map[string]interface{}) {
 		delete(cond, "targetType")
 	}
 	if v, ok := cond["robotId"]; ok {
-		cond["robot_id"] = v
+		cond["agent_id"] = v // 1:1 model: robot_id = agent_id
 		delete(cond, "robotId")
 	}
 	if v, ok := cond["agentId"]; ok {
 		cond["agent_id"] = v
 		delete(cond, "agentId")
+	}
+	// Also handle legacy robot_id -> agent_id
+	if v, ok := cond["robot_id"]; ok {
+		cond["agent_id"] = v
+		delete(cond, "robot_id")
 	}
 	if v, ok := cond["agentType"]; ok {
 		cond["agent_id"] = v
@@ -278,7 +283,7 @@ func startConditionsFromStartStates(raw interface{}) []map[string]interface{} {
 		if agentID == "" {
 			agentID = extractString(state, "agentType")
 		}
-		robotID := extractString(state, "robotId")
+		legacyAgentID := extractString(state, "robotId") // Legacy input field
 		stateValue := extractString(state, "state")
 		if stateValue == "" {
 			continue
@@ -301,9 +306,10 @@ func startConditionsFromStartStates(raw interface{}) []map[string]interface{} {
 			if agentID != "" {
 				cond["target_type"] = "agent"
 				cond["agent_id"] = agentID
-			} else if robotID != "" {
-				cond["target_type"] = "robot"
-				cond["robot_id"] = robotID
+			} else if legacyAgentID != "" {
+				// 1:1 model: robot_id = agent_id (legacy input)
+				cond["target_type"] = "agent"
+				cond["agent_id"] = legacyAgentID
 			} else {
 				cond["target_type"] = "agent"
 			}

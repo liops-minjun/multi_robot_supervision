@@ -108,14 +108,14 @@ GraphExecutor::~GraphExecutor() = default;
 
 GraphExecutor::ExecutionContext GraphExecutor::start_execution(
     const std::string& execution_id,
-    const std::string& robot_id,
+    const std::string& agent_id,
     const fleet::v1::ActionGraph& graph,
     const std::unordered_map<std::string, std::string>& params) {
 
     ExecutionContext ctx;
     ctx.execution_id = execution_id;
     ctx.graph_id = graph.metadata().id();
-    ctx.robot_id = robot_id;
+    ctx.agent_id = agent_id;
     ctx.current_vertex_id = graph.entry_point();
     ctx.current_step_index = 0;
     ctx.state = static_cast<int>(fleet::v1::GRAPH_EXECUTION_RUNNING);
@@ -124,7 +124,7 @@ GraphExecutor::ExecutionContext GraphExecutor::start_execution(
     ctx.step_started_at = ctx.started_at;
 
     log.info("Started execution {} of graph {} for robot {}",
-             execution_id, ctx.graph_id, robot_id);
+             execution_id, ctx.graph_id, agent_id);
 
     return ctx;
 }
@@ -222,7 +222,7 @@ std::optional<fleet::v1::Vertex> GraphExecutor::get_next_step(
         }
 
         auto eval_result = precond_evaluator_.evaluate(cfg.expr, {
-            ctx.robot_id,
+            ctx.agent_id,
             state_tracker_mgr_,
             &execution_contexts_,
             &ctx.variables
@@ -336,7 +336,7 @@ std::optional<ActionRequest> GraphExecutor::create_action_request(
 
     ActionRequest request;
     request.command_id = ctx.execution_id + "_step_" + std::to_string(ctx.current_step_index);
-    request.robot_id = ctx.robot_id;
+    request.agent_id = ctx.agent_id;
     request.task_id = ctx.execution_id;
     request.step_id = vertex.id();
     request.action_type = action.action_type();
@@ -439,7 +439,7 @@ executor::PreconditionEvaluator::Result GraphExecutor::check_step_condition(
     if (step.pre_states_size() > 0) {
         std::string current_state;
         if (state_tracker_mgr_) {
-            auto tracker = state_tracker_mgr_->get_tracker(ctx.robot_id);
+            auto tracker = state_tracker_mgr_->get_tracker(ctx.agent_id);
             if (tracker) {
                 current_state = tracker->current_state();
             }
@@ -465,7 +465,7 @@ executor::PreconditionEvaluator::Result GraphExecutor::check_step_condition(
 
     // Build precondition context
     executor::PreconditionEvaluator::Context precond_ctx;
-    precond_ctx.robot_id = ctx.robot_id;
+    precond_ctx.agent_id = ctx.agent_id;
     precond_ctx.state_tracker_mgr = state_tracker_mgr_;
     precond_ctx.execution_contexts = &execution_contexts_;
     precond_ctx.variables = &ctx.variables;
@@ -478,7 +478,7 @@ executor::PreconditionEvaluator::Result GraphExecutor::check_step_condition(
         spec.operator_name = cond.operator_();
         spec.quantifier = cond.quantifier();
         spec.target_type = cond.target_type();
-        spec.robot_id = cond.robot_id();
+        spec.agent_id = cond.agent_id();
         spec.agent_id = cond.agent_id();
         spec.state = cond.state();
         spec.state_operator = cond.state_operator();

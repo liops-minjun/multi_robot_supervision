@@ -641,7 +641,7 @@ func (s *Server) GetAgentsOverview(w http.ResponseWriter, r *http.Request) {
 			AgentID:           agent.ID,
 			AgentName:         agent.Name,
 			Status:            agent.Status,
-			RobotCount:        len(agent.Robots),
+			RobotCount:        1, // 1 Agent = 1 Robot in this architecture
 			ActionTypes:       actionTypes,
 			ActionServers:     actionServers,
 			AssignedTemplates: assignedTemplates,

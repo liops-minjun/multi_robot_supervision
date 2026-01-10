@@ -23,19 +23,19 @@ logging::ComponentLogger log("ActionExecutor");
 
 ActionExecutor::ActionExecutor(
     rclcpp::Node::SharedPtr node,
-    const std::string& robot_id,
+    const std::string& agent_id,
     const std::string& ros_namespace,
     CapabilityStore& capabilities,
     ActionResultCallback result_callback,
     ActionFeedbackCallback feedback_callback)
     : node_(node)
-    , robot_id_(robot_id)
+    , agent_id_(agent_id)
     , ros_namespace_(ros_namespace)
     , capabilities_(capabilities)
     , result_callback_(result_callback)
     , feedback_callback_(feedback_callback) {
 
-    log.info("[{}] Initialized", robot_id_);
+    log.info("[{}] Initialized", agent_id_);
 }
 
 ActionExecutor::~ActionExecutor() {
@@ -71,7 +71,7 @@ std::optional<std::string> ActionExecutor::resolve_server(const std::string& act
         if (!ros_namespace_.empty() &&
             cap.action_server.find(ros_namespace_) == 0) {
             log.debug("[{}] Resolved {} -> {} (namespace match)",
-                     robot_id_, action_type, cap.action_server);
+                     agent_id_, action_type, cap.action_server);
             return cap.action_server;
         }
 
@@ -83,11 +83,11 @@ std::optional<std::string> ActionExecutor::resolve_server(const std::string& act
 
     if (fallback_server) {
         log.debug("[{}] Resolved {} -> {} (fallback)",
-                 robot_id_, action_type, *fallback_server);
+                 agent_id_, action_type, *fallback_server);
         return fallback_server;
     }
 
-    log.warn("[{}] No server found for action type: {}", robot_id_, action_type);
+    log.warn("[{}] No server found for action type: {}", agent_id_, action_type);
     return std::nullopt;
 }
 
@@ -101,21 +101,21 @@ bool ActionExecutor::create_action_client(
 
         // Wait for server
         if (!action_client_->wait_for_server(std::chrono::milliseconds(5000))) {
-            log.error("[{}] Action server {} not available", robot_id_, server_name);
+            log.error("[{}] Action server {} not available", agent_id_, server_name);
             action_client_.reset();
             return false;
         }
 
         return true;
     } catch (const std::exception& e) {
-        log.error("[{}] Failed to create action client: {}", robot_id_, e.what());
+        log.error("[{}] Failed to create action client: {}", agent_id_, e.what());
         return false;
     }
 }
 
 bool ActionExecutor::execute(const ActionRequest& request) {
     if (executing_.load()) {
-        log.warn("[{}] Already executing, rejecting request {}", robot_id_, request.command_id);
+        log.warn("[{}] Already executing, rejecting request {}", agent_id_, request.command_id);
         return false;
     }
 
@@ -126,7 +126,7 @@ bool ActionExecutor::execute(const ActionRequest& request) {
     } else {
         auto resolved = resolve_server(request.action_type);
         if (!resolved) {
-            log.error("[{}] Cannot resolve server for {}", robot_id_, request.action_type);
+            log.error("[{}] Cannot resolve server for {}", agent_id_, request.action_type);
             return false;
         }
         server_name = *resolved;
@@ -154,7 +154,7 @@ bool ActionExecutor::execute(const ActionRequest& request) {
     }
 
     log.info("[{}] Starting action {} on server {}",
-             robot_id_, request.action_type, server_name);
+             agent_id_, request.action_type, server_name);
 
     // Start timeout timer
     if (request.timeout_sec > 0) {
@@ -179,7 +179,7 @@ bool ActionExecutor::execute(const ActionRequest& request) {
     );
 
     if (!goal_handle) {
-        log.error("[{}] Failed to send goal", robot_id_);
+        log.error("[{}] Failed to send goal", agent_id_);
         executing_.store(false);
         return false;
     }
@@ -193,7 +193,7 @@ void ActionExecutor::cancel(const std::string& reason) {
         return;
     }
 
-    log.info("[{}] Cancelling action: {}", robot_id_, reason);
+    log.info("[{}] Cancelling action: {}", agent_id_, reason);
 
     // Cancel timer
     if (timeout_timer_) {
@@ -215,7 +215,7 @@ void ActionExecutor::cancel(const std::string& reason) {
 }
 
 void ActionExecutor::on_goal_accepted() {
-    log.debug("[{}] Goal accepted", robot_id_);
+    log.debug("[{}] Goal accepted", agent_id_);
 }
 
 void ActionExecutor::on_result(bool success, const std::string& result_json) {
@@ -235,12 +235,12 @@ void ActionExecutor::on_result(bool success, const std::string& result_json) {
 void ActionExecutor::on_feedback(const std::string& feedback_json) {
     if (feedback_callback_) {
         float progress = extract_progress(feedback_json);
-        feedback_callback_(robot_id_, progress);
+        feedback_callback_(agent_id_, progress);
     }
 }
 
 void ActionExecutor::on_timeout() {
-    log.warn("[{}] Action timed out", robot_id_);
+    log.warn("[{}] Action timed out", agent_id_);
 
     // Cancel timer (shouldn't fire again)
     if (timeout_timer_) {
@@ -288,7 +288,7 @@ void ActionExecutor::complete_execution(
     {
         std::lock_guard<std::mutex> lock(request_mutex_);
         result.command_id = current_request_.command_id;
-        result.robot_id = robot_id_;
+        result.agent_id = agent_id_;
         result.task_id = current_request_.task_id;
         result.step_id = current_request_.step_id;
     }
@@ -300,7 +300,7 @@ void ActionExecutor::complete_execution(
     result.completed_at_ms = now_ms();
 
     log.info("[{}] Action completed: status={}, error='{}'",
-             robot_id_, status, error);
+             agent_id_, status, error);
 
     // Invoke callback
     if (result_callback_) {

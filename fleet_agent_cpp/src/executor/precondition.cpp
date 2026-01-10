@@ -44,14 +44,14 @@ int parse_state(const std::string& state_str) {
 }
 
 bool is_self_condition(const PreconditionEvaluator::StartConditionSpec& cond,
-                       const std::string& robot_id) {
+                       const std::string& agent_id) {
     if (!cond.quantifier.empty() && to_lower(cond.quantifier) != "self") {
         return false;
     }
     if (!cond.target_type.empty() && to_lower(cond.target_type) != "self") {
         return false;
     }
-    if (!cond.robot_id.empty() && cond.robot_id != robot_id) {
+    if (!cond.agent_id.empty() && cond.agent_id != agent_id) {
         return false;
     }
     if (!cond.agent_id.empty()) {
@@ -62,11 +62,11 @@ bool is_self_condition(const PreconditionEvaluator::StartConditionSpec& cond,
 
 bool evaluate_state_condition(const PreconditionEvaluator::StartConditionSpec& cond,
                               const PreconditionEvaluator::Context& ctx) {
-    if (!ctx.state_tracker_mgr || ctx.robot_id.empty()) {
+    if (!ctx.state_tracker_mgr || ctx.agent_id.empty()) {
         return false;
     }
 
-    auto tracker = ctx.state_tracker_mgr->get_tracker(ctx.robot_id);
+    auto tracker = ctx.state_tracker_mgr->get_tracker(ctx.agent_id);
     if (!tracker) {
         return false;
     }
@@ -109,7 +109,7 @@ PreconditionEvaluator::PreconditionEvaluator() {
     // "self" pattern
     self_pattern_ = std::regex(R"(^\s*self\s*$)", std::regex::icase);
 
-    // Robot pattern: "robot_id.field op value"
+    // Robot pattern: "agent_id.field op value"
     // e.g., "robot_002.state == idle" or "robot_002.is_executing == false"
     robot_pattern_ = std::regex(
         R"(^\s*([a-zA-Z0-9_-]+)\.(state|is_executing|current_action)\s*(==|!=|<|>|<=|>=)\s*(.+)\s*$)",
@@ -214,14 +214,14 @@ PreconditionEvaluator::ParsedCondition PreconditionEvaluator::parse(
 
 PreconditionEvaluator::Result PreconditionEvaluator::check_start_condition(
     const std::string& start_condition,
-    const std::string& robot_id,
+    const std::string& agent_id,
     const Context& ctx) {
 
     if (start_condition.empty()) {
         return Result::SATISFIED;  // No condition = always proceed
     }
 
-    log.debug("Checking condition '{}' for robot {}", start_condition, robot_id);
+    log.debug("Checking condition '{}' for robot {}", start_condition, agent_id);
 
     auto parsed = parse(start_condition);
     return evaluate_parsed(parsed, ctx);
@@ -243,7 +243,7 @@ PreconditionEvaluator::Result PreconditionEvaluator::check_start_conditions(
             op = "and";
         }
 
-        if (!is_self_condition(cond, ctx.robot_id)) {
+        if (!is_self_condition(cond, ctx.agent_id)) {
             return Result::NEED_SERVER;
         }
 
@@ -313,18 +313,18 @@ PreconditionEvaluator::Result PreconditionEvaluator::evaluate_parsed(
 }
 
 bool PreconditionEvaluator::check_robot_state(
-    const std::string& robot_id,
+    const std::string& agent_id,
     const std::string& expected_state,
     const std::string& op,
     const Context& ctx) {
 
     // First check local fleet state cache
-    auto it = ctx.other_robot_states.find(robot_id);
+    auto it = ctx.other_robot_states.find(agent_id);
     if (it == ctx.other_robot_states.end()) {
         // Fall back to local execution context if available
         if (ctx.execution_contexts) {
             ExecutionContextMap::const_accessor acc;
-            if (ctx.execution_contexts->find(acc, robot_id)) {
+            if (ctx.execution_contexts->find(acc, agent_id)) {
                 int actual_state = 0;
                 switch (acc->second.state.load()) {
                     case RobotExecutionState::EXECUTING_ACTION:
@@ -345,7 +345,7 @@ bool PreconditionEvaluator::check_robot_state(
             }
         }
 
-        log.debug("Robot state not found for {}, condition not satisfied", robot_id);
+        log.debug("Robot state not found for {}, condition not satisfied", agent_id);
         return false;
     }
 
@@ -355,7 +355,7 @@ bool PreconditionEvaluator::check_robot_state(
 }
 
 bool PreconditionEvaluator::check_robot_field(
-    const std::string& robot_id,
+    const std::string& agent_id,
     const std::string& field,
     const std::string& expected_value,
     const std::string& op,
@@ -364,7 +364,7 @@ bool PreconditionEvaluator::check_robot_field(
     if (field == "is_executing") {
         if (ctx.execution_contexts) {
             ExecutionContextMap::const_accessor acc;
-            if (ctx.execution_contexts->find(acc, robot_id)) {
+            if (ctx.execution_contexts->find(acc, agent_id)) {
                 const auto state = acc->second.state.load();
                 bool actual = (state == RobotExecutionState::EXECUTING_ACTION ||
                                state == RobotExecutionState::WAITING_RESULT);
@@ -375,7 +375,7 @@ bool PreconditionEvaluator::check_robot_field(
         }
 
         // Check fleet executing cache
-        auto it = ctx.other_robot_executing.find(robot_id);
+        auto it = ctx.other_robot_executing.find(agent_id);
         if (it != ctx.other_robot_executing.end()) {
             bool actual = it->second;
             bool expected = (to_lower(expected_value) == "true");
@@ -387,13 +387,13 @@ bool PreconditionEvaluator::check_robot_field(
     if (field == "current_action") {
         if (ctx.execution_contexts) {
             ExecutionContextMap::const_accessor acc;
-            if (ctx.execution_contexts->find(acc, robot_id)) {
+            if (ctx.execution_contexts->find(acc, agent_id)) {
                 return compare(acc->second.current_action_type, expected_value, op);
             }
         }
     }
 
-    log.debug("Field {} not found for robot {}", field, robot_id);
+    log.debug("Field {} not found for robot {}", field, agent_id);
     return false;
 }
 

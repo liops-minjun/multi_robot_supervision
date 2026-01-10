@@ -47,7 +47,7 @@ public:
      * Constructor.
      *
      * @param node ROS2 node
-     * @param robot_id Robot identifier
+     * @param agent_id Robot identifier
      * @param ros_namespace Robot's ROS namespace
      * @param capabilities Capability store for action resolution
      * @param result_callback Called when action completes
@@ -55,7 +55,7 @@ public:
      */
     ActionExecutor(
         rclcpp::Node::SharedPtr node,
-        const std::string& robot_id,
+        const std::string& agent_id,
         const std::string& ros_namespace,
         CapabilityStore& capabilities,
         ActionResultCallback result_callback,
@@ -115,11 +115,11 @@ public:
     /**
      * Get robot ID.
      */
-    const std::string& robot_id() const { return robot_id_; }
+    const std::string& agent_id() const { return agent_id_; }
 
 private:
     rclcpp::Node::SharedPtr node_;
-    std::string robot_id_;
+    std::string agent_id_;
     std::string ros_namespace_;
     CapabilityStore& capabilities_;
     ActionResultCallback result_callback_;

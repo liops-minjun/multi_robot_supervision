@@ -163,20 +163,20 @@ public:
     std::optional<StateDefinition> get(const std::string& id) const;
 
     /**
-     * Get state definition for a robot.
+     * Get state definition for an agent.
      *
-     * @param robot_id Robot identifier
+     * @param agent_id Agent identifier
      * @return StateDefinition if mapped
      */
-    std::optional<StateDefinition> get_for_robot(const std::string& robot_id) const;
+    std::optional<StateDefinition> get_for_agent(const std::string& agent_id) const;
 
     /**
-     * Map robot to state definition.
+     * Map agent to state definition.
      *
-     * @param robot_id Robot identifier
+     * @param agent_id Agent identifier
      * @param state_def_id State definition ID
      */
-    void map_robot(const std::string& robot_id, const std::string& state_def_id);
+    void map_agent(const std::string& agent_id, const std::string& state_def_id);
 
     /**
      * Check if state definition exists.
@@ -194,7 +194,7 @@ public:
     std::vector<std::string> list_ids() const;
 
     /**
-     * Get all robot -> state definition mappings.
+     * Get all agent -> state definition mappings.
      */
     std::unordered_map<std::string, int> get_versions_map() const;
 
@@ -223,8 +223,8 @@ private:
     // State definitions: id -> definition
     tbb::concurrent_hash_map<std::string, StateDefinition> definitions_;
 
-    // Robot mappings: robot_id -> state_def_id
-    tbb::concurrent_hash_map<std::string, std::string> robot_mappings_;
+    // Agent mappings: agent_id -> state_def_id
+    tbb::concurrent_hash_map<std::string, std::string> agent_mappings_;
 
     std::string get_file_path(const std::string& id) const;
     bool write_to_file(const StateDefinition& def);

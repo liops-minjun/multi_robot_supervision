@@ -23,7 +23,7 @@ namespace fleet_agent {
 
 namespace capability { class CapabilityScanner; }
 namespace executor { class CommandProcessor; }
-namespace graph { class GraphStorage; class GraphExecutor; }
+namespace graph { class GraphStorage; }
 namespace transport { class QUICClient; class TlsCredentials; class QUICOutboundSender; }
 namespace state { class StateDefinitionStorage; class StateTrackerManager; }
 namespace protocol { class MessageHandler; class CapabilityRegistrar; }
@@ -131,7 +131,7 @@ public:
     /**
      * Get managed robot IDs.
      */
-    std::vector<std::string> robot_ids() const;
+    std::vector<std::string> agent_ids() const;
 
     /**
      * Get ROS2 node.
@@ -158,7 +158,6 @@ private:
     std::unique_ptr<capability::CapabilityScanner> capability_scanner_;
     std::unique_ptr<executor::CommandProcessor> command_processor_;
     std::unique_ptr<graph::GraphStorage> graph_storage_;
-    std::unique_ptr<graph::GraphExecutor> graph_executor_;
 
     // State Management (NEW)
     std::unique_ptr<state::StateDefinitionStorage> state_storage_;

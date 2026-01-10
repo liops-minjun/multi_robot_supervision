@@ -78,11 +78,11 @@ export function useDeleteActionGraph() {
 
 export function useExecuteActionGraph() {
   return useMutation({
-    mutationFn: ({ flowId, robotId, params }: {
+    mutationFn: ({ flowId, agentId, params }: {
       flowId: string
-      robotId: string
+      agentId: string
       params?: Record<string, unknown>
-    }) => actionGraphApi.execute(flowId, robotId, params),
+    }) => actionGraphApi.execute(flowId, agentId, params),
   })
 }
 

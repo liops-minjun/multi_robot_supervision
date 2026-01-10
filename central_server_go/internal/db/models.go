@@ -7,82 +7,33 @@ import (
 	"gorm.io/datatypes"
 )
 
-// Agent represents a fleet agent that manages one or more robots
+// Agent represents a fleet agent that executes actions
 type Agent struct {
-	ID        string         `gorm:"primaryKey;size:50"`
-	Name      string         `gorm:"size:100;not null"`
-	IPAddress sql.NullString `gorm:"size:45"`
-	LastSeen  sql.NullTime
-	Status    string    `gorm:"size:20;default:offline"` // online, offline, warning
-	CreatedAt time.Time `gorm:"autoCreateTime"`
+	ID           string         `gorm:"primaryKey;size:50"`
+	Name         string         `gorm:"size:100;not null"`
+	Namespace    string         `gorm:"size:100"` // ROS2 namespace (optional)
+	IPAddress    sql.NullString `gorm:"size:45"`
+	Tags         datatypes.JSON `gorm:"type:jsonb"` // Grouping tags []string
+	LastSeen     sql.NullTime
+	CurrentState string    `gorm:"size:50;default:idle"`
+	Status       string    `gorm:"size:20;default:offline"` // online, offline, warning
+	CreatedAt    time.Time `gorm:"autoCreateTime"`
+	UpdatedAt    time.Time `gorm:"autoUpdateTime"`
 
 	// Relationships
-	Robots            []Robot            `gorm:"foreignKey:AgentID"`
 	AgentActionGraphs []AgentActionGraph `gorm:"foreignKey:AgentID"`
 	ActionGraphs      []ActionGraph      `gorm:"foreignKey:AgentID"`
 	Capabilities      []AgentCapability  `gorm:"foreignKey:AgentID"`
+	Tasks             []Task             `gorm:"foreignKey:AgentID"`
+	Commands          []CommandQueue     `gorm:"foreignKey:AgentID"`
 }
 
 func (Agent) TableName() string {
 	return "agents"
 }
 
-// Robot represents an individual robot
-type Robot struct {
-	ID            string         `gorm:"primaryKey;size:50"`
-	Name          string         `gorm:"size:100;not null"`
-	Namespace     string         `gorm:"size:100"` // ROS2 namespace
-	AgentID       sql.NullString `gorm:"size:50"`
-	IPAddress     sql.NullString `gorm:"size:45"`
-	Tags          datatypes.JSON `gorm:"type:jsonb"` // Grouping tags []string
-	LastSeen      sql.NullTime
-	CurrentState  string         `gorm:"size:50;default:idle"`
-	CreatedAt     time.Time      `gorm:"autoCreateTime"`
-	UpdatedAt     time.Time      `gorm:"autoUpdateTime"`
-
-	// Relationships
-	Agent        *Agent            `gorm:"foreignKey:AgentID"`
-	Tasks        []Task            `gorm:"foreignKey:RobotID"`
-	Commands     []CommandQueue    `gorm:"foreignKey:RobotID"`
-	Capabilities []RobotCapability `gorm:"foreignKey:RobotID"`
-}
-
-func (Robot) TableName() string {
-	return "robots"
-}
-
-// RobotCapability represents an auto-discovered capability from ROS2 Action Server
-type RobotCapability struct {
-	ID           string         `gorm:"primaryKey;size:100"` // robot_id + action_type hash
-	RobotID      string         `gorm:"size:50;not null;index"`
-	ActionType   string         `gorm:"size:100;not null"` // e.g., "nav2_msgs/action/NavigateToPose"
-	ActionServer string         `gorm:"size:200;not null"` // e.g., "/robot_001/navigate_to_pose"
-
-	// Auto-introspected schemas
-	GoalSchema     datatypes.JSON `gorm:"type:jsonb"` // Goal message schema
-	ResultSchema   datatypes.JSON `gorm:"type:jsonb"` // Result message schema
-	FeedbackSchema datatypes.JSON `gorm:"type:jsonb"` // Feedback message schema
-
-	// Inferred success criteria
-	SuccessCriteria datatypes.JSON `gorm:"type:jsonb"` // Auto-inferred from result schema
-
-	// Runtime status
-	Status       string       `gorm:"size:20;default:idle"` // idle, executing
-	IsAvailable  bool         `gorm:"default:true"`
-	LastUsedAt   sql.NullTime
-	DiscoveredAt time.Time    `gorm:"autoCreateTime"`
-	UpdatedAt    time.Time    `gorm:"autoUpdateTime"`
-
-	// Relationships
-	Robot *Robot `gorm:"foreignKey:RobotID"`
-}
-
-func (RobotCapability) TableName() string {
-	return "robot_capabilities"
-}
-
 // AgentCapability represents an auto-discovered capability from ROS2 Action Server
-// This is the primary capability model - capabilities are discovered per-agent, not per-robot
+// Capabilities are discovered per-agent from ROS2 Action Servers
 type AgentCapability struct {
 	ID           string         `gorm:"primaryKey;size:100"` // agent_id + action_server hash
 	AgentID      string         `gorm:"size:50;not null;index"`
@@ -225,7 +176,7 @@ type TemplateCompatibilityInfo struct {
 type Task struct {
 	ID               string         `gorm:"primaryKey;size:50"`
 	ActionGraphID    sql.NullString `gorm:"size:50"`
-	RobotID          sql.NullString `gorm:"size:50"`
+	AgentID          sql.NullString `gorm:"size:50"`
 	Status           string         `gorm:"size:20;not null;default:pending"` // pending, running, completed, failed, cancelled, paused
 	CurrentStepID    sql.NullString `gorm:"size:50"`
 	CurrentStepIndex int            `gorm:"default:0"`
@@ -238,17 +189,17 @@ type Task struct {
 
 	// Relationships
 	ActionGraph *ActionGraph `gorm:"foreignKey:ActionGraphID"`
-	Robot       *Robot       `gorm:"foreignKey:RobotID"`
+	Agent       *Agent       `gorm:"foreignKey:AgentID"`
 }
 
 func (Task) TableName() string {
 	return "tasks"
 }
 
-// CommandQueue represents pending commands to robots
+// CommandQueue represents pending commands to agents
 type CommandQueue struct {
 	ID          string         `gorm:"primaryKey;size:50"`
-	RobotID     sql.NullString `gorm:"size:50"`
+	AgentID     sql.NullString `gorm:"size:50"`
 	CommandType string         `gorm:"size:50;not null"` // EXECUTE_STEP, CANCEL, UPDATE_CONFIG
 	Payload     datatypes.JSON `gorm:"type:jsonb"`
 	Status      string         `gorm:"size:20;default:pending"` // pending, sent, completed, failed
@@ -257,7 +208,7 @@ type CommandQueue struct {
 	ProcessedAt sql.NullTime
 
 	// Relationships
-	Robot *Robot `gorm:"foreignKey:RobotID"`
+	Agent *Agent `gorm:"foreignKey:AgentID"`
 }
 
 func (CommandQueue) TableName() string {
@@ -396,7 +347,7 @@ type EndState struct {
 	Condition string `json:"condition,omitempty"`
 }
 
-// StateTarget defines which robots receive a state during execution.
+// StateTarget defines which agents receive a state during execution.
 type StateTarget struct {
 	State      string `json:"state"`
 	TargetType string `json:"target_type,omitempty"` // self, all, agent
@@ -409,9 +360,8 @@ type StartCondition struct {
 
 	Operator   string `json:"operator,omitempty"`    // and, or
 	Quantifier string `json:"quantifier,omitempty"`  // self, all, any, none, specific
-	TargetType string `json:"target_type,omitempty"` // self, robot, agent, all
-	RobotID    string `json:"robot_id,omitempty"`
-	AgentID    string `json:"agent_id,omitempty"`
+	TargetType string `json:"target_type,omitempty"` // self, agent, all
+	AgentID    string `json:"agent_id,omitempty"`    // For 'specific' quantifier
 
 	State         string   `json:"state,omitempty"`
 	StateOperator string   `json:"state_operator,omitempty"` // ==, !=, in, not_in
@@ -425,7 +375,7 @@ type StartCondition struct {
 
 // Precondition represents an action graph precondition
 type Precondition struct {
-	Type      string `json:"type"`      // robot_state, zone_free, etc.
+	Type      string `json:"type"`      // agent_state, zone_free, etc.
 	Condition string `json:"condition"` // Expression to evaluate
 	Message   string `json:"message"`   // Error message if failed
 }

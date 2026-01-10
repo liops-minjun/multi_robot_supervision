@@ -34,7 +34,7 @@ type Scheduler struct {
 	tasksMu sync.RWMutex
 
 	// Task queue per robot
-	taskQueues   map[string][]string // robotID -> taskIDs
+	taskQueues   map[string][]string // agentID -> taskIDs
 	taskQueuesMu sync.RWMutex
 
 	// Context for graceful shutdown
@@ -49,30 +49,13 @@ const (
 	logRetentionWindow         = 30 * 24 * time.Hour
 )
 
-func isSelfOnlyGraph(steps []db.ActionGraphStep) bool {
-	for _, step := range steps {
-		for _, cond := range step.StartConditions {
-			if cond.Quantifier != "" && strings.ToLower(cond.Quantifier) != "self" {
-				return false
-			}
-			if cond.TargetType != "" && strings.ToLower(cond.TargetType) != "self" {
-				return false
-			}
-			if cond.RobotID != "" || cond.AgentID != "" {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 // RunningTask represents an actively executing task
 type RunningTask struct {
 	ID            string
 	ActionGraphID string
-	RobotID       string
 	AgentID       string
 	Steps         []db.ActionGraphStep
+	StepIndex     map[string]int // Step ID -> index for O(1) lookup
 	CurrentStep   int
 	Status        TaskStatus
 	RetryCount    map[string]int
@@ -154,16 +137,16 @@ func (s *Scheduler) Stop() {
 // Task Execution
 // ============================================================
 
-// StartTask starts a new task for a robot
+// StartTask starts a new task for an agent
 // This is the main entry point for task execution
-func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, robotID string, params map[string]interface{}) (string, error) {
+func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string, params map[string]interface{}) (string, error) {
 	// Generate task ID
 	taskID := uuid.New().String()
 
-	// Get robot state first to determine agent
-	robotState, exists := s.stateManager.GetRobotState(robotID)
+	// Get agent state (in 1:1 model, agent ID is also robot ID)
+	_, exists := s.stateManager.GetRobotState(agentID)
 	if !exists {
-		return "", fmt.Errorf("robot %s not found", robotID)
+		return "", fmt.Errorf("agent %s not found in state manager", agentID)
 	}
 
 	// Try to get action graph from cache first
@@ -172,17 +155,17 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, robotID string
 	var graphVersion int
 	var entryPoint string
 
-	cached, cacheHit := s.stateManager.GraphCache().Get(robotState.AgentID, actionGraphID)
+	cached, cacheHit := s.stateManager.GraphCache().Get(agentID, actionGraphID)
 	if cacheHit {
 		// Cache hit - use cached graph
 		graphVersion = cached.Version
 		steps = s.canonicalToDBSteps(cached.Graph)
 		preconditions = s.canonicalToPreconditions(cached.Graph)
 		entryPoint = cached.Graph.EntryPoint
-		log.Printf("Cache HIT for graph %s (agent=%s, version=%d)", actionGraphID, robotState.AgentID, graphVersion)
+		log.Printf("Cache HIT for graph %s (agent=%s, version=%d)", actionGraphID, agentID, graphVersion)
 	} else {
 		// Cache miss - load from database
-		log.Printf("Cache MISS for graph %s (agent=%s), loading from DB", actionGraphID, robotState.AgentID)
+		log.Printf("Cache MISS for graph %s (agent=%s), loading from DB", actionGraphID, agentID)
 
 		dbGraph, err := s.repo.GetActionGraph(actionGraphID)
 		if err != nil {
@@ -220,7 +203,7 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, robotID string
 		// Convert to canonical and cache for future use
 		canonicalGraph, err := graph.FromDBModel(dbGraph)
 		if err == nil {
-			s.stateManager.GraphCache().Set(robotState.AgentID, actionGraphID, canonicalGraph)
+			s.stateManager.GraphCache().Set(agentID, actionGraphID, canonicalGraph)
 			if entryPoint == "" && canonicalGraph.EntryPoint != "" {
 				entryPoint = canonicalGraph.EntryPoint
 			}
@@ -232,29 +215,30 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, robotID string
 		return "", fmt.Errorf("action graph has no steps")
 	}
 
-	agentMode := isSelfOnlyGraph(steps)
+	// NOTE: Agent mode delegation removed - all graphs execute server-side for consistency
+	// This ensures predictable behavior and centralized state management
+
+	// Build step index for O(1) lookup (used for entry point and step transitions)
+	stepIndex := make(map[string]int, len(steps))
+	for i, step := range steps {
+		stepIndex[step.ID] = i
+	}
 
 	entryIndex := 0
 	entryStepID := steps[0].ID
 	if entryPoint != "" {
-		for i, step := range steps {
-			if step.ID == entryPoint {
-				entryIndex = i
-				entryStepID = step.ID
-				break
-			}
+		if idx, found := stepIndex[entryPoint]; found {
+			entryIndex = idx
+			entryStepID = steps[idx].ID
 		}
 	}
 
 	// Extract required zones from entry step
 	requiredZones := s.extractRequiredZones(steps[entryIndex])
-	if agentMode {
-		requiredZones = nil
-	}
 
 	// Atomic: Check preconditions + Reserve zones + Start execution
 	success, errMsg := s.stateManager.TryStartExecution(
-		robotID,
+		agentID,
 		taskID,
 		entryStepID,
 		requiredZones,
@@ -268,7 +252,7 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, robotID string
 	dbTask := &db.Task{
 		ID:               taskID,
 		ActionGraphID:    sql.NullString{String: actionGraphID, Valid: true},
-		RobotID:          sql.NullString{String: robotID, Valid: true},
+		AgentID:          sql.NullString{String: agentID, Valid: true},
 		Status:           string(TaskRunning),
 		CurrentStepID:    sql.NullString{String: entryStepID, Valid: true},
 		CurrentStepIndex: entryIndex,
@@ -278,15 +262,6 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, robotID string
 		log.Printf("Failed to save task to database: %v", err)
 	}
 
-	// Agent mode: delegate graph execution to the agent if possible.
-	if agentMode && s.quicHandler != nil && robotState.AgentID != "" {
-		if err := s.quicHandler.SendExecuteGraph(ctx, robotState.AgentID, taskID, actionGraphID, robotID, params); err == nil {
-			log.Printf("Task delegated to agent: %s (graph=%s, robot=%s)", taskID, actionGraphID, robotID)
-			return taskID, nil
-		}
-		log.Printf("ExecuteGraph failed, falling back to server mode for task %s", taskID)
-	}
-
 	// Create task context
 	taskCtx, taskCancel := context.WithCancel(s.ctx)
 
@@ -294,9 +269,9 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, robotID string
 	task := &RunningTask{
 		ID:            taskID,
 		ActionGraphID: actionGraphID,
-		RobotID:       robotID,
-		AgentID:       robotState.AgentID,
+		AgentID:       agentID,
 		Steps:         steps,
+		StepIndex:     stepIndex,
 		CurrentStep:   entryIndex,
 		Status:        TaskRunning,
 		RetryCount:    make(map[string]int),
@@ -314,7 +289,7 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, robotID string
 	// Start step execution in background
 	go s.runTask(taskCtx, task)
 
-	log.Printf("Task started: %s (graph=%s, robot=%s)", taskID, actionGraphID, robotID)
+	log.Printf("Task started: %s (graph=%s, agent=%s)", taskID, actionGraphID, agentID)
 
 	return taskID, nil
 }
@@ -323,7 +298,7 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, robotID string
 func (s *Scheduler) runTask(ctx context.Context, task *RunningTask) {
 	defer func() {
 		// Cleanup
-		s.stateManager.CompleteExecution(task.RobotID, task.ReservedZones)
+		s.stateManager.CompleteExecution(task.AgentID, task.ReservedZones)
 
 		// Update database
 		s.repo.UpdateTaskStatus(task.ID, string(task.Status), "", task.CurrentStep, "")
@@ -357,17 +332,10 @@ func (s *Scheduler) runTask(ctx context.Context, task *RunningTask) {
 			return
 		}
 
-		// Find next step
-		found := false
-		for i, s := range task.Steps {
-			if s.ID == nextStep {
-				task.CurrentStep = i
-				found = true
-				break
-			}
-		}
-
-		if !found {
+		// Find next step using O(1) index lookup
+		if idx, found := task.StepIndex[nextStep]; found {
+			task.CurrentStep = idx
+		} else {
 			log.Printf("Next step %s not found in task %s", nextStep, task.ID)
 			task.Status = TaskFailed
 			return
@@ -393,7 +361,7 @@ func (s *Scheduler) executeStep(ctx context.Context, task *RunningTask, step *db
 	}
 
 	// Wait for pre-states before evaluating start conditions
-	if err := s.waitForPreStates(ctx, task.RobotID, step.PreStates); err != nil {
+	if err := s.waitForPreStates(ctx, task.AgentID, step.PreStates); err != nil {
 		return &StepResult{
 			StepID: step.ID,
 			Status: fleetgrpc.ActionStatusCancelled,
@@ -402,7 +370,7 @@ func (s *Scheduler) executeStep(ctx context.Context, task *RunningTask, step *db
 	}
 
 	// Wait for start conditions (server-mode only)
-	if err := s.waitForStartConditions(ctx, task.RobotID, step.StartConditions); err != nil {
+	if err := s.waitForStartConditions(ctx, task.AgentID, step.StartConditions); err != nil {
 		return &StepResult{
 			StepID: step.ID,
 			Status: fleetgrpc.ActionStatusCancelled,
@@ -427,7 +395,7 @@ func (s *Scheduler) executeStep(ctx context.Context, task *RunningTask, step *db
 	}
 }
 
-func (s *Scheduler) waitForStartConditions(ctx context.Context, robotID string, conditions []db.StartCondition) error {
+func (s *Scheduler) waitForStartConditions(ctx context.Context, agentID string, conditions []db.StartCondition) error {
 	if len(conditions) == 0 {
 		return nil
 	}
@@ -439,7 +407,6 @@ func (s *Scheduler) waitForStartConditions(ctx context.Context, robotID string, 
 			Operator:        c.Operator,
 			Quantifier:      state.StartConditionQuantifier(c.Quantifier),
 			TargetType:      c.TargetType,
-			RobotID:         c.RobotID,
 			AgentID:         c.AgentID,
 			State:           c.State,
 			StateOperator:   c.StateOperator,
@@ -454,7 +421,7 @@ func (s *Scheduler) waitForStartConditions(ctx context.Context, robotID string, 
 	defer ticker.Stop()
 
 	for {
-		passed, errMsg := s.stateManager.EvaluateStartConditionList(robotID, stateConditions)
+		passed, errMsg := s.stateManager.EvaluateStartConditionList(agentID, stateConditions)
 		if passed {
 			return nil
 		}
@@ -464,13 +431,13 @@ func (s *Scheduler) waitForStartConditions(ctx context.Context, robotID string, 
 			if errMsg == "" {
 				errMsg = "start condition wait cancelled"
 			}
-			return fmt.Errorf(errMsg)
+			return fmt.Errorf("%s", errMsg)
 		case <-ticker.C:
 		}
 	}
 }
 
-func (s *Scheduler) waitForPreStates(ctx context.Context, robotID string, preStates []string) error {
+func (s *Scheduler) waitForPreStates(ctx context.Context, agentID string, preStates []string) error {
 	if len(preStates) == 0 {
 		return nil
 	}
@@ -479,7 +446,7 @@ func (s *Scheduler) waitForPreStates(ctx context.Context, robotID string, preSta
 	defer ticker.Stop()
 
 	for {
-		if robotState, ok := s.stateManager.GetRobotState(robotID); ok {
+		if robotState, ok := s.stateManager.GetRobotState(agentID); ok {
 			for _, state := range preStates {
 				if robotState.CurrentState == state {
 					return nil
@@ -530,7 +497,7 @@ func (s *Scheduler) executeAction(ctx context.Context, task *RunningTask, step *
 	commandID := uuid.New().String()
 
 	overrideRobots := s.applyDuringStateTargets(
-		task.RobotID,
+		task.AgentID,
 		commandID,
 		step.DuringStateTargets,
 		step.DuringStates,
@@ -539,11 +506,11 @@ func (s *Scheduler) executeAction(ctx context.Context, task *RunningTask, step *
 		defer s.clearDuringStateTargets(commandID, overrideRobots)
 	}
 
-	cmdDuringStates := s.selectSelfDuringState(task.RobotID, step.DuringStateTargets, step.DuringStates)
+	cmdDuringStates := s.selectSelfDuringState(task.AgentID, step.DuringStateTargets, step.DuringStates)
 
 	cmd := &fleetgrpc.ExecuteCommand{
 		CommandID:    commandID,
-		RobotID:      task.RobotID,
+		AgentID:      task.AgentID,
 		TaskID:       task.ID,
 		StepID:       step.ID,
 		ActionType:   action.Type,
@@ -694,20 +661,20 @@ func (s *Scheduler) handleStepResult(task *RunningTask, step *db.ActionGraphStep
 }
 
 func (s *Scheduler) applyDuringStateTargets(
-	executingRobotID string,
+	executingAgentID string,
 	sourceID string,
 	targets []db.StateTarget,
 	fallbackStates []string,
 ) []string {
-	overrides := s.resolveDuringStateOverrides(executingRobotID, targets, fallbackStates)
+	overrides := s.resolveDuringStateOverrides(executingAgentID, targets, fallbackStates)
 	if len(overrides) == 0 {
 		return nil
 	}
 
 	applied := make([]string, 0, len(overrides))
-	for robotID, state := range overrides {
-		if err := s.stateManager.SetRobotStateOverride(robotID, sourceID, state); err == nil {
-			applied = append(applied, robotID)
+	for agentID, state := range overrides {
+		if err := s.stateManager.SetRobotStateOverride(agentID, sourceID, state); err == nil {
+			applied = append(applied, agentID)
 		}
 	}
 	if len(applied) == 0 {
@@ -716,9 +683,9 @@ func (s *Scheduler) applyDuringStateTargets(
 	return applied
 }
 
-func (s *Scheduler) clearDuringStateTargets(sourceID string, robotIDs []string) {
-	for _, robotID := range robotIDs {
-		_ = s.stateManager.ClearRobotStateOverride(robotID, sourceID)
+func (s *Scheduler) clearDuringStateTargets(sourceID string, agentIDs []string) {
+	for _, agentID := range agentIDs {
+		_ = s.stateManager.ClearRobotStateOverride(agentID, sourceID)
 	}
 }
 
@@ -766,7 +733,7 @@ func orderStateTargetsForOverrides(targets []db.StateTarget) []db.StateTarget {
 }
 
 func (s *Scheduler) resolveDuringStateOverrides(
-	executingRobotID string,
+	executingAgentID string,
 	targets []db.StateTarget,
 	fallbackStates []string,
 ) map[string]string {
@@ -785,12 +752,12 @@ func (s *Scheduler) resolveDuringStateOverrides(
 		if targetType == "" {
 			targetType = "self"
 		}
-		robotIDs := s.stateManager.ResolveTargetRobots(executingRobotID, targetType, target.AgentID)
-		for _, robotID := range robotIDs {
-			if _, exists := overrides[robotID]; exists {
+		agentIDs := s.stateManager.ResolveTargetAgents(executingAgentID, targetType, target.AgentID)
+		for _, agentID := range agentIDs {
+			if _, exists := overrides[agentID]; exists {
 				continue
 			}
-			overrides[robotID] = target.State
+			overrides[agentID] = target.State
 		}
 	}
 
@@ -801,15 +768,15 @@ func (s *Scheduler) resolveDuringStateOverrides(
 }
 
 func (s *Scheduler) selectSelfDuringState(
-	executingRobotID string,
+	executingAgentID string,
 	targets []db.StateTarget,
 	fallbackStates []string,
 ) []string {
-	overrides := s.resolveDuringStateOverrides(executingRobotID, targets, fallbackStates)
+	overrides := s.resolveDuringStateOverrides(executingAgentID, targets, fallbackStates)
 	if len(overrides) == 0 {
 		return nil
 	}
-	state, ok := overrides[executingRobotID]
+	state, ok := overrides[executingAgentID]
 	if !ok || state == "" {
 		return nil
 	}
@@ -1098,7 +1065,7 @@ func (s *Scheduler) CancelTask(taskID, reason string) error {
 	// Send cancel to robot
 	step := task.Steps[task.CurrentStep]
 	if step.Action != nil {
-		s.handler.CancelCommand(context.Background(), "", task.RobotID, taskID, reason)
+		s.handler.CancelCommand(context.Background(), "", task.AgentID, taskID, reason)
 	}
 
 	return nil
@@ -1146,13 +1113,13 @@ func (s *Scheduler) GetTask(taskID string) (*RunningTask, bool) {
 }
 
 // GetTasksByRobot returns all tasks for a robot
-func (s *Scheduler) GetTasksByRobot(robotID string) []*RunningTask {
+func (s *Scheduler) GetTasksByRobot(agentID string) []*RunningTask {
 	s.tasksMu.RLock()
 	defer s.tasksMu.RUnlock()
 
 	var result []*RunningTask
 	for _, task := range s.tasks {
-		if task.RobotID == robotID {
+		if task.AgentID == agentID {
 			result = append(result, task)
 		}
 	}
@@ -1329,7 +1296,6 @@ func graphToDBStartConditions(conds []graph.StartCondition) []db.StartCondition 
 			Operator:        c.Operator,
 			Quantifier:      c.Quantifier,
 			TargetType:      c.TargetType,
-			RobotID:         c.RobotID,
 			AgentID:         c.AgentID,
 			State:           c.State,
 			StateOperator:   c.StateOperator,

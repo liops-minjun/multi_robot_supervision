@@ -189,22 +189,17 @@ func loadExistingState(repo *db.Repository, stateManager *state.GlobalStateManag
 	}
 
 	for _, agent := range agents {
-		robotIDs := make([]string, len(agent.Robots))
-		for i, robot := range agent.Robots {
-			robotIDs[i] = robot.ID
-
-			// Register robot (initially offline)
-			stateManager.RegisterRobot(
-				robot.ID,
-				robot.Name,
-				agent.ID,
-				robot.CurrentState,
-			)
-			stateManager.SetRobotOnline(robot.ID, false)
-		}
+		// Register robot (agent_id = robot_id in 1:1 model, initially offline)
+		stateManager.RegisterRobot(
+			agent.ID,
+			agent.Name,
+			agent.ID,
+			agent.CurrentState,
+		)
+		stateManager.SetRobotOnline(agent.ID, false)
 
 		// Register agent (will be set online when connected)
-		stateManager.RegisterAgent(agent.ID, agent.Name, "", robotIDs)
+		stateManager.RegisterAgent(agent.ID, agent.Name, "")
 	}
 
 	log.Printf("Loaded %d agents from database", len(agents))

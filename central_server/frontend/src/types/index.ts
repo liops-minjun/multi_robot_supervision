@@ -54,13 +54,12 @@ export interface ConditionGroup {
 }
 
 // Start Condition - pre-condition before action executes
-// Reads like: "[Every/Any/Self/Specific] [AgentType/RobotId] is [State] [and/or]"
+// Reads like: "[Every/Any/Self/Specific] [AgentId] is [State] [and/or]"
 export interface StartStateConfig {
   id: string
   quantifier: 'self' | 'every' | 'any' | 'specific'  // Who does this apply to?
   agentId?: string  // Agent ID (for 'every', 'any', or 'specific')
   agentType?: string  // Deprecated: use agentId
-  robotId?: string  // Deprecated: robot-specific start states are no longer used
   state: string  // Required state
   operator?: 'and' | 'or'  // Logical operator to combine with next condition
   conditionGroup?: ConditionGroup  // Optional additional conditions (advanced)
@@ -71,8 +70,7 @@ export interface StartCondition {
   id: string
   operator?: 'and' | 'or'
   quantifier?: 'self' | 'all' | 'any' | 'none' | 'specific'
-  target_type?: 'self' | 'robot' | 'agent' | 'all'
-  robot_id?: string
+  target_type?: 'self' | 'agent' | 'all'
   agent_id?: string
   state?: string
   state_operator?: '==' | '!=' | 'in' | 'not_in'
@@ -249,7 +247,7 @@ export interface GraphCreateRequest {
 export interface Task {
   id: string
   flow_id: string
-  robot_id: string
+  agent_id: string
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused' | 'waiting_confirm'
   current_step_id: string | null
   current_step_index: number
@@ -259,7 +257,7 @@ export interface Task {
   started_at: string | null
   completed_at: string | null
   flow_name?: string
-  robot_name?: string
+  agent_name?: string
   total_steps?: number
   progress?: { current: number; total: number }
 }
@@ -379,8 +377,6 @@ export interface RobotStateSnapshot {
   current_step_id?: string
   staleness_sec?: number
   // Legacy fields (for backward compatibility)
-  robot_id?: string
-  robot_name?: string
   agent_name?: string | null
   state?: string
   state_updated_at?: string  // ISO timestamp
@@ -397,8 +393,7 @@ export interface FleetStateSnapshot {
 
 export interface EnhancedStartStateCondition {
   id: string
-  target_type: 'self' | 'robot' | 'agent' | 'all'
-  robot_id?: string
+  target_type: 'self' | 'agent' | 'all'
   agent_id?: string
   quantifier: StateQuantifier
   state: string
@@ -464,7 +459,7 @@ export interface TaskMonitorData {
   id: string
   flow_id: string
   flow_name: string
-  robot_id: string
+  agent_id: string
   status: string
   current_step_id: string | null
   started_at: string | null
@@ -566,5 +561,4 @@ export interface AgentConnectionStatus {
   last_ping?: string
   ping_latency_ms?: number
   ping_latency_us?: number
-  robot_ids: string[]
 }

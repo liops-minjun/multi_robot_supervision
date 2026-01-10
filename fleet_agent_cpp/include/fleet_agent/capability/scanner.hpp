@@ -8,10 +8,14 @@
 #include "fleet_agent/capability/schema_extractor.hpp"
 
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
+#include <action_msgs/msg/goal_status_array.hpp>
+#include <action_msgs/srv/cancel_goal.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 namespace fleet_agent {
@@ -145,6 +149,17 @@ private:
     SchemaExtractor schema_extractor_;
     SuccessCriteriaInferrer success_inferrer_;
 
+    std::unordered_map<std::string, rclcpp::Subscription<action_msgs::msg::GoalStatusArray>::SharedPtr>
+        status_subscriptions_;
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point> status_last_seen_;
+    std::unordered_map<std::string, bool> status_publishers_alive_;
+    std::unordered_map<std::string, rclcpp::Client<action_msgs::srv::CancelGoal>::SharedPtr>
+        cancel_clients_;
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point> cancel_probe_last_;
+    std::unordered_map<std::string, int> cancel_probe_failures_;
+    std::unordered_map<std::string, bool> cancel_probe_alive_;
+    mutable std::mutex status_mutex_;
+
     /**
      * Scan a single action server.
      *
@@ -156,6 +171,14 @@ private:
         const std::string& server_name,
         const std::string& action_type
     );
+
+    void ensure_status_subscription(const std::string& server_name);
+    std::optional<std::chrono::steady_clock::time_point> get_last_status_seen(
+        const std::string& server_name) const;
+    std::optional<bool> get_status_publisher_alive(
+        const std::string& server_name) const;
+    void ensure_cancel_client(const std::string& server_name);
+    std::optional<bool> probe_cancel_alive(const std::string& server_name);
 
     /**
      * Normalize action type string.

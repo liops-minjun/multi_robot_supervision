@@ -55,26 +55,26 @@ std::optional<StateDefinition> StateDefinitionStorage::get(const std::string& id
     return std::nullopt;
 }
 
-std::optional<StateDefinition> StateDefinitionStorage::get_for_robot(
-    const std::string& robot_id) const {
+std::optional<StateDefinition> StateDefinitionStorage::get_for_agent(
+    const std::string& agent_id) const {
 
     tbb::concurrent_hash_map<std::string, std::string>::const_accessor mapping_acc;
-    if (!robot_mappings_.find(mapping_acc, robot_id)) {
+    if (!agent_mappings_.find(mapping_acc, agent_id)) {
         return std::nullopt;
     }
 
     return get(mapping_acc->second);
 }
 
-void StateDefinitionStorage::map_robot(
-    const std::string& robot_id,
+void StateDefinitionStorage::map_agent(
+    const std::string& agent_id,
     const std::string& state_def_id) {
 
     tbb::concurrent_hash_map<std::string, std::string>::accessor acc;
-    robot_mappings_.insert(acc, robot_id);
+    agent_mappings_.insert(acc, agent_id);
     acc->second = state_def_id;
 
-    log.debug("Mapped robot {} to state definition {}", robot_id, state_def_id);
+    log.debug("Mapped agent {} to state definition {}", agent_id, state_def_id);
 }
 
 bool StateDefinitionStorage::exists(const std::string& id) const {
@@ -118,11 +118,11 @@ bool StateDefinitionStorage::save_to_disk() {
         }
     }
 
-    // Save robot mappings
-    std::filesystem::path mappings_path = std::filesystem::path(storage_path_) / "robot_mappings.json";
+    // Save agent mappings
+    std::filesystem::path mappings_path = std::filesystem::path(storage_path_) / "agent_mappings.json";
     try {
         nlohmann::json j;
-        for (auto it = robot_mappings_.begin(); it != robot_mappings_.end(); ++it) {
+        for (auto it = agent_mappings_.begin(); it != agent_mappings_.end(); ++it) {
             j[it->first] = it->second;
         }
 
@@ -131,7 +131,7 @@ bool StateDefinitionStorage::save_to_disk() {
             file << j.dump(2);
         }
     } catch (const std::exception& e) {
-        log.error("Failed to save robot mappings: {}", e.what());
+        log.error("Failed to save agent mappings: {}", e.what());
         success = false;
     }
 
@@ -151,7 +151,7 @@ bool StateDefinitionStorage::load_from_disk() {
     int loaded = 0;
     for (const auto& entry : std::filesystem::directory_iterator(dir)) {
         if (entry.path().extension() == ".json" &&
-            entry.path().filename() != "robot_mappings.json") {
+            entry.path().filename() != "agent_mappings.json") {
 
             auto def = read_from_file(entry.path().stem().string());
             if (def) {
@@ -163,21 +163,21 @@ bool StateDefinitionStorage::load_from_disk() {
         }
     }
 
-    // Load robot mappings
-    std::filesystem::path mappings_path = dir / "robot_mappings.json";
+    // Load agent mappings
+    std::filesystem::path mappings_path = dir / "agent_mappings.json";
     if (std::filesystem::exists(mappings_path)) {
         try {
             std::ifstream file(mappings_path);
             nlohmann::json j;
             file >> j;
 
-            for (auto& [robot_id, state_def_id] : j.items()) {
+            for (auto& [agent_id, state_def_id] : j.items()) {
                 tbb::concurrent_hash_map<std::string, std::string>::accessor acc;
-                robot_mappings_.insert(acc, robot_id);
+                agent_mappings_.insert(acc, agent_id);
                 acc->second = state_def_id.get<std::string>();
             }
         } catch (const std::exception& e) {
-            log.error("Failed to load robot mappings: {}", e.what());
+            log.error("Failed to load agent mappings: {}", e.what());
         }
     }
 
@@ -187,7 +187,7 @@ bool StateDefinitionStorage::load_from_disk() {
 
 void StateDefinitionStorage::clear() {
     definitions_.clear();
-    robot_mappings_.clear();
+    agent_mappings_.clear();
 }
 
 std::string StateDefinitionStorage::get_file_path(const std::string& id) const {

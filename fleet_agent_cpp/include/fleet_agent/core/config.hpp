@@ -141,7 +141,10 @@ struct LoggingConfig {
 struct AgentConfig {
     std::string agent_id;
     std::string agent_name{"Fleet Agent"};
+    std::string ros_namespace;           // ROS namespace (e.g., "/robot_001")
+    std::vector<std::string> tags;       // Agent tags
 
+    // Deprecated: kept for config file backwards compatibility
     std::vector<RobotConfig> robots;
     ServerConfig server;
     CommunicationConfig communication;

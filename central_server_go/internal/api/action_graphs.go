@@ -256,12 +256,12 @@ func (s *Server) ExecuteActionGraph(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.RobotID == "" {
-		writeError(w, http.StatusBadRequest, "robot_id is required")
+	if req.AgentID == "" {
+		writeError(w, http.StatusBadRequest, "agent_id is required")
 		return
 	}
 
-	taskID, err := s.scheduler.StartTask(r.Context(), graphID, req.RobotID, req.Params)
+	taskID, err := s.scheduler.StartTask(r.Context(), graphID, req.AgentID, req.Params)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -270,7 +270,7 @@ func (s *Server) ExecuteActionGraph(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"task_id":         taskID,
 		"action_graph_id": graphID,
-		"robot_id":        req.RobotID,
+		"agent_id":        req.AgentID,
 		"status":          "running",
 		"message":         "Action Graph execution started",
 	})

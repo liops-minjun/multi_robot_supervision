@@ -148,8 +148,8 @@ function CapabilityCard({
   )
 }
 
-const resolveRobotId = (robot: RobotStateSnapshot) => robot.id || robot.robot_id || ''
-const resolveRobotName = (robot: RobotStateSnapshot) => robot.name || robot.robot_name || resolveRobotId(robot)
+const resolveAgentId = (robot: RobotStateSnapshot) => robot.id || ''
+const resolveAgentName = (robot: RobotStateSnapshot) => robot.name || resolveAgentId(robot)
 const resolveRobotState = (robot: RobotStateSnapshot) => robot.current_state || robot.state || ''
 const resolveRobotExecuting = (robot: RobotStateSnapshot) => robot.is_executing ?? false
 
@@ -305,15 +305,15 @@ export default function AgentDashboard() {
       return
     }
     const existing = selectedRobotId &&
-      agentRobots.some(robot => resolveRobotId(robot) === selectedRobotId)
+      agentRobots.some(robot => resolveAgentId(robot) === selectedRobotId)
     if (existing) return
     const executing = agentRobots.find(robot => resolveRobotExecuting(robot))
-    setSelectedRobotId(resolveRobotId(executing || agentRobots[0]))
+    setSelectedRobotId(resolveAgentId(executing || agentRobots[0]))
   }, [agentRobots, selectedRobotId])
 
   const selectedRobotState = useMemo(() => {
     if (!selectedRobotId) return null
-    return agentRobots.find(robot => resolveRobotId(robot) === selectedRobotId) || null
+    return agentRobots.find(robot => resolveAgentId(robot) === selectedRobotId) || null
   }, [agentRobots, selectedRobotId])
 
   const currentStepId = useMemo(() => {
@@ -605,10 +605,10 @@ export default function AgentDashboard() {
                           <option value="">No robots</option>
                         )}
                         {agentRobots.map((robot) => {
-                          const robotId = resolveRobotId(robot)
+                          const agentId = resolveAgentId(robot)
                           return (
-                            <option key={robotId} value={robotId}>
-                              {resolveRobotName(robot)}
+                            <option key={agentId} value={agentId}>
+                              {resolveAgentName(robot)}
                             </option>
                           )
                         })}

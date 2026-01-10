@@ -100,8 +100,8 @@ void parse_start_conditions(
         if (cond.contains("target_type") && cond["target_type"].is_string()) {
             out->set_target_type(cond["target_type"].get<std::string>());
         }
-        if (cond.contains("robot_id") && cond["robot_id"].is_string()) {
-            out->set_robot_id(cond["robot_id"].get<std::string>());
+        if (cond.contains("agent_id") && cond["agent_id"].is_string()) {
+            out->set_agent_id(cond["agent_id"].get<std::string>());
         }
         if (cond.contains("agent_id") && cond["agent_id"].is_string()) {
             out->set_agent_id(cond["agent_id"].get<std::string>());
@@ -416,9 +416,6 @@ MessageHandler::HandleResult MessageHandler::handle(const fleet::v1::ServerMessa
         case fleet::v1::ServerMessage::kDeployGraph:
             return handle_deploy_graph(message.deploy_graph());
 
-        case fleet::v1::ServerMessage::kExecuteGraph:
-            return handle_execute_graph(message.execute_graph());
-
         case fleet::v1::ServerMessage::kAck:
             // Server acknowledgment - just log
             log.debug("Received server ack for message: {}",
@@ -440,7 +437,7 @@ MessageHandler::HandleResult MessageHandler::handle_execute_command(
     const fleet::v1::ExecuteCommand& cmd) {
 
     log.info("Execute command: robot={}, action={}, command_id={}",
-             cmd.robot_id(), cmd.action_type(), cmd.command_id());
+             cmd.agent_id(), cmd.action_type(), cmd.command_id());
 
     if (deps_.command_processor) {
         deps_.command_processor->enqueue_execute_command(cmd, cmd.command_id());
@@ -451,7 +448,7 @@ MessageHandler::HandleResult MessageHandler::handle_execute_command(
     if (deps_.command_queue) {
         ActionRequest request;
         request.command_id = cmd.command_id();
-        request.robot_id = cmd.robot_id();
+        request.agent_id = cmd.agent_id();
         request.task_id = cmd.task_id();
         request.step_id = cmd.step_id();
         request.action_type = cmd.action_type();
@@ -470,11 +467,11 @@ MessageHandler::HandleResult MessageHandler::handle_cancel_command(
     const fleet::v1::CancelCommand& cmd) {
 
     log.info("Cancel command: robot={}, task={}, reason={}",
-             cmd.robot_id(), cmd.task_id(), cmd.reason());
+             cmd.agent_id(), cmd.task_id(), cmd.reason());
 
     // Forward to command processor for cancellation
     if (deps_.command_processor) {
-        deps_.command_processor->cancel_action(cmd.robot_id(), cmd.reason());
+        deps_.command_processor->cancel_action(cmd.agent_id(), cmd.reason());
     }
 
     return HandleResult{true, "", nullptr};
@@ -484,14 +481,14 @@ MessageHandler::HandleResult MessageHandler::handle_config_update(
     const fleet::v1::ConfigUpdate& update) {
 
     log.info("Config update: robot={}, version={}",
-             update.robot_id(), update.version());
+             update.agent_id(), update.version());
 
     // Parse state definition from bytes
     auto state_def = parse_state_definition(update);
     if (!state_def) {
-        log.error("Failed to parse state definition for robot {}", update.robot_id());
+        log.error("Failed to parse state definition for agent {}", update.agent_id());
         auto response = build_config_ack(
-            update.robot_id(), "", update.version(), update.correlation_id(),
+            update.agent_id(), update.version(),
             false, "Failed to parse state definition"
         );
         send_response(response);
@@ -501,23 +498,23 @@ MessageHandler::HandleResult MessageHandler::handle_config_update(
     // Store state definition
     if (deps_.state_storage) {
         deps_.state_storage->store(*state_def);
-        deps_.state_storage->map_robot(update.robot_id(), state_def->id);
+        deps_.state_storage->map_agent(update.agent_id(), state_def->id);
     }
 
     // Configure state tracker
     if (deps_.state_tracker_mgr) {
-        deps_.state_tracker_mgr->configure_robot(update.robot_id(), *state_def);
+        deps_.state_tracker_mgr->configure_agent(update.agent_id(), *state_def);
     }
 
     // Send acknowledgment
     auto response = build_config_ack(
-        update.robot_id(), state_def->id, state_def->version, update.correlation_id(),
+        update.agent_id(), state_def->version,
         true, ""
     );
     send_response(response);
 
-    log.info("Applied state definition {} (v{}) to robot {}",
-             state_def->id, state_def->version, update.robot_id());
+    log.info("Applied state definition {} (v{}) to agent {}",
+             state_def->id, state_def->version, update.agent_id());
 
     return HandleResult{true, "", response};
 }
@@ -635,79 +632,6 @@ MessageHandler::HandleResult MessageHandler::handle_deploy_graph(
     return HandleResult{true, "", response};
 }
 
-MessageHandler::HandleResult MessageHandler::handle_execute_graph(
-    const fleet::v1::ExecuteGraphRequest& exec) {
-
-    log.info("Execute graph: id={}, robot={}, execution_id={}",
-             exec.graph_id(), exec.robot_id(), exec.execution_id());
-
-    if (deps_.command_processor) {
-        deps_.command_processor->enqueue_execute_graph(exec);
-        return HandleResult{true, "", nullptr};
-    }
-
-    // Legacy fallback: attempt to run via GraphExecutor directly.
-    std::optional<fleet::v1::ActionGraph> graph;
-    if (deps_.graph_storage) {
-        graph = deps_.graph_storage->load(exec.graph_id());
-    }
-
-    if (!graph) {
-        log.error("Graph not found: {}", exec.graph_id());
-        auto response = build_graph_status(
-            exec.execution_id(),
-            exec.graph_id(),
-            exec.robot_id(),
-            static_cast<int>(fleet::v1::GRAPH_EXECUTION_FAILED),
-            "",
-            0.0f,
-            "Graph not found"
-        );
-        send_response(response);
-        return HandleResult{false, "Graph not found", response};
-    }
-
-    if (deps_.graph_executor) {
-        std::unordered_map<std::string, std::string> params;
-
-        if (!exec.params().empty()) {
-            try {
-                auto j = nlohmann::json::parse(
-                    reinterpret_cast<const char*>(exec.params().data()),
-                    reinterpret_cast<const char*>(exec.params().data()) + exec.params().size()
-                );
-                for (auto& [key, val] : j.items()) {
-                    params[key] = val.dump();
-                }
-            } catch (const std::exception& e) {
-                log.warn("Failed to parse execution params: {}", e.what());
-            }
-        }
-
-        auto ctx = deps_.graph_executor->start_execution(
-            exec.execution_id(),
-            exec.robot_id(),
-            *graph,
-            params
-        );
-
-        auto response = build_graph_status(
-            exec.execution_id(),
-            exec.graph_id(),
-            exec.robot_id(),
-            static_cast<int>(fleet::v1::GRAPH_EXECUTION_RUNNING),
-            ctx.current_vertex_id,
-            0.0f,
-            ""
-        );
-        send_response(response);
-
-        return HandleResult{true, "", response};
-    }
-
-    return HandleResult{false, "Graph executor not available", nullptr};
-}
-
 // ============================================================
 // Response Builders
 // ============================================================
@@ -753,35 +677,6 @@ std::shared_ptr<fleet::v1::AgentMessage> MessageHandler::build_pong_response(
     return msg;
 }
 
-std::shared_ptr<fleet::v1::AgentMessage> MessageHandler::build_graph_status(
-    const std::string& execution_id,
-    const std::string& graph_id,
-    const std::string& robot_id,
-    int state,
-    const std::string& current_vertex_id,
-    float progress,
-    const std::string& error) {
-
-    auto msg = std::make_shared<fleet::v1::AgentMessage>();
-    msg->set_agent_id(deps_.agent_id);
-    msg->set_timestamp_ms(now_ms());
-
-    auto* status = msg->mutable_graph_status();
-    status->set_execution_id(execution_id);
-    status->set_graph_id(graph_id);
-    status->set_robot_id(robot_id);
-    status->set_state(static_cast<fleet::v1::GraphExecutionState>(state));
-    status->set_current_vertex_id(current_vertex_id);
-    status->set_progress(progress);
-    status->set_updated_at_ms(now_ms());
-
-    if (!error.empty()) {
-        status->set_error(error);
-    }
-
-    return msg;
-}
-
 std::shared_ptr<fleet::v1::AgentMessage> MessageHandler::build_action_result(
     const ActionResultInternal& result) {
 
@@ -791,7 +686,7 @@ std::shared_ptr<fleet::v1::AgentMessage> MessageHandler::build_action_result(
 
     auto* action_result = msg->mutable_action_result();
     action_result->set_command_id(result.command_id);
-    action_result->set_robot_id(result.robot_id);
+    action_result->set_agent_id(result.agent_id);
     action_result->set_task_id(result.task_id);
     action_result->set_step_id(result.step_id);
     action_result->set_status(static_cast<fleet::v1::ActionStatus>(result.status));
@@ -804,10 +699,8 @@ std::shared_ptr<fleet::v1::AgentMessage> MessageHandler::build_action_result(
 }
 
 std::shared_ptr<fleet::v1::AgentMessage> MessageHandler::build_config_ack(
-    const std::string& robot_id,
-    const std::string& state_def_id,
+    const std::string& agent_id,
     int version,
-    const std::string& correlation_id,
     bool success,
     const std::string& error) {
 
@@ -816,13 +709,9 @@ std::shared_ptr<fleet::v1::AgentMessage> MessageHandler::build_config_ack(
     msg->set_timestamp_ms(now_ms());
 
     auto* ack = msg->mutable_config_ack();
-    ack->set_robot_id(robot_id);
-    ack->set_state_def_id(state_def_id);
+    ack->set_agent_id(agent_id);
     ack->set_version(version);
     ack->set_success(success);
-    if (!correlation_id.empty()) {
-        ack->set_correlation_id(correlation_id);
-    }
     if (!success && !error.empty()) {
         ack->set_error(error);
     }
@@ -892,10 +781,7 @@ std::optional<state::StateDefinition> MessageHandler::parse_state_definition(
 
         state::StateDefinition def = j.get<state::StateDefinition>();
 
-        // Override with proto fields if provided
-        if (!update.state_def_id().empty()) {
-            def.id = update.state_def_id();
-        }
+        // Override version with proto field if provided
         if (update.version() > 0) {
             def.version = update.version();
         }
@@ -919,11 +805,11 @@ CapabilityRegistrar::CapabilityRegistrar(
 }
 
 bool CapabilityRegistrar::register_capabilities(
-    const std::string& robot_id,
+    const std::string& agent_id,
     const std::vector<ActionCapability>& capabilities) {
 
     log.info("[DEBUG] register_capabilities called: robot={}, num_caps={}",
-              robot_id, capabilities.size());
+              agent_id, capabilities.size());
 
     // Debug: print each capability
     for (size_t i = 0; i < capabilities.size(); i++) {
@@ -931,7 +817,7 @@ bool CapabilityRegistrar::register_capabilities(
                   i, capabilities[i].action_type, capabilities[i].action_server);
     }
 
-    auto msg = build_registration_message(robot_id, capabilities);
+    auto msg = build_registration_message(agent_id, capabilities);
     if (!msg) {
         log.warn("[DEBUG] build_registration_message returned null");
         return false;
@@ -939,8 +825,8 @@ bool CapabilityRegistrar::register_capabilities(
 
     // Debug: verify protobuf message
     const auto& cap_reg = msg->capability_registration();
-    log.info("[DEBUG] Protobuf message: robot_id={}, capabilities_size={}",
-              cap_reg.robot_id(), cap_reg.capabilities_size());
+    log.info("[DEBUG] Protobuf message: agent_id={}, capabilities_size={}",
+              cap_reg.agent_id(), cap_reg.capabilities_size());
 
     for (int i = 0; i < cap_reg.capabilities_size(); i++) {
         const auto& cap = cap_reg.capabilities(i);
@@ -978,7 +864,7 @@ bool CapabilityRegistrar::register_capabilities(
 
                 if (sent) {
                     log.info("Registered {} capabilities for robot {} ({} bytes sent)",
-                             capabilities.size(), robot_id, data.size());
+                             capabilities.size(), agent_id, data.size());
                 }
                 return sent;
             }
@@ -993,8 +879,8 @@ bool CapabilityRegistrar::register_all(
     const std::vector<std::pair<std::string, std::vector<ActionCapability>>>& robot_capabilities) {
 
     bool all_success = true;
-    for (const auto& [robot_id, caps] : robot_capabilities) {
-        if (!register_capabilities(robot_id, caps)) {
+    for (const auto& [agent_id, caps] : robot_capabilities) {
+        if (!register_capabilities(agent_id, caps)) {
             all_success = false;
         }
     }
@@ -1002,7 +888,7 @@ bool CapabilityRegistrar::register_all(
 }
 
 std::shared_ptr<fleet::v1::AgentMessage> CapabilityRegistrar::build_registration_message(
-    const std::string& robot_id,
+    const std::string& agent_id,
     const std::vector<ActionCapability>& capabilities) {
 
     auto msg = std::make_shared<fleet::v1::AgentMessage>();
@@ -1011,7 +897,7 @@ std::shared_ptr<fleet::v1::AgentMessage> CapabilityRegistrar::build_registration
 
     // Use dedicated capability_registration message
     auto* registration = msg->mutable_capability_registration();
-    registration->set_robot_id(robot_id);
+    registration->set_agent_id(agent_id);
 
     // Add capabilities
     for (const auto& cap : capabilities) {

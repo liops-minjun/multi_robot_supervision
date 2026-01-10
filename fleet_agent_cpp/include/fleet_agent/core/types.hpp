@@ -183,7 +183,7 @@ struct OutboundMessage {
 
 struct ActionRequest {
     std::string command_id;
-    std::string robot_id;
+    std::string agent_id;
     std::string task_id;
     std::string step_id;
     std::string action_type;
@@ -199,7 +199,7 @@ struct ActionRequest {
 
 struct ActionResultInternal {
     std::string command_id;
-    std::string robot_id;
+    std::string agent_id;
     std::string task_id;
     std::string step_id;
     int status{0};  // ActionStatus enum
@@ -216,7 +216,7 @@ struct ActionResultInternal {
 // Capability store: action_server -> capability info (key is action_server, not action_type)
 using CapabilityStore = tbb::concurrent_hash_map<std::string, ActionCapability>;
 
-// Execution context: robot_id -> execution context
+// Execution context: agent_id -> execution context (1:1 model)
 using ExecutionContextMap = tbb::concurrent_hash_map<std::string, RobotExecutionContext>;
 
 // Message queues
@@ -228,15 +228,15 @@ using QuicOutboundQueue = tbb::concurrent_queue<OutboundMessage>;
 using CommandQueue = tbb::concurrent_queue<ActionRequest>;
 using ResultQueue = tbb::concurrent_queue<ActionResultInternal>;
 
-// Robot ID list
-using RobotIdVector = tbb::concurrent_vector<std::string>;
+// Agent ID list (1:1 model: agent_id = robot_id)
+using AgentIdVector = tbb::concurrent_vector<std::string>;
 
 // ============================================================
 // Callback Types
 // ============================================================
 
 using ActionResultCallback = std::function<void(const ActionResultInternal&)>;
-using ActionFeedbackCallback = std::function<void(const std::string& robot_id, float progress)>;
+using ActionFeedbackCallback = std::function<void(const std::string& agent_id, float progress)>;
 using ConnectionCallback = std::function<void(bool connected)>;
 
 // ============================================================

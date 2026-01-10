@@ -177,7 +177,7 @@ func isSelfOnlyCondition(cond StartCondition) bool {
 	if cond.TargetType != "" && strings.ToLower(cond.TargetType) != "self" {
 		return false
 	}
-	if cond.RobotID != "" || cond.AgentID != "" {
+	if cond.AgentID != "" {
 		return false
 	}
 	return true
@@ -297,32 +297,19 @@ func relTypeForEdge(edgeType string) string {
 	}
 }
 
-func decodeAgent(node neo4j.Node, robots []Robot) Agent {
+func decodeAgent(node neo4j.Node) Agent {
 	props := node.Props
 	return Agent{
-		ID:        getString(props, "id"),
-		Name:      getString(props, "name"),
-		IPAddress: toNullString(getString(props, "ip_address")),
-		Status:    getString(props, "status"),
-		LastSeen:  toNullTimeMillis(getInt64(props, "last_seen_ms")),
-		CreatedAt: time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
-		Robots:    robots,
-	}
-}
-
-func decodeRobot(node neo4j.Node) Robot {
-	props := node.Props
-	return Robot{
-		ID:            getString(props, "id"),
-		Name:          getString(props, "name"),
-		Namespace:     getString(props, "namespace"),
-		AgentID:       toNullString(getString(props, "agent_id")),
-		IPAddress:     toNullString(getString(props, "ip_address")),
-		Tags:          datatypes.JSON([]byte(getString(props, "tags_json"))),
-		LastSeen:      toNullTimeMillis(getInt64(props, "last_seen_ms")),
-		CurrentState:  getString(props, "current_state"),
-		CreatedAt:     time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
-		UpdatedAt:     time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
+		ID:           getString(props, "id"),
+		Name:         getString(props, "name"),
+		Namespace:    getString(props, "namespace"),
+		IPAddress:    toNullString(getString(props, "ip_address")),
+		Tags:         datatypes.JSON([]byte(getString(props, "tags_json"))),
+		LastSeen:     toNullTimeMillis(getInt64(props, "last_seen_ms")),
+		CurrentState: getString(props, "current_state"),
+		Status:       getString(props, "status"),
+		CreatedAt:    time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
+		UpdatedAt:    time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
 	}
 }
 
@@ -358,35 +345,16 @@ func decodeStateDefinition(node neo4j.Node) StateDefinition {
 func (r *Repository) GetAgent(id string) (*Agent, error) {
 	ctx := context.Background()
 	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
-		res, err := tx.Run(ctx, `
-			MATCH (a:Agent {id: $id})
-			OPTIONAL MATCH (a)-[:MANAGES]->(r:Robot)
-			RETURN a, collect(r) AS robots
-		`, map[string]any{"id": id})
+		res, err := tx.Run(ctx, `MATCH (a:Agent {id: $id}) RETURN a`, map[string]any{"id": id})
 		if err != nil {
 			return nil, err
 		}
 		if res.Next(ctx) {
-			record := res.Record()
-			aNode, _ := record.Get("a")
-			rNodes, _ := record.Get("robots")
-
-			agentNode, ok := aNode.(neo4j.Node)
-			if !ok {
-				return nil, nil
+			node, _ := res.Record().Get("a")
+			if agentNode, ok := node.(neo4j.Node); ok {
+				agent := decodeAgent(agentNode)
+				return &agent, nil
 			}
-
-			var robots []Robot
-			if list, ok := rNodes.([]any); ok {
-				for _, item := range list {
-					if node, ok := item.(neo4j.Node); ok {
-						robots = append(robots, decodeRobot(node))
-					}
-				}
-			}
-
-			agent := decodeAgent(agentNode, robots)
-			return &agent, nil
 		}
 		return nil, nil
 	})
@@ -402,33 +370,16 @@ func (r *Repository) GetAgent(id string) (*Agent, error) {
 func (r *Repository) GetAllAgents() ([]Agent, error) {
 	ctx := context.Background()
 	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
-		res, err := tx.Run(ctx, `
-			MATCH (a:Agent)
-			OPTIONAL MATCH (a)-[:MANAGES]->(r:Robot)
-			RETURN a, collect(r) AS robots
-		`, nil)
+		res, err := tx.Run(ctx, `MATCH (a:Agent) RETURN a`, nil)
 		if err != nil {
 			return nil, err
 		}
 		var agents []Agent
 		for res.Next(ctx) {
-			record := res.Record()
-			aNode, _ := record.Get("a")
-			rNodes, _ := record.Get("robots")
-
-			agentNode, ok := aNode.(neo4j.Node)
-			if !ok {
-				continue
+			node, _ := res.Record().Get("a")
+			if agentNode, ok := node.(neo4j.Node); ok {
+				agents = append(agents, decodeAgent(agentNode))
 			}
-			var robots []Robot
-			if list, ok := rNodes.([]any); ok {
-				for _, item := range list {
-					if node, ok := item.(neo4j.Node); ok {
-						robots = append(robots, decodeRobot(node))
-					}
-				}
-			}
-			agents = append(agents, decodeAgent(agentNode, robots))
 		}
 		return agents, res.Err()
 	})
@@ -515,154 +466,6 @@ func (r *Repository) DeleteAgent(id string) error {
 			MATCH (a:Agent {id: $id})
 			DETACH DELETE a
 		`, map[string]any{"id": id})
-		return nil, err
-	})
-	return err
-}
-
-// =============================================================================
-// Robot Operations
-// =============================================================================
-
-func (r *Repository) GetRobot(id string) (*Robot, error) {
-	ctx := context.Background()
-	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
-		res, err := tx.Run(ctx, `MATCH (r:Robot {id: $id}) RETURN r`, map[string]any{"id": id})
-		if err != nil {
-			return nil, err
-		}
-		if res.Next(ctx) {
-			node, _ := res.Record().Get("r")
-			if rNode, ok := node.(neo4j.Node); ok {
-				robot := decodeRobot(rNode)
-				return &robot, nil
-			}
-		}
-		return nil, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if result == nil {
-		return nil, nil
-	}
-	return result.(*Robot), nil
-}
-
-func (r *Repository) GetAllRobots() ([]Robot, error) {
-	ctx := context.Background()
-	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
-		res, err := tx.Run(ctx, `MATCH (r:Robot) RETURN r`, nil)
-		if err != nil {
-			return nil, err
-		}
-		var robots []Robot
-		for res.Next(ctx) {
-			node, _ := res.Record().Get("r")
-			if rNode, ok := node.(neo4j.Node); ok {
-				robots = append(robots, decodeRobot(rNode))
-			}
-		}
-		return robots, res.Err()
-	})
-	if err != nil {
-		return nil, err
-	}
-	return result.([]Robot), nil
-}
-
-func (r *Repository) DeleteRobot(id string) error {
-	ctx := context.Background()
-	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
-		_, err := tx.Run(ctx, `MATCH (r:Robot {id:$id}) DETACH DELETE r`, map[string]any{"id": id})
-		return nil, err
-	})
-	return err
-}
-
-func (r *Repository) GetRobotsByAgent(agentID string) ([]Robot, error) {
-	ctx := context.Background()
-	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
-		res, err := tx.Run(ctx, `
-			MATCH (a:Agent {id: $id})-[:MANAGES]->(r:Robot)
-			RETURN r
-		`, map[string]any{"id": agentID})
-		if err != nil {
-			return nil, err
-		}
-		var robots []Robot
-		for res.Next(ctx) {
-			node, _ := res.Record().Get("r")
-			if rNode, ok := node.(neo4j.Node); ok {
-				robots = append(robots, decodeRobot(rNode))
-			}
-		}
-		return robots, res.Err()
-	})
-	if err != nil {
-		return nil, err
-	}
-	return result.([]Robot), nil
-}
-
-func (r *Repository) UpdateRobotState(id, state string) error {
-	ctx := context.Background()
-	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
-		_, err := tx.Run(ctx, `
-			MATCH (r:Robot {id: $id})
-			SET r.current_state = $state,
-			    r.last_seen_ms = $now_ms,
-			    r.updated_at_ms = $now_ms
-		`, map[string]any{
-			"id":     id,
-			"state":  state,
-			"now_ms": time.Now().UTC().UnixMilli(),
-		})
-		return nil, err
-	})
-	return err
-}
-
-func (r *Repository) CreateOrUpdateRobot(robot *Robot) error {
-	if robot == nil {
-		return fmt.Errorf("robot is nil")
-	}
-	ctx := context.Background()
-	props := map[string]any{
-		"id":                  robot.ID,
-		"name":                robot.Name,
-		"namespace":           robot.Namespace,
-		"agent_id":            robot.AgentID.String,
-		"ip_address":          robot.IPAddress.String,
-		"tags_json":           string(robot.Tags),
-		"last_seen_ms":        timeToMillis(robot.LastSeen.Time),
-		"current_state":       robot.CurrentState,
-		"created_at_ms":       timeToMillis(robot.CreatedAt),
-		"updated_at_ms":       timeToMillis(robot.UpdatedAt),
-	}
-	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
-		_, err := tx.Run(ctx, `
-			MERGE (r:Robot {id: $id})
-			SET r.name = $name,
-			    r.namespace = $namespace,
-			    r.agent_id = $agent_id,
-			    r.ip_address = $ip_address,
-			    r.tags_json = $tags_json,
-			    r.last_seen_ms = $last_seen_ms,
-			    r.current_state = $current_state,
-			    r.created_at_ms = coalesce(r.created_at_ms, $created_at_ms),
-			    r.updated_at_ms = $updated_at_ms
-		`, props)
-		if err != nil {
-			return nil, err
-		}
-		if props["agent_id"] != "" {
-			_, err = tx.Run(ctx, `
-				MATCH (r:Robot {id:$id})
-				MERGE (a:Agent {id:$agent_id})
-				MERGE (a)-[:MANAGES]->(r)
-			`, map[string]any{"id": robot.ID, "agent_id": props["agent_id"]})
-		}
 		return nil, err
 	})
 	return err
@@ -1061,7 +864,6 @@ func (r *Repository) storeActionGraphStructure(ctx context.Context, tx neo4j.Man
 				"operator":          operator,
 				"quantifier":        cond.Quantifier,
 				"target_type":       cond.TargetType,
-				"robot_id":          cond.RobotID,
 				"agent_id":          cond.AgentID,
 				"state_operator":    cond.StateOperator,
 				"state":             cond.State,
@@ -1082,7 +884,6 @@ func (r *Repository) storeActionGraphStructure(ctx context.Context, tx neo4j.Man
 					operator: $operator,
 					quantifier: $quantifier,
 					target_type: $target_type,
-					robot_id: $robot_id,
 					agent_id: $agent_id,
 					state_operator: $state_operator,
 					state: $state,
@@ -1619,7 +1420,7 @@ func (r *Repository) GetTask(id string) (*Task, error) {
 				task := Task{
 					ID:               getString(props, "id"),
 					ActionGraphID:    toNullString(getString(props, "action_graph_id")),
-					RobotID:          toNullString(getString(props, "robot_id")),
+					AgentID:          toNullString(getString(props, "agent_id")),
 					Status:           getString(props, "status"),
 					CurrentStepID:    toNullString(getString(props, "current_step_id")),
 					CurrentStepIndex: int(getInt64(props, "current_step_index")),
@@ -1648,20 +1449,20 @@ func (r *Repository) GetActiveTasks() ([]Task, error) {
 	return r.GetTasks("", "running")
 }
 
-func (r *Repository) GetTasksByRobot(robotID string) ([]Task, error) {
-	return r.GetTasks(robotID, "")
+func (r *Repository) GetTasksByAgent(agentID string) ([]Task, error) {
+	return r.GetTasks(agentID, "")
 }
 
-func (r *Repository) GetTasks(robotID, status string) ([]Task, error) {
+func (r *Repository) GetTasks(agentID, status string) ([]Task, error) {
 	ctx := context.Background()
 	query := "MATCH (t:Task) "
 	params := map[string]any{}
-	if robotID != "" {
-		query += "WHERE t.robot_id = $robot_id "
-		params["robot_id"] = robotID
+	if agentID != "" {
+		query += "WHERE t.agent_id = $agent_id "
+		params["agent_id"] = agentID
 	}
 	if status != "" {
-		if robotID != "" {
+		if agentID != "" {
 			query += "AND t.status = $status "
 		} else {
 			query += "WHERE t.status = $status "
@@ -1683,7 +1484,7 @@ func (r *Repository) GetTasks(robotID, status string) ([]Task, error) {
 				tasks = append(tasks, Task{
 					ID:               getString(props, "id"),
 					ActionGraphID:    toNullString(getString(props, "action_graph_id")),
-					RobotID:          toNullString(getString(props, "robot_id")),
+					AgentID:          toNullString(getString(props, "agent_id")),
 					Status:           getString(props, "status"),
 					CurrentStepID:    toNullString(getString(props, "current_step_id")),
 					CurrentStepIndex: int(getInt64(props, "current_step_index")),
@@ -1712,7 +1513,7 @@ func (r *Repository) CreateTask(task *Task) error {
 	props := map[string]any{
 		"id":                 task.ID,
 		"action_graph_id":    task.ActionGraphID.String,
-		"robot_id":           task.RobotID.String,
+		"agent_id":           task.AgentID.String,
 		"status":             task.Status,
 		"current_step_id":    task.CurrentStepID.String,
 		"current_step_index": task.CurrentStepIndex,
@@ -1728,7 +1529,7 @@ func (r *Repository) CreateTask(task *Task) error {
 			CREATE (t:Task {
 				id: $id,
 				action_graph_id: $action_graph_id,
-				robot_id: $robot_id,
+				agent_id: $agent_id,
 				status: $status,
 				current_step_id: $current_step_id,
 				current_step_index: $current_step_index,
@@ -1813,7 +1614,7 @@ func (r *Repository) CreateCommand(cmd *CommandQueue) error {
 	ctx := context.Background()
 	props := map[string]any{
 		"id":              cmd.ID,
-		"robot_id":        cmd.RobotID.String,
+		"agent_id":        cmd.AgentID.String,
 		"command_type":    cmd.CommandType,
 		"payload_json":    string(cmd.Payload),
 		"status":          cmd.Status,
@@ -1825,7 +1626,7 @@ func (r *Repository) CreateCommand(cmd *CommandQueue) error {
 		_, err := tx.Run(ctx, `
 			CREATE (c:CommandQueue {
 				id: $id,
-				robot_id: $robot_id,
+				agent_id: $agent_id,
 				command_type: $command_type,
 				payload_json: $payload_json,
 				status: $status,
@@ -1839,14 +1640,14 @@ func (r *Repository) CreateCommand(cmd *CommandQueue) error {
 	return err
 }
 
-func (r *Repository) GetPendingCommands(robotID string) ([]CommandQueue, error) {
+func (r *Repository) GetPendingCommands(agentID string) ([]CommandQueue, error) {
 	ctx := context.Background()
 	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
 		res, err := tx.Run(ctx, `
-			MATCH (c:CommandQueue {robot_id:$robot_id, status:'pending'})
+			MATCH (c:CommandQueue {agent_id:$agent_id, status:'pending'})
 			RETURN c
 			ORDER BY c.created_at_ms ASC
-		`, map[string]any{"robot_id": robotID})
+		`, map[string]any{"agent_id": agentID})
 		if err != nil {
 			return nil, err
 		}
@@ -1857,7 +1658,7 @@ func (r *Repository) GetPendingCommands(robotID string) ([]CommandQueue, error) 
 				props := cNode.Props
 				cmds = append(cmds, CommandQueue{
 					ID:          getString(props, "id"),
-					RobotID:     toNullString(getString(props, "robot_id")),
+					AgentID:     toNullString(getString(props, "agent_id")),
 					CommandType: getString(props, "command_type"),
 					Payload:     datatypes.JSON([]byte(getString(props, "payload_json"))),
 					Status:      getString(props, "status"),
@@ -1912,7 +1713,7 @@ func (r *Repository) GetCommand(id string) (*CommandQueue, error) {
 				props := cNode.Props
 				cmd := CommandQueue{
 					ID:          getString(props, "id"),
-					RobotID:     toNullString(getString(props, "robot_id")),
+					AgentID:     toNullString(getString(props, "agent_id")),
 					CommandType: getString(props, "command_type"),
 					Payload:     datatypes.JSON([]byte(getString(props, "payload_json"))),
 					Status:      getString(props, "status"),
@@ -2287,294 +2088,8 @@ func (r *Repository) DeleteTemplateAssignments(templateID string) {
 }
 
 // =============================================================================
-// Capability Operations
+// Capability Operations (Agent-based)
 // =============================================================================
-
-func (r *Repository) GetRobotCapabilities(robotID string) ([]RobotCapability, error) {
-	ctx := context.Background()
-	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
-		res, err := tx.Run(ctx, `
-			MATCH (c:RobotCapability {robot_id:$robot_id})
-			RETURN c
-		`, map[string]any{"robot_id": robotID})
-		if err != nil {
-			return nil, err
-		}
-		var caps []RobotCapability
-		for res.Next(ctx) {
-			node, _ := res.Record().Get("c")
-			if cNode, ok := node.(neo4j.Node); ok {
-				props := cNode.Props
-				caps = append(caps, RobotCapability{
-					ID:              getString(props, "id"),
-					RobotID:         getString(props, "robot_id"),
-					ActionType:      getString(props, "action_type"),
-					ActionServer:    getString(props, "action_server"),
-					GoalSchema:      datatypes.JSON([]byte(getString(props, "goal_schema_json"))),
-					ResultSchema:    datatypes.JSON([]byte(getString(props, "result_schema_json"))),
-					FeedbackSchema:  datatypes.JSON([]byte(getString(props, "feedback_schema_json"))),
-					SuccessCriteria: datatypes.JSON([]byte(getString(props, "success_criteria_json"))),
-					Status:          getString(props, "status"),
-					IsAvailable:     getBool(props, "is_available"),
-					LastUsedAt:      toNullTimeMillis(getInt64(props, "last_used_at_ms")),
-					DiscoveredAt:    time.UnixMilli(getInt64(props, "discovered_at_ms")).UTC(),
-					UpdatedAt:       time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
-				})
-			}
-		}
-		return caps, res.Err()
-	})
-	if err != nil {
-		return nil, err
-	}
-	return result.([]RobotCapability), nil
-}
-
-func (r *Repository) GetRobotCapability(robotID, actionType string) (*RobotCapability, error) {
-	ctx := context.Background()
-	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
-		res, err := tx.Run(ctx, `
-			MATCH (c:RobotCapability {robot_id:$robot_id, action_type:$action_type})
-			RETURN c
-		`, map[string]any{"robot_id": robotID, "action_type": actionType})
-		if err != nil {
-			return nil, err
-		}
-		if res.Next(ctx) {
-			node, _ := res.Record().Get("c")
-			if cNode, ok := node.(neo4j.Node); ok {
-				props := cNode.Props
-				cap := RobotCapability{
-					ID:              getString(props, "id"),
-					RobotID:         getString(props, "robot_id"),
-					ActionType:      getString(props, "action_type"),
-					ActionServer:    getString(props, "action_server"),
-					GoalSchema:      datatypes.JSON([]byte(getString(props, "goal_schema_json"))),
-					ResultSchema:    datatypes.JSON([]byte(getString(props, "result_schema_json"))),
-					FeedbackSchema:  datatypes.JSON([]byte(getString(props, "feedback_schema_json"))),
-					SuccessCriteria: datatypes.JSON([]byte(getString(props, "success_criteria_json"))),
-					Status:          getString(props, "status"),
-					IsAvailable:     getBool(props, "is_available"),
-					LastUsedAt:      toNullTimeMillis(getInt64(props, "last_used_at_ms")),
-					DiscoveredAt:    time.UnixMilli(getInt64(props, "discovered_at_ms")).UTC(),
-					UpdatedAt:       time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
-				}
-				return &cap, nil
-			}
-		}
-		return nil, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if result == nil {
-		return nil, nil
-	}
-	return result.(*RobotCapability), nil
-}
-
-func (r *Repository) CreateOrUpdateCapability(cap *RobotCapability) error {
-	if cap == nil {
-		return fmt.Errorf("capability is nil")
-	}
-	ctx := context.Background()
-	props := map[string]any{
-		"id":                    cap.ID,
-		"robot_id":              cap.RobotID,
-		"action_type":           cap.ActionType,
-		"action_server":         cap.ActionServer,
-		"goal_schema_json":      string(cap.GoalSchema),
-		"result_schema_json":    string(cap.ResultSchema),
-		"feedback_schema_json":  string(cap.FeedbackSchema),
-		"success_criteria_json": string(cap.SuccessCriteria),
-		"status":                cap.Status,
-		"is_available":          cap.IsAvailable,
-		"last_used_at_ms":       timeToMillis(cap.LastUsedAt.Time),
-		"discovered_at_ms":      timeToMillis(cap.DiscoveredAt),
-		"updated_at_ms":         timeToMillis(cap.UpdatedAt),
-	}
-	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
-		_, err := tx.Run(ctx, `
-			MERGE (c:RobotCapability {id:$id})
-			SET c.robot_id = $robot_id,
-			    c.action_type = $action_type,
-			    c.action_server = $action_server,
-			    c.goal_schema_json = $goal_schema_json,
-			    c.result_schema_json = $result_schema_json,
-			    c.feedback_schema_json = $feedback_schema_json,
-			    c.success_criteria_json = $success_criteria_json,
-			    c.status = $status,
-			    c.is_available = $is_available,
-			    c.last_used_at_ms = $last_used_at_ms,
-			    c.discovered_at_ms = coalesce(c.discovered_at_ms, $discovered_at_ms),
-			    c.updated_at_ms = $updated_at_ms
-		`, props)
-		return nil, err
-	})
-	return err
-}
-
-func (r *Repository) DeleteRobotCapabilities(robotID string) error {
-	ctx := context.Background()
-	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
-		_, err := tx.Run(ctx, `
-			MATCH (c:RobotCapability {robot_id:$robot_id})
-			DETACH DELETE c
-		`, map[string]any{"robot_id": robotID})
-		return nil, err
-	})
-	return err
-}
-
-func (r *Repository) UpdateCapabilityStatus(robotID, actionType, status string, isAvailable bool) error {
-	ctx := context.Background()
-	props := map[string]any{
-		"robot_id":     robotID,
-		"action_type":  actionType,
-		"status":       status,
-		"is_available": isAvailable,
-		"now_ms":       time.Now().UTC().UnixMilli(),
-	}
-	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
-		_, err := tx.Run(ctx, `
-			MATCH (c:RobotCapability {robot_id:$robot_id, action_type:$action_type})
-			SET c.status = $status,
-			    c.is_available = $is_available,
-			    c.updated_at_ms = $now_ms
-		`, props)
-		return nil, err
-	})
-	return err
-}
-
-func (r *Repository) BulkUpdateCapabilityStatus(robotID string, statusMap map[string]struct {
-	Status    string
-	Available bool
-}) error {
-	for actionType, status := range statusMap {
-		if err := r.UpdateCapabilityStatus(robotID, actionType, status.Status, status.Available); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (r *Repository) GetCapabilitiesByActionType(actionType string) ([]RobotCapability, error) {
-	ctx := context.Background()
-	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
-		res, err := tx.Run(ctx, `
-			MATCH (c:RobotCapability {action_type:$action_type})
-			RETURN c
-		`, map[string]any{"action_type": actionType})
-		if err != nil {
-			return nil, err
-		}
-		var caps []RobotCapability
-		for res.Next(ctx) {
-			node, _ := res.Record().Get("c")
-			if cNode, ok := node.(neo4j.Node); ok {
-				props := cNode.Props
-				caps = append(caps, RobotCapability{
-					ID:              getString(props, "id"),
-					RobotID:         getString(props, "robot_id"),
-					ActionType:      getString(props, "action_type"),
-					ActionServer:    getString(props, "action_server"),
-					GoalSchema:      datatypes.JSON([]byte(getString(props, "goal_schema_json"))),
-					ResultSchema:    datatypes.JSON([]byte(getString(props, "result_schema_json"))),
-					FeedbackSchema:  datatypes.JSON([]byte(getString(props, "feedback_schema_json"))),
-					SuccessCriteria: datatypes.JSON([]byte(getString(props, "success_criteria_json"))),
-					Status:          getString(props, "status"),
-					IsAvailable:     getBool(props, "is_available"),
-					LastUsedAt:      toNullTimeMillis(getInt64(props, "last_used_at_ms")),
-					DiscoveredAt:    time.UnixMilli(getInt64(props, "discovered_at_ms")).UTC(),
-					UpdatedAt:       time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
-				})
-			}
-		}
-		return caps, res.Err()
-	})
-	if err != nil {
-		return nil, err
-	}
-	return result.([]RobotCapability), nil
-}
-
-func (r *Repository) GetAvailableCapabilities() ([]RobotCapability, error) {
-	ctx := context.Background()
-	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
-		res, err := tx.Run(ctx, `
-			MATCH (c:RobotCapability {is_available:true})
-			RETURN c
-		`, nil)
-		if err != nil {
-			return nil, err
-		}
-		var caps []RobotCapability
-		for res.Next(ctx) {
-			node, _ := res.Record().Get("c")
-			if cNode, ok := node.(neo4j.Node); ok {
-				props := cNode.Props
-				caps = append(caps, RobotCapability{
-					ID:              getString(props, "id"),
-					RobotID:         getString(props, "robot_id"),
-					ActionType:      getString(props, "action_type"),
-					ActionServer:    getString(props, "action_server"),
-					GoalSchema:      datatypes.JSON([]byte(getString(props, "goal_schema_json"))),
-					ResultSchema:    datatypes.JSON([]byte(getString(props, "result_schema_json"))),
-					FeedbackSchema:  datatypes.JSON([]byte(getString(props, "feedback_schema_json"))),
-					SuccessCriteria: datatypes.JSON([]byte(getString(props, "success_criteria_json"))),
-					Status:          getString(props, "status"),
-					IsAvailable:     getBool(props, "is_available"),
-					LastUsedAt:      toNullTimeMillis(getInt64(props, "last_used_at_ms")),
-					DiscoveredAt:    time.UnixMilli(getInt64(props, "discovered_at_ms")).UTC(),
-					UpdatedAt:       time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
-				})
-			}
-		}
-		return caps, res.Err()
-	})
-	if err != nil {
-		return nil, err
-	}
-	return result.([]RobotCapability), nil
-}
-
-func (r *Repository) GetUniqueActionTypes() ([]string, error) {
-	ctx := context.Background()
-	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
-		res, err := tx.Run(ctx, `MATCH (c:RobotCapability) RETURN DISTINCT c.action_type AS action_type`, nil)
-		if err != nil {
-			return nil, err
-		}
-		var types []string
-		for res.Next(ctx) {
-			if val, ok := res.Record().Get("action_type"); ok {
-				if s, ok := val.(string); ok {
-					types = append(types, s)
-				}
-			}
-		}
-		return types, res.Err()
-	})
-	if err != nil {
-		return nil, err
-	}
-	return result.([]string), nil
-}
-
-func (r *Repository) SyncRobotCapabilities(robotID string, capabilities []RobotCapability) error {
-	if err := r.DeleteRobotCapabilities(robotID); err != nil {
-		return err
-	}
-	for _, cap := range capabilities {
-		c := cap
-		c.RobotID = robotID
-		if err := r.CreateOrUpdateCapability(&c); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
 func (r *Repository) SyncAgentCapabilities(agentID string, capabilities []AgentCapability) error {
 	ctx := context.Background()
@@ -2696,6 +2211,25 @@ func (r *Repository) GetAllAgentCapabilities() ([]AgentCapability, error) {
 		return nil, err
 	}
 	return result.([]AgentCapability), nil
+}
+
+// UpdateAgentCapabilityStatus updates the status and availability of an agent capability
+func (r *Repository) UpdateAgentCapabilityStatus(agentID, actionType, status string, available bool) error {
+	ctx := context.Background()
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		_, err := tx.Run(ctx, `
+			MATCH (c:AgentCapability {agent_id: $agent_id, action_type: $action_type})
+			SET c.status = $status, c.is_available = $available, c.updated_at_ms = $updated_at_ms
+		`, map[string]any{
+			"agent_id":      agentID,
+			"action_type":   actionType,
+			"status":        status,
+			"available":     available,
+			"updated_at_ms": time.Now().UnixMilli(),
+		})
+		return nil, err
+	})
+	return err
 }
 
 func (r *Repository) GetAgentActionTypes(agentID string) ([]string, error) {

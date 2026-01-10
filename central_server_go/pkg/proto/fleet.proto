@@ -41,11 +41,7 @@ message AgentMessage {
 }
 
 message AgentHeartbeat {
-  map<string, RobotHeartbeat> robots = 1;
-}
-
-message RobotHeartbeat {
-  string robot_id = 1;
+  string agent_id = 1;
   string state = 2;
   bool is_executing = 3;
   string current_action = 4;
@@ -54,7 +50,7 @@ message RobotHeartbeat {
 
 message AgentStatusUpdate {
   AgentState state = 1;
-  repeated string online_robots = 2;
+  bool is_online = 2;
   string message = 3;
 }
 
@@ -84,7 +80,7 @@ message ServerMessage {
 
 message ExecuteCommand {
   string command_id = 1;
-  string robot_id = 2;
+  string agent_id = 2;
   string task_id = 3;
   string step_id = 4;
   string action_type = 5;      // e.g., "nav2_msgs/NavigateToPose"
@@ -96,7 +92,7 @@ message ExecuteCommand {
 
 message CancelCommand {
   string command_id = 1;
-  string robot_id = 2;
+  string agent_id = 2;
   string task_id = 3;
   string reason = 4;
 }
@@ -108,7 +104,7 @@ message ServerAck {
 }
 
 message ConfigUpdate {
-  string robot_id = 1;
+  string agent_id = 1;
   bytes state_definition = 2;  // JSON-encoded state definition
   int32 version = 3;
 }
@@ -119,7 +115,7 @@ message ConfigUpdate {
 
 message ActionResult {
   string command_id = 1;
-  string robot_id = 2;
+  string agent_id = 2;
   string task_id = 3;
   string step_id = 4;
   ActionStatus status = 5;
@@ -145,26 +141,19 @@ enum ActionStatus {
 message RegisterAgentRequest {
   string agent_id = 1;
   string name = 2;
-  repeated RobotInfo robots = 3;
+  string namespace = 3;        // ROS namespace
   string client_version = 4;
-}
-
-message RobotInfo {
-  string robot_id = 1;
-  reserved 2;
-  string ros_namespace = 3;
-  string name = 4;
 }
 
 message RegisterAgentResponse {
   bool success = 1;
   string error = 2;
-  repeated RobotConfig robot_configs = 3;
+  AgentConfig config = 3;
   int64 server_time_ms = 4;
 }
 
-message RobotConfig {
-  string robot_id = 1;
+message AgentConfig {
+  string agent_id = 1;
   bytes state_definition = 2;
   bytes action_definitions = 3;
 }
@@ -175,7 +164,7 @@ message RobotConfig {
 
 message ExecuteTaskRequest {
   string action_graph_id = 1;
-  string robot_id = 2;
+  string agent_id = 2;
   bytes params = 3;            // JSON-encoded parameters
   string requester = 4;
 }
@@ -201,20 +190,20 @@ message CancelTaskResponse {
 // ============================================================
 
 message FleetStateRequest {
-  repeated string robot_ids = 1;  // Empty = all robots
+  repeated string agent_ids = 1;  // Empty = all agents
   bool include_zones = 2;
 }
 
 message FleetStateResponse {
   int64 timestamp_ms = 1;
-  map<string, RobotStateSnapshot> robots = 2;
+  map<string, AgentStateSnapshot> agents = 2;
   repeated ZoneReservation zones = 3;
 }
 
-message RobotStateSnapshot {
-  string robot_id = 1;
-  string robot_name = 2;
-  string agent_id = 3;
+message AgentStateSnapshot {
+  string agent_id = 1;
+  string agent_name = 2;
+  reserved 3;
   reserved 4;
   string state = 5;
   bool is_online = 6;
@@ -223,11 +212,12 @@ message RobotStateSnapshot {
   reserved 9, 10;
   optional string current_task_id = 11;
   optional string current_step_id = 12;
+  string namespace = 13;
 }
 
 message ZoneReservation {
   string zone_id = 1;
-  string robot_id = 2;
+  string agent_id = 2;
   int64 reserved_at_ms = 3;
   int64 expires_at_ms = 4;
 }

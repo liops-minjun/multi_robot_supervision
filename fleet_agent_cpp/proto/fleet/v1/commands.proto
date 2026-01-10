@@ -15,7 +15,7 @@ option cc_enable_arenas = true;
 
 message ExecuteCommand {
   string command_id = 1;
-  string robot_id = 2;
+  string agent_id = 2;
   string task_id = 3;
   string step_id = 4;
   string action_type = 5;      // e.g., "nav2_msgs/NavigateToPose"
@@ -39,7 +39,7 @@ message ExecuteCommand {
 
 message CancelCommand {
   string command_id = 1;
-  string robot_id = 2;
+  string agent_id = 2;
   string task_id = 3;
   string reason = 4;
 }
@@ -69,7 +69,7 @@ message PongResponse {
 
 message ActionResult {
   string command_id = 1;
-  string robot_id = 2;
+  string agent_id = 2;
   string task_id = 3;
   string step_id = 4;
   ActionStatus status = 5;
@@ -85,7 +85,7 @@ message ActionResult {
 
 message ActionFeedback {
   string command_id = 1;
-  string robot_id = 2;
+  string agent_id = 2;
   string task_id = 3;
   string step_id = 4;
   float progress = 5;          // 0.0 - 1.0
@@ -98,11 +98,9 @@ message ActionFeedback {
 // ============================================================
 
 message ConfigUpdate {
-  string robot_id = 1;
-  string state_def_id = 2;        // State definition ID
-  bytes state_definition = 3;    // JSON-encoded state definition
-  int32 version = 4;
-  string correlation_id = 5;     // For tracking request/response
+  string agent_id = 1;
+  bytes state_definition = 2;  // JSON-encoded state definition
+  int32 version = 3;
 }
 
 // ============================================================
@@ -110,10 +108,8 @@ message ConfigUpdate {
 // ============================================================
 
 message ConfigUpdateAck {
-  string robot_id = 1;
-  string state_def_id = 2;
-  int32 version = 3;
-  bool success = 4;
-  string error = 5;
-  string correlation_id = 6;
+  string agent_id = 1;
+  int32 version = 2;
+  bool success = 3;
+  string error = 4;
 }

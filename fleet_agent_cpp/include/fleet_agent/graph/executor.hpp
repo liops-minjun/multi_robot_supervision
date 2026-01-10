@@ -50,7 +50,7 @@ public:
     struct ExecutionContext {
         std::string execution_id;
         std::string graph_id;
-        std::string robot_id;
+        std::string agent_id;
 
         // Current position
         std::string current_vertex_id;
@@ -87,14 +87,14 @@ public:
      * Start a new graph execution.
      *
      * @param execution_id Unique execution identifier
-     * @param robot_id Robot to execute on
+     * @param agent_id Robot to execute on
      * @param graph Action graph to execute
      * @param params Initial parameters
      * @return Execution context
      */
     ExecutionContext start_execution(
         const std::string& execution_id,
-        const std::string& robot_id,
+        const std::string& agent_id,
         const fleet::v1::ActionGraph& graph,
         const std::unordered_map<std::string, std::string>& params = {}
     );

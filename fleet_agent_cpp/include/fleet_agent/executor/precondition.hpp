@@ -57,7 +57,7 @@ public:
      * Evaluation context containing all available data.
      */
     struct Context {
-        std::string robot_id;  // Own robot ID
+        std::string agent_id;  // Own robot ID
         state::StateTrackerManager* state_tracker_mgr{nullptr};
         const ExecutionContextMap* execution_contexts{nullptr};
         const std::unordered_map<std::string, std::string>* variables{nullptr};
@@ -73,7 +73,6 @@ public:
         std::string operator_name;
         std::string quantifier;
         std::string target_type;
-        std::string robot_id;
         std::string agent_id;
         std::string state;
         std::string state_operator;
@@ -94,13 +93,13 @@ public:
      * Check start_condition for Hybrid control.
      *
      * @param start_condition Condition expression
-     * @param robot_id Own robot ID
+     * @param agent_id Own robot ID
      * @param ctx Evaluation context
      * @return Evaluation result
      */
     Result check_start_condition(
         const std::string& start_condition,
-        const std::string& robot_id,
+        const std::string& agent_id,
         const Context& ctx
     );
 
@@ -144,7 +143,7 @@ private:
         };
 
         Type type;
-        std::string target;      // robot_id or variable name
+        std::string target;      // agent_id or variable name
         std::string field;       // state, is_executing, etc.
         std::string op;          // ==, !=, <, >, <=, >=
         std::string value;       // expected value
@@ -170,7 +169,7 @@ private:
      * Check robot state condition against context.
      */
     bool check_robot_state(
-        const std::string& robot_id,
+        const std::string& agent_id,
         const std::string& expected_state,
         const std::string& op,
         const Context& ctx
@@ -180,7 +179,7 @@ private:
      * Check robot field (is_executing, etc.).
      */
     bool check_robot_field(
-        const std::string& robot_id,
+        const std::string& agent_id,
         const std::string& field,
         const std::string& expected_value,
         const std::string& op,

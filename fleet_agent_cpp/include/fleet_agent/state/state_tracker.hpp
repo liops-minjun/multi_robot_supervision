@@ -47,7 +47,7 @@ struct StateTransition {
 class StateTracker {
 public:
     using StateChangeCallback = std::function<void(
-        const std::string& robot_id,
+        const std::string& agent_id,
         const std::string& old_state,
         const std::string& new_state
     )>;
@@ -55,11 +55,11 @@ public:
     /**
      * Constructor.
      *
-     * @param robot_id Robot identifier
+     * @param agent_id Robot identifier
      * @param default_state Initial state (default: "idle")
      */
     explicit StateTracker(
-        const std::string& robot_id,
+        const std::string& agent_id,
         const std::string& default_state = "idle"
     );
 
@@ -124,7 +124,7 @@ public:
     /**
      * Get robot ID.
      */
-    const std::string& robot_id() const { return robot_id_; }
+    const std::string& agent_id() const { return agent_id_; }
 
     // ============================================================
     // State Transitions
@@ -234,7 +234,7 @@ public:
     std::chrono::milliseconds time_in_current_state() const;
 
 private:
-    std::string robot_id_;
+    std::string agent_id_;
     std::string current_state_;
     std::string default_state_;
     std::vector<std::string> available_states_;
@@ -293,13 +293,13 @@ public:
     /**
      * Get or create state tracker for robot.
      */
-    std::shared_ptr<StateTracker> get_tracker(const std::string& robot_id);
+    std::shared_ptr<StateTracker> get_tracker(const std::string& agent_id);
 
     /**
      * Configure tracker with state definition.
      */
-    void configure_robot(
-        const std::string& robot_id,
+    void configure_agent(
+        const std::string& agent_id,
         const StateDefinition& def
     );
 

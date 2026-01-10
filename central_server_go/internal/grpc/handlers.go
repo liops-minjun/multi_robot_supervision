@@ -30,12 +30,12 @@ type FleetControlHandler struct {
 }
 
 // CommandHandler is a callback for handling specific command types
-type CommandHandler func(ctx context.Context, robotID string, result *ActionResult) error
+type CommandHandler func(ctx context.Context, agentID string, result *ActionResult) error
 
 // PendingCommand tracks an outstanding command
 type PendingCommand struct {
 	CommandID   string
-	RobotID     string
+	AgentID     string
 	TaskID      string
 	StepID      string
 	SentAt      time.Time
@@ -46,7 +46,7 @@ type PendingCommand struct {
 // ActionResult represents the result of an action execution
 type ActionResult struct {
 	CommandID     string
-	RobotID       string
+	AgentID       string
 	TaskID        string
 	StepID        string
 	Status        ActionStatus
@@ -68,10 +68,10 @@ const (
 	ActionStatusRejected  ActionStatus = 5
 )
 
-// ExecuteCommand represents a command to execute on a robot
+// ExecuteCommand represents a command to execute on an agent
 type ExecuteCommand struct {
 	CommandID    string
-	RobotID      string
+	AgentID      string
 	TaskID       string
 	StepID       string
 	ActionType   string
@@ -99,37 +99,30 @@ func NewFleetControlHandler(stateManager *state.GlobalStateManager, repo *db.Rep
 // Agent Registration
 // ============================================================
 
-// RegisterAgentRequest represents an agent registration request
+// RegisterAgentRequest represents an agent registration request (1:1 model)
 type RegisterAgentRequest struct {
 	AgentID       string
 	Name          string
-	Robots        []RobotInfo
+	Namespace     string // ROS namespace
 	ClientVersion string
-}
-
-// RobotInfo represents robot information from registration
-type RobotInfo struct {
-	RobotID      string
-	ROSNamespace string
-	Name         string
 }
 
 // RegisterAgentResponse represents a registration response
 type RegisterAgentResponse struct {
 	Success      bool
 	Error        string
-	RobotConfigs []RobotConfig
+	Config       *AgentConfigMsg
 	ServerTimeMs int64
 }
 
-// RobotConfig represents robot configuration to send to agent
-type RobotConfig struct {
-	RobotID           string
+// AgentConfigMsg represents agent configuration to send to agent
+type AgentConfigMsg struct {
+	AgentID           string
 	StateDefinition   []byte
 	ActionDefinitions []byte
 }
 
-// RegisterAgent handles agent registration
+// RegisterAgent handles agent registration (1:1 model: agent_id = robot_id)
 func (h *FleetControlHandler) RegisterAgent(ctx context.Context, req *RegisterAgentRequest) (*RegisterAgentResponse, error) {
 	log.Printf("Agent registration request: %s (%s)", req.AgentID, req.Name)
 
@@ -142,22 +135,16 @@ func (h *FleetControlHandler) RegisterAgent(ctx context.Context, req *RegisterAg
 		}, nil
 	}
 
-	// Collect robot IDs
-	robotIDs := make([]string, len(req.Robots))
-	for i, r := range req.Robots {
-		robotIDs[i] = r.RobotID
+	// Register robot in state manager (agent_id = robot_id in 1:1 model)
+	h.stateManager.RegisterRobot(
+		req.AgentID,
+		req.Name,
+		req.AgentID,
+		"idle",
+	)
 
-		// Register robot in state manager
-		h.stateManager.RegisterRobot(
-			r.RobotID,
-			r.Name,
-			req.AgentID,
-			"idle",
-		)
-	}
-
-	// Register agent in state manager
-	h.stateManager.RegisterAgent(req.AgentID, req.Name, "", robotIDs)
+	// Register agent in state manager (1:1 model: agent_id = robot_id)
+	h.stateManager.RegisterAgent(req.AgentID, req.Name, req.Namespace)
 
 	// Update agent status in database
 	if agent != nil {
@@ -166,14 +153,10 @@ func (h *FleetControlHandler) RegisterAgent(ctx context.Context, req *RegisterAg
 		}
 	}
 
-	// Robot configs (capabilities are auto-discovered)
-	robotConfigs := make([]RobotConfig, 0)
-
-	log.Printf("Agent %s registered with %d robots", req.AgentID, len(req.Robots))
+	log.Printf("Agent %s registered (1:1 model)", req.AgentID)
 
 	return &RegisterAgentResponse{
 		Success:      true,
-		RobotConfigs: robotConfigs,
 		ServerTimeMs: time.Now().UnixMilli(),
 	}, nil
 }
@@ -191,14 +174,9 @@ type AgentMessage struct {
 	Status      *AgentStatusUpdate
 }
 
-// AgentHeartbeat represents a heartbeat from an agent
+// AgentHeartbeat represents a heartbeat from an agent (1:1 model)
 type AgentHeartbeat struct {
-	Robots map[string]*RobotHeartbeat
-}
-
-// RobotHeartbeat represents robot heartbeat status
-type RobotHeartbeat struct {
-	RobotID       string
+	AgentID       string
 	State         string
 	IsExecuting   bool
 	CurrentAction string
@@ -206,9 +184,9 @@ type RobotHeartbeat struct {
 
 // AgentStatusUpdate represents an agent status update
 type AgentStatusUpdate struct {
-	State        string
-	OnlineRobots []string
-	Message      string
+	State     string
+	IsOnline  bool
+	Message   string
 }
 
 // ServerMessage represents a message to an agent
@@ -225,7 +203,7 @@ type ServerMessage struct {
 // CancelCommand represents a command cancellation
 type CancelCommand struct {
 	CommandID string
-	RobotID   string
+	AgentID   string
 	TaskID    string
 	Reason    string
 }
@@ -239,7 +217,7 @@ type ServerAck struct {
 
 // ConfigUpdate represents a configuration update
 type ConfigUpdate struct {
-	RobotID         string
+	AgentID         string
 	StateDefinition []byte
 	Version         int32
 }
@@ -276,27 +254,25 @@ func (h *FleetControlHandler) HandleAgentMessage(agentID string, msg *AgentMessa
 	}, nil
 }
 
-// processHeartbeat updates robot states from heartbeat
+// processHeartbeat updates agent state from heartbeat (1:1 model: agent_id = robot_id)
 func (h *FleetControlHandler) processHeartbeat(agentID string, hb *AgentHeartbeat) {
-	for robotID, rb := range hb.Robots {
-		// Update robot state
-		if rb.State != "" {
-			if err := h.stateManager.UpdateRobotState(robotID, rb.State); err != nil {
-				log.Printf("Failed to update robot state: %v", err)
-			}
+	// Update robot state (agent_id = robot_id in 1:1 model)
+	if hb.State != "" {
+		if err := h.stateManager.UpdateRobotState(agentID, hb.State); err != nil {
+			log.Printf("Failed to update robot state: %v", err)
 		}
+	}
 
-		// Update execution state
-		if err := h.stateManager.UpdateRobotExecution(robotID, rb.IsExecuting, "", rb.CurrentAction); err != nil {
-			log.Printf("Failed to update robot execution state: %v", err)
-		}
+	// Update execution state
+	if err := h.stateManager.UpdateRobotExecution(agentID, hb.IsExecuting, "", hb.CurrentAction); err != nil {
+		log.Printf("Failed to update robot execution state: %v", err)
 	}
 }
 
 // processActionResult handles action completion
 func (h *FleetControlHandler) processActionResult(result *ActionResult) {
-	log.Printf("Action result: command=%s robot=%s status=%d",
-		result.CommandID, result.RobotID, result.Status)
+	log.Printf("Action result: command=%s agent=%s status=%d",
+		result.CommandID, result.AgentID, result.Status)
 
 	// Find pending command
 	h.pendingMu.Lock()
@@ -321,27 +297,25 @@ func (h *FleetControlHandler) processActionResult(result *ActionResult) {
 
 	if hasHandler {
 		go func() {
-			if err := handler(context.Background(), result.RobotID, result); err != nil {
+			if err := handler(context.Background(), result.AgentID, result); err != nil {
 				log.Printf("Command handler error: %v", err)
 			}
 		}()
 	}
 
-	// Update execution state
+	// Update execution state (agent_id = robot_id in 1:1 model)
 	if result.Status == ActionStatusSucceeded || result.Status == ActionStatusFailed || result.Status == ActionStatusCancelled {
-		h.stateManager.CompleteExecution(result.RobotID, nil)
+		h.stateManager.CompleteExecution(result.AgentID, nil)
 	}
 }
 
-// processStatusUpdate handles agent status changes
+// processStatusUpdate handles agent status changes (1:1 model)
 func (h *FleetControlHandler) processStatusUpdate(agentID string, status *AgentStatusUpdate) {
 	log.Printf("Agent status update: %s - %s", agentID, status.Message)
 
-	// Update online robots
-	for _, robotID := range status.OnlineRobots {
-		if err := h.stateManager.SetRobotOnline(robotID, true); err != nil {
-			log.Printf("Failed to set robot online: %v", err)
-		}
+	// Update agent online status (agent_id = robot_id in 1:1 model)
+	if err := h.stateManager.SetRobotOnline(agentID, status.IsOnline); err != nil {
+		log.Printf("Failed to set agent online: %v", err)
 	}
 }
 
@@ -349,18 +323,18 @@ func (h *FleetControlHandler) processStatusUpdate(agentID string, status *AgentS
 // Command Execution
 // ============================================================
 
-// SendCommand sends a command to a robot via its agent
+// SendCommand sends a command to an agent (1:1 model: agent_id = robot_id)
 func (h *FleetControlHandler) SendCommand(ctx context.Context, cmd *ExecuteCommand) error {
-	// Get robot to find agent
-	robotState, exists := h.stateManager.GetRobotState(cmd.RobotID)
+	// In 1:1 model, agent_id = robot_id, so verify agent exists
+	robotState, exists := h.stateManager.GetRobotState(cmd.AgentID)
 	if !exists {
-		return fmt.Errorf("robot %s not found", cmd.RobotID)
+		return fmt.Errorf("agent %s not found", cmd.AgentID)
 	}
 
 	// Create pending command
 	pending := &PendingCommand{
 		CommandID:  cmd.CommandID,
-		RobotID:    cmd.RobotID,
+		AgentID:    cmd.AgentID,
 		TaskID:     cmd.TaskID,
 		StepID:     cmd.StepID,
 		SentAt:     time.Now(),
@@ -384,7 +358,7 @@ func (h *FleetControlHandler) SendCommand(ctx context.Context, cmd *ExecuteComma
 		TimestampMs: time.Now().UnixMilli(),
 		Execute: &ExecuteCommand{
 			CommandID:    cmd.CommandID,
-			RobotID:      cmd.RobotID,
+			AgentID:      cmd.AgentID,
 			TaskID:       cmd.TaskID,
 			StepID:       cmd.StepID,
 			ActionType:   cmd.ActionType,
@@ -401,7 +375,7 @@ func (h *FleetControlHandler) SendCommand(ctx context.Context, cmd *ExecuteComma
 	msg.Execute.Params = make(map[string]interface{})
 	json.Unmarshal(paramsJSON, &msg.Execute.Params)
 
-	// Send to agent
+	// Send to agent (agent_id = robot_id in 1:1 model)
 	return h.server.SendToAgent(robotState.AgentID, msg)
 }
 
@@ -440,11 +414,11 @@ func (h *FleetControlHandler) SendCommandAndWait(ctx context.Context, cmd *Execu
 	}
 }
 
-// CancelCommand cancels a running command
-func (h *FleetControlHandler) CancelCommand(ctx context.Context, commandID, robotID, taskID, reason string) error {
-	robotState, exists := h.stateManager.GetRobotState(robotID)
+// CancelCommand cancels a running command (1:1 model: agent_id = robot_id)
+func (h *FleetControlHandler) CancelCommand(ctx context.Context, commandID, agentID, taskID, reason string) error {
+	robotState, exists := h.stateManager.GetRobotState(agentID)
 	if !exists {
-		return fmt.Errorf("robot %s not found", robotID)
+		return fmt.Errorf("agent %s not found", agentID)
 	}
 
 	msg := &ServerMessage{
@@ -452,7 +426,7 @@ func (h *FleetControlHandler) CancelCommand(ctx context.Context, commandID, robo
 		TimestampMs: time.Now().UnixMilli(),
 		Cancel: &CancelCommand{
 			CommandID: commandID,
-			RobotID:   robotID,
+			AgentID:   agentID,
 			TaskID:    taskID,
 			Reason:    reason,
 		},
@@ -482,7 +456,7 @@ func (h *FleetControlHandler) UnregisterCommandHandler(commandID string) {
 // ExecuteTaskRequest represents a task execution request
 type ExecuteTaskRequest struct {
 	ActionGraphID string
-	RobotID       string
+	AgentID       string
 	Params        map[string]interface{}
 	Requester     string
 }
@@ -494,15 +468,15 @@ type ExecuteTaskResponse struct {
 	Error   string
 }
 
-// ExecuteTask starts a new task
+// ExecuteTask starts a new task (1:1 model: agent_id = robot_id)
 func (h *FleetControlHandler) ExecuteTask(ctx context.Context, req *ExecuteTaskRequest) (*ExecuteTaskResponse, error) {
 	// This will be implemented by the scheduler
 	// For now, just validate
-	_, exists := h.stateManager.GetRobotState(req.RobotID)
+	_, exists := h.stateManager.GetRobotState(req.AgentID)
 	if !exists {
 		return &ExecuteTaskResponse{
 			Success: false,
-			Error:   fmt.Sprintf("robot %s not found", req.RobotID),
+			Error:   fmt.Sprintf("agent %s not found", req.AgentID),
 		}, nil
 	}
 
@@ -526,65 +500,65 @@ func (h *FleetControlHandler) CancelTask(ctx context.Context, taskID, reason str
 
 // FleetStateRequest represents a fleet state request
 type FleetStateRequest struct {
-	RobotIDs     []string
+	AgentIDs     []string
 	IncludeZones bool
 }
 
-// FleetStateResponse represents fleet state
+// FleetStateResponse represents fleet state (1:1 model)
 type FleetStateResponse struct {
 	TimestampMs int64
-	Robots      map[string]*RobotStateSnapshot
+	Agents      map[string]*AgentStateSnapshotMsg
 	Zones       []*ZoneReservationInfo
 }
 
-// RobotStateSnapshot represents a robot's state
-type RobotStateSnapshot struct {
-	RobotID       string
-	RobotName     string
+// AgentStateSnapshotMsg represents an agent's state (1:1 model: agent_id = robot_id)
+type AgentStateSnapshotMsg struct {
 	AgentID       string
+	AgentName     string
 	State         string
 	IsOnline      bool
 	IsExecuting   bool
 	StalenessSec  float32
 	CurrentTaskID string
 	CurrentStepID string
+	Namespace     string
 }
 
 // ZoneReservationInfo represents a zone reservation
 type ZoneReservationInfo struct {
 	ZoneID       string
-	RobotID      string
+	AgentID      string
 	ReservedAtMs int64
 	ExpiresAtMs  int64
 }
 
-// GetFleetState returns the current fleet state
+// GetFleetState returns the current fleet state (1:1 model)
 func (h *FleetControlHandler) GetFleetState(ctx context.Context, req *FleetStateRequest) (*FleetStateResponse, error) {
 	snapshot := h.stateManager.GetSnapshot()
 
 	response := &FleetStateResponse{
 		TimestampMs: snapshot.Timestamp.UnixMilli(),
-		Robots:      make(map[string]*RobotStateSnapshot),
+		Agents:      make(map[string]*AgentStateSnapshotMsg),
 		Zones:       make([]*ZoneReservationInfo, 0),
 	}
 
-	// Filter robots if specific IDs requested
-	robotFilter := make(map[string]bool)
-	if len(req.RobotIDs) > 0 {
-		for _, id := range req.RobotIDs {
-			robotFilter[id] = true
+	// Filter agents if specific IDs requested
+	agentFilter := make(map[string]bool)
+	if len(req.AgentIDs) > 0 {
+		for _, id := range req.AgentIDs {
+			agentFilter[id] = true
 		}
 	}
 
+	// In 1:1 model, robots map contains agent state (agent_id = robot_id)
 	for id, robot := range snapshot.Robots {
-		if len(robotFilter) > 0 && !robotFilter[id] {
+		if len(agentFilter) > 0 && !agentFilter[id] {
 			continue
 		}
 
-		response.Robots[id] = &RobotStateSnapshot{
-			RobotID:       robot.ID,
-			RobotName:     robot.Name,
-			AgentID:       robot.AgentID,
+		response.Agents[id] = &AgentStateSnapshotMsg{
+			AgentID:       robot.ID,
+			AgentName:     robot.Name,
 			State:         robot.CurrentState,
 			IsOnline:      robot.IsOnline,
 			IsExecuting:   robot.IsExecuting,
@@ -599,7 +573,7 @@ func (h *FleetControlHandler) GetFleetState(ctx context.Context, req *FleetState
 		for _, zone := range snapshot.Zones {
 			response.Zones = append(response.Zones, &ZoneReservationInfo{
 				ZoneID:       zone.ZoneID,
-				RobotID:      zone.RobotID,
+				AgentID:      zone.AgentID,
 				ReservedAtMs: zone.ReservedAt.UnixMilli(),
 				ExpiresAtMs:  zone.ExpiresAt.UnixMilli(),
 			})

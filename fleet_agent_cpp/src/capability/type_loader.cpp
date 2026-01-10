@@ -94,6 +94,26 @@ std::string TypeSupportLoader::resolve_library_path(const std::string& package) 
     }
 }
 
+std::string TypeSupportLoader::resolve_action_library_path(const std::string& package) {
+    try {
+        std::string prefix = ament_index_cpp::get_package_prefix(package);
+
+        std::filesystem::path lib_path = prefix;
+        lib_path /= "lib";
+        lib_path /= "lib" + package + "__rosidl_typesupport_cpp.so";
+
+        if (std::filesystem::exists(lib_path)) {
+            return lib_path.string();
+        }
+
+        log.warn("Action type support library not found for package: {}", package);
+        return "";
+    } catch (const std::exception& e) {
+        log.error("Failed to resolve action library path for {}: {}", package, e.what());
+        return "";
+    }
+}
+
 void* TypeSupportLoader::get_or_load_library(const std::string& package) {
     // Check cache first
     auto it = lib_cache_.find(package);
@@ -116,6 +136,28 @@ void* TypeSupportLoader::get_or_load_library(const std::string& package) {
 
     log.debug("Loaded library: {}", lib_path);
     lib_cache_[package] = handle;
+    return handle;
+}
+
+void* TypeSupportLoader::get_or_load_action_library(const std::string& package) {
+    auto it = action_lib_cache_.find(package);
+    if (it != action_lib_cache_.end()) {
+        return it->second;
+    }
+
+    std::string lib_path = resolve_action_library_path(package);
+    if (lib_path.empty()) {
+        return nullptr;
+    }
+
+    void* handle = dlopen(lib_path.c_str(), RTLD_LAZY);
+    if (!handle) {
+        log.error("dlopen failed for {}: {}", lib_path, dlerror());
+        return nullptr;
+    }
+
+    log.debug("Loaded action type support library: {}", lib_path);
+    action_lib_cache_[package] = handle;
     return handle;
 }
 
@@ -160,6 +202,43 @@ const rosidl_message_type_support_t* TypeSupportLoader::get_type_support(
     return getter();
 }
 
+const rosidl_action_type_support_t* TypeSupportLoader::get_action_type_support(
+    void* lib_handle,
+    const std::string& package,
+    const std::string& action_name) {
+
+    // Example: rosidl_typesupport_cpp__get_action_type_support_handle__nav2_msgs__action__NavigateToPose
+    std::string symbol_name =
+        "rosidl_typesupport_cpp__get_action_type_support_handle__" +
+        package + "__action__" + action_name;
+
+    dlerror();
+    void* symbol = dlsym(lib_handle, symbol_name.c_str());
+    const char* error = dlerror();
+
+    if (error) {
+        log.debug("Action type support symbol not found: {} ({})", symbol_name, error);
+
+        // Try alternative symbol naming (without 'action' in path)
+        symbol_name =
+            "rosidl_typesupport_cpp__get_action_type_support_handle__" +
+            package + "__" + action_name;
+
+        dlerror();
+        symbol = dlsym(lib_handle, symbol_name.c_str());
+        error = dlerror();
+
+        if (error) {
+            log.warn("Alternative action symbol also not found: {}", symbol_name);
+            return nullptr;
+        }
+    }
+
+    using ActionTypeSupportGetter = const rosidl_action_type_support_t* (*)();
+    auto getter = reinterpret_cast<ActionTypeSupportGetter>(symbol);
+    return getter();
+}
+
 std::optional<TypeSupportLoader::ActionTypeInfo> TypeSupportLoader::load(
     const std::string& action_type) {
 
@@ -178,21 +257,27 @@ std::optional<TypeSupportLoader::ActionTypeInfo> TypeSupportLoader::load(
         return std::nullopt;
     }
 
-    // Load library
+    // Load library (introspection for schemas)
     void* lib_handle = get_or_load_library(package);
     if (!lib_handle) {
         return std::nullopt;
     }
+
+    void* action_lib_handle = get_or_load_action_library(package);
 
     // Get type supports
     ActionTypeInfo info;
     info.package = package;
     info.action_name = action_name;
     info.library_handle = lib_handle;
+    info.action_library_handle = action_lib_handle;
 
     info.goal_ts = get_type_support(lib_handle, package, action_name, "_Goal");
     info.result_ts = get_type_support(lib_handle, package, action_name, "_Result");
     info.feedback_ts = get_type_support(lib_handle, package, action_name, "_Feedback");
+    if (action_lib_handle) {
+        info.action_ts = get_action_type_support(action_lib_handle, package, action_name);
+    }
 
     if (!info.goal_ts && !info.result_ts && !info.feedback_ts) {
         log.warn("No type supports found for: {}", action_type);
@@ -203,11 +288,12 @@ std::optional<TypeSupportLoader::ActionTypeInfo> TypeSupportLoader::load(
 
     // Cache and return
     type_cache_[action_type] = info;
-    log.info("Loaded type support for: {} (Goal={}, Result={}, Feedback={})",
+    log.info("Loaded type support for: {} (Goal={}, Result={}, Feedback={}, Action={})",
              action_type,
              info.goal_ts != nullptr,
              info.result_ts != nullptr,
-             info.feedback_ts != nullptr);
+             info.feedback_ts != nullptr,
+             info.action_ts != nullptr);
 
     return info;
 }
@@ -238,7 +324,14 @@ void TypeSupportLoader::clear_cache() {
         }
     }
 
+    for (auto& [package, handle] : action_lib_cache_) {
+        if (handle) {
+            dlclose(handle);
+        }
+    }
+
     lib_cache_.clear();
+    action_lib_cache_.clear();
     type_cache_.clear();
 }
 

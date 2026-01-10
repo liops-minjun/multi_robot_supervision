@@ -16,10 +16,14 @@ import (
 // Capability Registration API (Zero-Config Architecture)
 // ============================================================
 
-// RegisterCapabilities registers capabilities for a robot
-// PUT /api/robots/{robotID}/capabilities
+// RegisterCapabilities registers capabilities for an agent
+// PUT /api/agents/{agentID}/capabilities or PUT /api/robots/{robotID}/capabilities (legacy)
 func (s *Server) RegisterCapabilities(w http.ResponseWriter, r *http.Request) {
-	robotID := chi.URLParam(r, "robotID")
+	// Support both agentID and robotID URL params (1 Agent = 1 Robot)
+	agentID := chi.URLParam(r, "agentID")
+	if agentID == "" {
+		agentID = chi.URLParam(r, "robotID") // Legacy compatibility
+	}
 
 	var req CapabilityRegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -27,22 +31,22 @@ func (s *Server) RegisterCapabilities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify robot exists
-	robot, err := s.repo.GetRobot(robotID)
+	// Verify agent exists
+	agent, err := s.repo.GetAgent(agentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if robot == nil {
-		writeError(w, http.StatusNotFound, "Robot not found")
+	if agent == nil {
+		writeError(w, http.StatusNotFound, "Agent not found")
 		return
 	}
 
 	// Convert request to DB models
-	capabilities := make([]db.RobotCapability, len(req.Capabilities))
+	capabilities := make([]db.AgentCapability, len(req.Capabilities))
 	for i, cap := range req.Capabilities {
-		// Generate unique ID from robot_id + action_type
-		idHash := md5.Sum([]byte(robotID + ":" + cap.ActionType))
+		// Generate unique ID from agent_id + action_type
+		idHash := md5.Sum([]byte(agentID + ":" + cap.ActionType))
 		capID := hex.EncodeToString(idHash[:])
 
 		var goalSchema, resultSchema, feedbackSchema, successCriteria []byte
@@ -59,9 +63,9 @@ func (s *Server) RegisterCapabilities(w http.ResponseWriter, r *http.Request) {
 			successCriteria, _ = json.Marshal(cap.SuccessCriteria)
 		}
 
-		capabilities[i] = db.RobotCapability{
+		capabilities[i] = db.AgentCapability{
 			ID:              capID,
-			RobotID:         robotID,
+			AgentID:         agentID,
 			ActionType:      cap.ActionType,
 			ActionServer:    cap.ActionServer,
 			GoalSchema:      goalSchema,
@@ -76,43 +80,47 @@ func (s *Server) RegisterCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Sync capabilities (delete old, add new)
-	if err := s.repo.SyncRobotCapabilities(robotID, capabilities); err != nil {
+	if err := s.repo.SyncAgentCapabilities(agentID, capabilities); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"message":          "Capabilities registered",
-		"robot_id":         robotID,
+		"agent_id":         agentID,
 		"capability_count": len(capabilities),
 	})
 }
 
-// GetRobotCapabilities returns capabilities for a robot
-// GET /api/robots/{robotID}/capabilities
+// GetRobotCapabilities returns capabilities for an agent (legacy robot endpoint)
+// GET /api/robots/{robotID}/capabilities or GET /api/agents/{agentID}/capabilities
 func (s *Server) GetRobotCapabilities(w http.ResponseWriter, r *http.Request) {
-	robotID := chi.URLParam(r, "robotID")
+	// Support both agentID and robotID URL params (1 Agent = 1 Robot)
+	agentID := chi.URLParam(r, "agentID")
+	if agentID == "" {
+		agentID = chi.URLParam(r, "robotID") // Legacy compatibility
+	}
 
-	robot, err := s.repo.GetRobot(robotID)
+	agent, err := s.repo.GetAgent(agentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if robot == nil {
-		writeError(w, http.StatusNotFound, "Robot not found")
+	if agent == nil {
+		writeError(w, http.StatusNotFound, "Agent not found")
 		return
 	}
 
-	capabilities, err := s.repo.GetRobotCapabilities(robotID)
+	capabilities, err := s.repo.GetAgentCapabilities(agentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	response := RobotCapabilitiesResponse{
-		RobotID:      robotID,
-		RobotName:    robot.Name,
-		Namespace:    robot.Namespace,
+	response := AgentCapabilitiesListResponse{
+		AgentID:      agentID,
+		AgentName:    agent.Name,
+		Namespace:    agent.Namespace,
 		Capabilities: make([]CapabilityResponse, len(capabilities)),
 		LastUpdated:  time.Now().UTC(),
 	}
@@ -152,10 +160,14 @@ func (s *Server) GetRobotCapabilities(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-// UpdateCapabilityStatus updates capability status for a robot
-// PATCH /api/robots/{robotID}/capabilities/status
+// UpdateCapabilityStatus updates capability status for an agent
+// PATCH /api/robots/{robotID}/capabilities/status or PATCH /api/agents/{agentID}/capabilities/status
 func (s *Server) UpdateCapabilityStatus(w http.ResponseWriter, r *http.Request) {
-	robotID := chi.URLParam(r, "robotID")
+	// Support both agentID and robotID URL params (1 Agent = 1 Robot)
+	agentID := chi.URLParam(r, "agentID")
+	if agentID == "" {
+		agentID = chi.URLParam(r, "robotID") // Legacy compatibility
+	}
 
 	var req CapabilityStatusUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -163,20 +175,20 @@ func (s *Server) UpdateCapabilityStatus(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Verify robot exists
-	robot, err := s.repo.GetRobot(robotID)
+	// Verify agent exists
+	agent, err := s.repo.GetAgent(agentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if robot == nil {
-		writeError(w, http.StatusNotFound, "Robot not found")
+	if agent == nil {
+		writeError(w, http.StatusNotFound, "Agent not found")
 		return
 	}
 
 	// Update each capability status
 	for actionType, status := range req.Status {
-		if err := s.repo.UpdateCapabilityStatus(robotID, actionType, status.Status, status.Available); err != nil {
+		if err := s.repo.UpdateAgentCapabilityStatus(agentID, actionType, status.Status, status.Available); err != nil {
 			// Log but don't fail - capability might not exist yet
 			continue
 		}
@@ -184,7 +196,7 @@ func (s *Server) UpdateCapabilityStatus(w http.ResponseWriter, r *http.Request) 
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"message":  "Capability status updated",
-		"robot_id": robotID,
+		"agent_id": agentID,
 	})
 }
 
@@ -226,12 +238,11 @@ func (s *Server) ListAllCapabilities(w http.ResponseWriter, r *http.Request) {
 		if !exists {
 			info = &ActionTypeInfo{
 				ActionType: cap.ActionType,
-				RobotIDs:   make([]string, 0),
+				AgentIDs:   make([]string, 0),
 			}
 			actionTypeMap[cap.ActionType] = info
 		}
-		// Use agent_id as "robot_id" for compatibility with frontend
-		info.RobotIDs = append(info.RobotIDs, cap.AgentID)
+		info.AgentIDs = append(info.AgentIDs, cap.AgentID)
 		info.TotalCount++
 		if cap.IsAvailable {
 			info.AvailableCount++
@@ -256,11 +267,11 @@ func (s *Server) ListAllCapabilities(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, AllCapabilitiesResponse{
 		ActionTypes:   actionTypeInfos,
 		ActionServers: actionServers,
-		TotalRobots:   len(agents),
+		TotalAgents:   len(agents),
 	})
 }
 
-// GetCapabilitiesByActionType returns robots with a specific action type
+// GetCapabilitiesByActionType returns agents with a specific action type
 // GET /api/capabilities/{actionType}
 func (s *Server) GetCapabilitiesByActionType(w http.ResponseWriter, r *http.Request) {
 	actionType := chi.URLParam(r, "*")
@@ -269,15 +280,31 @@ func (s *Server) GetCapabilitiesByActionType(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	caps, err := s.repo.GetCapabilitiesByActionType(actionType)
+	// Get all capabilities and filter by action type
+	allCaps, err := s.repo.GetAllAgentCapabilities()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
+	// Get agent name map for lookup
+	agents, _ := s.repo.GetAllAgents()
+	agentNameMap := make(map[string]string)
+	for _, agent := range agents {
+		agentNameMap[agent.ID] = agent.Name
+	}
+
+	// Filter by action type
+	var caps []db.AgentCapability
+	for _, cap := range allCaps {
+		if cap.ActionType == actionType {
+			caps = append(caps, cap)
+		}
+	}
+
 	responses := make([]struct {
-		RobotID      string                 `json:"robot_id"`
-		RobotName    string                 `json:"robot_name,omitempty"`
+		AgentID      string                 `json:"agent_id"`
+		AgentName    string                 `json:"agent_name,omitempty"`
 		ActionServer string                 `json:"action_server"`
 		Status       string                 `json:"status"`
 		IsAvailable  bool                   `json:"is_available"`
@@ -290,30 +317,27 @@ func (s *Server) GetCapabilitiesByActionType(w http.ResponseWriter, r *http.Requ
 			json.Unmarshal(cap.GoalSchema, &goalSchema)
 		}
 
-		responses[i].RobotID = cap.RobotID
+		responses[i].AgentID = cap.AgentID
+		responses[i].AgentName = agentNameMap[cap.AgentID]
 		responses[i].ActionServer = cap.ActionServer
 		responses[i].Status = cap.Status
 		responses[i].IsAvailable = cap.IsAvailable
 		responses[i].GoalSchema = goalSchema
-
-		if cap.Robot != nil {
-			responses[i].RobotName = cap.Robot.Name
-		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"action_type": actionType,
-		"robots":      responses,
+		"agents":      responses,
 		"total":       len(responses),
 	})
 }
 
 // ============================================================
-// Robot Registration with Capabilities (Updated)
+// Agent Registration with Capabilities (Legacy Robot endpoint)
 // ============================================================
 
-// RegisterRobot registers a new robot with capabilities
-// POST /api/robots
+// RegisterRobot registers a new agent (legacy robot endpoint, 1 Agent = 1 Robot)
+// POST /api/robots (legacy) or POST /api/agents
 func (s *Server) RegisterRobot(w http.ResponseWriter, r *http.Request) {
 	var req RobotRegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -326,10 +350,16 @@ func (s *Server) RegisterRobot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if robot already exists
-	existing, _ := s.repo.GetRobot(req.ID)
+	// In 1:1 model, agent_id is same as robot id if not specified
+	agentID := req.AgentID
+	if agentID == "" {
+		agentID = req.ID
+	}
+
+	// Check if agent already exists
+	existing, _ := s.repo.GetAgent(agentID)
 	if existing != nil {
-		writeError(w, http.StatusConflict, "Robot already exists")
+		writeError(w, http.StatusConflict, "Agent already exists")
 		return
 	}
 
@@ -339,60 +369,44 @@ func (s *Server) RegisterRobot(w http.ResponseWriter, r *http.Request) {
 		tags, _ = json.Marshal(req.Tags)
 	}
 
-	// Create robot
-	robot := &db.Robot{
-		ID:           req.ID,
+	// Create agent (1 Agent = 1 Robot)
+	agent := &db.Agent{
+		ID:           agentID,
 		Name:         req.Name,
 		Namespace:    req.Namespace,
 		Tags:         tags,
 		CurrentState: "idle",
+		Status:       "online",
 		CreatedAt:    time.Now().UTC(),
 		UpdatedAt:    time.Now().UTC(),
 	}
 
-	if req.AgentID != "" {
-		robot.AgentID.String = req.AgentID
-		robot.AgentID.Valid = true
-
-		// Auto-create agent if not exists
-		agent, _ := s.repo.GetAgent(req.AgentID)
-		if agent == nil {
-			newAgent := &db.Agent{
-				ID:        req.AgentID,
-				Name:      req.AgentID,
-				Status:    "online",
-				CreatedAt: time.Now().UTC(),
-			}
-			s.repo.CreateOrUpdateAgent(newAgent)
-		}
-	}
-
 	if req.IPAddress != "" {
-		robot.IPAddress.String = req.IPAddress
-		robot.IPAddress.Valid = true
+		agent.IPAddress.String = req.IPAddress
+		agent.IPAddress.Valid = true
 	}
 
-	robot.LastSeen.Time = time.Now().UTC()
-	robot.LastSeen.Valid = true
+	agent.LastSeen.Time = time.Now().UTC()
+	agent.LastSeen.Valid = true
 
-	if err := s.repo.CreateOrUpdateRobot(robot); err != nil {
+	if err := s.repo.CreateOrUpdateAgent(agent); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	// Register in state manager
+	// Register in state manager (agent ID is also robot ID in 1:1 model)
 	s.stateManager.RegisterRobot(
-		robot.ID,
-		robot.Name,
-		req.AgentID,
+		agentID,
+		agent.Name,
+		agentID,
 		"idle",
 	)
 
 	// Register capabilities if provided
 	if len(req.Capabilities) > 0 {
-		capabilities := make([]db.RobotCapability, len(req.Capabilities))
+		capabilities := make([]db.AgentCapability, len(req.Capabilities))
 		for i, cap := range req.Capabilities {
-			idHash := md5.Sum([]byte(req.ID + ":" + cap.ActionType))
+			idHash := md5.Sum([]byte(agentID + ":" + cap.ActionType))
 			capID := hex.EncodeToString(idHash[:])
 
 			var goalSchema, resultSchema, feedbackSchema, successCriteria []byte
@@ -409,9 +423,9 @@ func (s *Server) RegisterRobot(w http.ResponseWriter, r *http.Request) {
 				successCriteria, _ = json.Marshal(cap.SuccessCriteria)
 			}
 
-			capabilities[i] = db.RobotCapability{
+			capabilities[i] = db.AgentCapability{
 				ID:              capID,
-				RobotID:         req.ID,
+				AgentID:         agentID,
 				ActionType:      cap.ActionType,
 				ActionServer:    cap.ActionServer,
 				GoalSchema:      goalSchema,
@@ -425,16 +439,16 @@ func (s *Server) RegisterRobot(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		s.repo.SyncRobotCapabilities(req.ID, capabilities)
+		s.repo.SyncAgentCapabilities(agentID, capabilities)
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
-		"id":               robot.ID,
-		"name":             robot.Name,
-		"namespace":        robot.Namespace,
-		"agent_id":         req.AgentID,
+		"id":               agent.ID,
+		"name":             agent.Name,
+		"namespace":        agent.Namespace,
+		"agent_id":         agentID,
 		"capability_count": len(req.Capabilities),
-		"message":          "Robot registered successfully",
+		"message":          "Agent registered successfully",
 	})
 }
 
@@ -525,10 +539,14 @@ func (s *Server) GetAllActionTypesWithStats(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// UpdateRobot updates a robot's metadata
-// PATCH /api/robots/{robotID}
+// UpdateRobot updates an agent's metadata (legacy robot endpoint)
+// PATCH /api/robots/{robotID} or PATCH /api/agents/{agentID}
 func (s *Server) UpdateRobot(w http.ResponseWriter, r *http.Request) {
-	robotID := chi.URLParam(r, "robotID")
+	// Support both agentID and robotID URL params (1 Agent = 1 Robot)
+	agentID := chi.URLParam(r, "agentID")
+	if agentID == "" {
+		agentID = chi.URLParam(r, "robotID") // Legacy compatibility
+	}
 
 	var req RobotUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -536,34 +554,34 @@ func (s *Server) UpdateRobot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	robot, err := s.repo.GetRobot(robotID)
+	agent, err := s.repo.GetAgent(agentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if robot == nil {
-		writeError(w, http.StatusNotFound, "Robot not found")
+	if agent == nil {
+		writeError(w, http.StatusNotFound, "Agent not found")
 		return
 	}
 
 	// Update fields
 	if req.Name != "" {
-		robot.Name = req.Name
+		agent.Name = req.Name
 	}
 	if req.Namespace != "" {
-		robot.Namespace = req.Namespace
+		agent.Namespace = req.Namespace
 	}
 	if req.Tags != nil {
 		tags, _ := json.Marshal(req.Tags)
-		robot.Tags = tags
+		agent.Tags = tags
 	}
 
-	robot.UpdatedAt = time.Now().UTC()
+	agent.UpdatedAt = time.Now().UTC()
 
-	if err := s.repo.CreateOrUpdateRobot(robot); err != nil {
+	if err := s.repo.CreateOrUpdateAgent(agent); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writeJSON(w, http.StatusOK, robotToResponse(robot, s.stateManager))
+	writeJSON(w, http.StatusOK, agentToResponse(agent, s.stateManager))
 }

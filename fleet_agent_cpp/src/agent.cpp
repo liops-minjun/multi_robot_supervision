@@ -7,7 +7,6 @@
 #include "fleet_agent/capability/scanner.hpp"
 #include "fleet_agent/executor/command_processor.hpp"
 #include "fleet_agent/graph/storage.hpp"
-#include "fleet_agent/graph/executor.hpp"
 #include "fleet_agent/transport/tls_credentials.hpp"
 #include "fleet_agent/transport/quic_transport.hpp"
 #include "fleet_agent/transport/quic_outbound_sender.hpp"
@@ -44,33 +43,6 @@ std::string state_to_string(Agent::State state) {
         case Agent::State::ERROR: return "ERROR";
         default: return "UNKNOWN";
     }
-}
-
-std::string to_lower(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return value;
-}
-
-fleet::v1::RobotState base_state_from_name(const std::string& state_name, bool is_executing) {
-    if (is_executing) {
-        return fleet::v1::ROBOT_STATE_EXECUTING;
-    }
-
-    const auto lower = to_lower(state_name);
-    if (lower == "error" || lower == "robot_state_error") {
-        return fleet::v1::ROBOT_STATE_ERROR;
-    }
-    if (lower == "charging" || lower == "robot_state_charging") {
-        return fleet::v1::ROBOT_STATE_CHARGING;
-    }
-    if (lower == "manual" || lower == "robot_state_manual") {
-        return fleet::v1::ROBOT_STATE_MANUAL;
-    }
-    if (lower == "emergency" || lower == "robot_state_emergency") {
-        return fleet::v1::ROBOT_STATE_EMERGENCY;
-    }
-    return fleet::v1::ROBOT_STATE_IDLE;
 }
 
 class InboundMessageFramer {
@@ -350,7 +322,7 @@ const std::string& Agent::agent_id() const {
     return config_.agent_id;
 }
 
-std::vector<std::string> Agent::robot_ids() const {
+std::vector<std::string> Agent::agent_ids() const {
     std::vector<std::string> ids;
     ids.reserve(config_.robots.size());
     for (const auto& robot : config_.robots) {
@@ -491,10 +463,6 @@ bool Agent::init_components() {
     graph_storage_ = std::make_unique<graph::GraphStorage>(
         config_.storage.action_graphs_path);
 
-    // Graph executor
-    graph_executor_ = std::make_unique<graph::GraphExecutor>(
-        state_tracker_mgr_.get(), *execution_contexts_);
-
     // Command processor (with state tracker integration)
     command_processor_ = std::make_unique<executor::CommandProcessor>(
         node_,
@@ -546,73 +514,37 @@ void Agent::start_heartbeat_thread() {
 
             auto* heartbeat = msg->mutable_heartbeat();
             heartbeat->set_agent_id(config_.agent_id);
-            heartbeat->set_timestamp_ms(now_ms());
-            heartbeat->set_state(fleet::v1::AGENT_STATE_ONLINE);
 
-            if (quic_client_ && quic_client_->is_connected()) {
-                const auto stats = quic_client_->get_stats();
-                if (stats.rtt_us > 0) {
-                    heartbeat->set_network_latency_ms(static_cast<uint32_t>(stats.rtt_us / 1000));
-                    heartbeat->set_network_latency_us(stats.rtt_us);
+            // Get execution state for this agent (1:1 model: agent_id = robot_id)
+            bool is_executing = false;
+            std::string current_action;
+
+            if (execution_contexts_) {
+                ExecutionContextMap::const_accessor acc;
+                if (execution_contexts_->find(acc, config_.agent_id)) {
+                    const auto exec_state = acc->second.state.load();
+                    is_executing = (exec_state == RobotExecutionState::EXECUTING_ACTION ||
+                                    exec_state == RobotExecutionState::WAITING_RESULT);
+                    current_action = acc->second.current_action_type;
                 }
             }
 
-            for (const auto& robot : config_.robots) {
-                auto* robot_hb = &(*heartbeat->mutable_robots())[robot.id];
-                robot_hb->set_robot_id(robot.id);
+            // Get state from tracker
+            std::string state_name = "idle";
+            if (state_tracker_mgr_) {
+                auto tracker = state_tracker_mgr_->get_tracker(config_.agent_id);
+                if (tracker) {
+                    state_name = tracker->current_state();
+                }
+            }
 
-                bool is_executing = false;
-                std::string current_action;
-                std::string current_task_id;
-                std::string current_step_id;
+            log.debug("[Heartbeat] Agent {} state: {}, executing: {}",
+                     config_.agent_id, state_name, is_executing);
 
-                if (execution_contexts_) {
-                    ExecutionContextMap::const_accessor acc;
-                    if (execution_contexts_->find(acc, robot.id)) {
-                        const auto exec_state = acc->second.state.load();
-                        is_executing = (exec_state == RobotExecutionState::EXECUTING_ACTION ||
-                                        exec_state == RobotExecutionState::WAITING_RESULT);
-                        current_action = acc->second.current_action_type;
-                        current_task_id = acc->second.current_task_id;
-                        current_step_id = acc->second.current_step_id;
-                    }
-                }
-
-                std::string state_name;
-                std::string state_def_id;
-                int state_def_version = 0;
-                if (state_tracker_mgr_) {
-                    auto tracker = state_tracker_mgr_->get_tracker(robot.id);
-                    if (tracker) {
-                        state_name = tracker->current_state();
-                        state_def_id = tracker->state_definition_id();
-                        state_def_version = tracker->state_definition_version();
-                    }
-                }
-
-                const std::string debug_state = state_name.empty() ? "idle" : state_name;
-                log.debug("[Heartbeat] Robot {} state: {}", robot.id, debug_state);
-
-                robot_hb->set_state(base_state_from_name(state_name, is_executing));
-                robot_hb->set_is_executing(is_executing);
-                if (!current_action.empty()) {
-                    robot_hb->set_current_action(current_action);
-                }
-                if (!current_task_id.empty()) {
-                    robot_hb->set_current_task_id(current_task_id);
-                }
-                if (!current_step_id.empty()) {
-                    robot_hb->set_current_step_id(current_step_id);
-                }
-                if (!state_name.empty()) {
-                    robot_hb->set_state_name(state_name);
-                }
-                if (!state_def_id.empty()) {
-                    robot_hb->set_state_def_id(state_def_id);
-                }
-                if (state_def_version > 0) {
-                    robot_hb->set_state_def_version(state_def_version);
-                }
+            heartbeat->set_state(state_name);
+            heartbeat->set_is_executing(is_executing);
+            if (!current_action.empty()) {
+                heartbeat->set_current_action(current_action);
             }
 
             OutboundMessage out;
@@ -751,18 +683,19 @@ bool Agent::register_with_server() {
 
     log.info("Registering agent with central server via QUIC");
 
-    // Build RegisterAgentRequest protobuf message
+    // Build RegisterAgentRequest protobuf message (1:1 model: agent = robot)
     fleet::v1::RegisterAgentRequest request;
     request.set_agent_id(config_.agent_id);
     request.set_name(config_.agent_name);
     request.set_client_version("1.0.0");
 
-    // Add robot information
-    for (const auto& robot : config_.robots) {
-        auto* robot_info = request.add_robots();
-        robot_info->set_robot_id(robot.id);
-        robot_info->set_name(robot.name);
-        robot_info->set_ros_namespace(robot.ros_namespace);
+    // Set namespace (use agent's ros_namespace or fallback to first robot's namespace)
+    std::string ns = config_.ros_namespace;
+    if (ns.empty() && !config_.robots.empty()) {
+        ns = config_.robots[0].ros_namespace;
+    }
+    if (!ns.empty()) {
+        request.set_namespace_(ns);
     }
 
     // Serialize to bytes
@@ -823,7 +756,6 @@ void Agent::on_server_message(const fleet::v1::ServerMessage& message) {
     // Fallback to direct handling if MessageHandler not initialized
     // Route to command processor via inbound queue
     if (message.has_execute()) {
-        const auto& cmd = message.execute();
         InboundCommand inbound;
         inbound.message_id = message.message_id();
         inbound.received_at = std::chrono::steady_clock::now();
@@ -837,18 +769,6 @@ void Agent::on_server_message(const fleet::v1::ServerMessage& message) {
         } else {
             log.error("Failed to store action graph");
         }
-    } else if (message.has_execute_graph()) {
-        // Handle graph execution request
-        const auto& exec = message.execute_graph();
-        log.info("Graph execution request: {} on robot {}",
-                 exec.graph_id(), exec.robot_id());
-
-        // Queue for command processor via inbound queue
-        InboundCommand inbound;
-        inbound.message_id = message.message_id();
-        inbound.received_at = std::chrono::steady_clock::now();
-        inbound.message = std::make_shared<fleet::v1::ServerMessage>(message);
-        inbound_queue_->push(std::move(inbound));
     }
 }
 
@@ -943,26 +863,24 @@ bool Agent::init_state_management() {
 
     // Set global state change callback for logging
     state_tracker_mgr_->set_state_change_callback(
-        [this](const std::string& robot_id,
+        [this](const std::string& agent_id,
                const std::string& old_state,
                const std::string& new_state) {
-            log.debug("Robot {} state changed: {} -> {}", robot_id, old_state, new_state);
+            log.debug("Robot {} state changed: {} -> {}", agent_id, old_state, new_state);
         });
 
-    // Initialize state trackers for each robot
-    for (const auto& robot : config_.robots) {
-        auto tracker = state_tracker_mgr_->get_tracker(robot.id);
+    // Initialize state tracker for this agent
+    auto tracker = state_tracker_mgr_->get_tracker(config_.agent_id);
 
-        // Try to load existing state definition for this robot
-        auto state_def = state_storage_->get_for_robot(robot.id);
-        if (state_def) {
-            tracker->configure(*state_def);
-            log.info("Loaded state definition for robot {}: {} (version {})",
-                     robot.id, state_def->id, state_def->version);
-        } else {
-            log.debug("No state definition found for robot {}, using defaults",
-                      robot.id);
-        }
+    // Try to load existing state definition for this agent
+    auto state_def = state_storage_->get_for_agent(config_.agent_id);
+    if (state_def) {
+        tracker->configure(*state_def);
+        log.info("Loaded state definition for agent {}: {} (version {})",
+                 config_.agent_id, state_def->id, state_def->version);
+    } else {
+        log.debug("No state definition found for agent {}, using defaults",
+                  config_.agent_id);
     }
 
     log.info("State management initialized");
@@ -978,7 +896,6 @@ bool Agent::init_protocol() {
     deps.state_storage = state_storage_.get();
     deps.state_tracker_mgr = state_tracker_mgr_.get();
     deps.graph_storage = graph_storage_.get();
-    deps.graph_executor = graph_executor_.get();
     deps.command_processor = command_processor_.get();
     deps.command_queue = command_queue_.get();
     deps.quic_outbound_queue = quic_outbound_queue_.get();

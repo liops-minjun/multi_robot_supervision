@@ -188,7 +188,7 @@ function TaskListItem({
           </div>
           <div>
             <p className="font-medium text-white">{task.flow_name || task.flow_id}</p>
-            <p className="text-xs text-slate-500">{task.robot_name || task.robot_id}</p>
+            <p className="text-xs text-slate-500">{task.agent_name || task.agent_id}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -337,7 +337,7 @@ function TaskDetail({
               <Bot className="w-4 h-4 text-cyan-400" />
               <p className="text-sm text-slate-400">{t('robot.title')}</p>
             </div>
-            <p className="text-white font-medium">{task.robot_name || task.robot_id}</p>
+            <p className="text-white font-medium">{task.agent_name || task.agent_id}</p>
           </div>
           <div className="bg-slate-700/30 rounded-xl p-4">
             <div className="flex items-center gap-2 mb-2">

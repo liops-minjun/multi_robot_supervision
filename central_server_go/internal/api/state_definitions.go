@@ -227,8 +227,8 @@ func (s *Server) DeployStateDefinition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var robotIDs []string
-	if err := json.NewDecoder(r.Body).Decode(&robotIDs); err != nil && err != io.EOF {
+	var agentIDs []string
+	if err := json.NewDecoder(r.Body).Decode(&agentIDs); err != nil && err != io.EOF {
 		writeError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -238,18 +238,19 @@ func (s *Server) DeployStateDefinition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(robotIDs) == 0 {
-		robots, err := s.repo.GetAllRobots()
+	if len(agentIDs) == 0 {
+		// In 1:1 model, get all agents
+		agents, err := s.repo.GetAllAgents()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		for _, robot := range robots {
-			robotIDs = append(robotIDs, robot.ID)
+		for _, agent := range agents {
+			agentIDs = append(agentIDs, agent.ID)
 		}
 	}
-	if len(robotIDs) == 0 {
-		writeError(w, http.StatusBadRequest, "robot_ids must not be empty")
+	if len(agentIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "agent_ids must not be empty")
 		return
 	}
 
@@ -295,36 +296,28 @@ func (s *Server) DeployStateDefinition(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type deployResult struct {
-		RobotID string `json:"robot_id"`
-		AgentID string `json:"agent_id,omitempty"`
+		AgentID string `json:"agent_id"`
 		Success bool   `json:"success"`
 		Error   string `json:"error,omitempty"`
 	}
 
-	results := make([]deployResult, 0, len(robotIDs))
-	for _, robotID := range robotIDs {
-		result := deployResult{RobotID: robotID}
+	results := make([]deployResult, 0, len(agentIDs))
+	for _, agentID := range agentIDs {
+		result := deployResult{AgentID: agentID}
 
-		robot, err := s.repo.GetRobot(robotID)
+		agent, err := s.repo.GetAgent(agentID)
 		if err != nil {
 			result.Error = err.Error()
 			results = append(results, result)
 			continue
 		}
-		if robot == nil {
-			result.Error = "robot not found"
-			results = append(results, result)
-			continue
-		}
-		if !robot.AgentID.Valid || robot.AgentID.String == "" {
-			result.Error = "robot not assigned to an agent"
+		if agent == nil {
+			result.Error = "agent not found"
 			results = append(results, result)
 			continue
 		}
 
-		agentID := robot.AgentID.String
-		result.AgentID = agentID
-		resp, err := s.quicHandler.SendConfigUpdate(r.Context(), agentID, robotID, def.ID, int32(def.Version), stateDefJSON)
+		resp, err := s.quicHandler.SendConfigUpdate(r.Context(), agentID, agentID, def.ID, int32(def.Version), stateDefJSON)
 		if err != nil {
 			result.Error = err.Error()
 			if resp != nil && resp.Error != "" {

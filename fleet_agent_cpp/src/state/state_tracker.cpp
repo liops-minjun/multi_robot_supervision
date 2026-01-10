@@ -15,15 +15,15 @@ logging::ComponentLogger log("StateTracker");
 // StateTracker Implementation
 // ============================================================
 
-StateTracker::StateTracker(const std::string& robot_id, const std::string& default_state)
-    : robot_id_(robot_id)
+StateTracker::StateTracker(const std::string& agent_id, const std::string& default_state)
+    : agent_id_(agent_id)
     , current_state_(default_state)
     , default_state_(default_state)
     , available_states_({default_state, "error"})
     , last_state_change_(std::chrono::steady_clock::now()) {
 
     log.debug("Created state tracker for robot {}, default state: {}",
-              robot_id_, default_state_);
+              agent_id_, default_state_);
 }
 
 void StateTracker::configure(const StateDefinition& def) {
@@ -62,7 +62,7 @@ void StateTracker::configure(const StateDefinition& def) {
     configured_ = true;
 
     log.info("Configured state tracker for robot {} with definition {} (version {}, {} states, {} mappings)",
-             robot_id_, def.id, def.version, available_states_.size(), action_mappings_.size());
+             agent_id_, def.id, def.version, available_states_.size(), action_mappings_.size());
 }
 
 std::string StateTracker::state_definition_id() const {
@@ -142,7 +142,7 @@ void StateTracker::on_error(const std::string& error_message) {
         transition_to("error", "error:" + error_message);
     }
 
-    log.error("Robot {} error: {}", robot_id_, error_message);
+    log.error("Robot {} error: {}", agent_id_, error_message);
 }
 
 void StateTracker::clear_error() {
@@ -157,7 +157,7 @@ bool StateTracker::force_state(const std::string& state, const std::string& trig
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (!is_valid_state(state)) {
-        log.warn("Invalid state for robot {}: {}", robot_id_, state);
+        log.warn("Invalid state for robot {}: {}", agent_id_, state);
         return false;
     }
 
@@ -262,7 +262,7 @@ bool StateTracker::transition_to(const std::string& new_state, const std::string
     record_transition(old_state, new_state, trigger);
 
     log.info("Robot {} state: {} -> {} ({})",
-             robot_id_, old_state, new_state, trigger);
+             agent_id_, old_state, new_state, trigger);
 
     notify_state_change(old_state, new_state);
 
@@ -294,7 +294,7 @@ void StateTracker::notify_state_change(
 
     if (state_change_callback_) {
         try {
-            state_change_callback_(robot_id_, old_state, new_state);
+            state_change_callback_(agent_id_, old_state, new_state);
         } catch (const std::exception& e) {
             log.error("State change callback exception: {}", e.what());
         }
@@ -305,14 +305,14 @@ void StateTracker::notify_state_change(
 // StateTrackerManager Implementation
 // ============================================================
 
-std::shared_ptr<StateTracker> StateTrackerManager::get_tracker(const std::string& robot_id) {
+std::shared_ptr<StateTracker> StateTrackerManager::get_tracker(const std::string& agent_id) {
     tbb::concurrent_hash_map<std::string, std::shared_ptr<StateTracker>>::accessor acc;
-    if (trackers_.find(acc, robot_id)) {
+    if (trackers_.find(acc, agent_id)) {
         return acc->second;
     }
 
     // Create new tracker
-    auto tracker = std::make_shared<StateTracker>(robot_id);
+    auto tracker = std::make_shared<StateTracker>(agent_id);
 
     // Set global callback if configured
     {
@@ -322,17 +322,17 @@ std::shared_ptr<StateTracker> StateTrackerManager::get_tracker(const std::string
         }
     }
 
-    trackers_.insert(acc, robot_id);
+    trackers_.insert(acc, agent_id);
     acc->second = tracker;
 
     return tracker;
 }
 
-void StateTrackerManager::configure_robot(
-    const std::string& robot_id,
+void StateTrackerManager::configure_agent(
+    const std::string& agent_id,
     const StateDefinition& def) {
 
-    auto tracker = get_tracker(robot_id);
+    auto tracker = get_tracker(agent_id);
     tracker->configure(def);
 }
 

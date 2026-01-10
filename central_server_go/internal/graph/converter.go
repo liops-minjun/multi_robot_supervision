@@ -389,7 +389,6 @@ func toGraphStartConditions(conds []db.StartCondition) []StartCondition {
 			Operator:        c.Operator,
 			Quantifier:      c.Quantifier,
 			TargetType:      c.TargetType,
-			RobotID:         c.RobotID,
 			AgentID:         c.AgentID,
 			State:           c.State,
 			StateOperator:   c.StateOperator,
@@ -413,7 +412,6 @@ func toDBStartConditions(conds []StartCondition) []db.StartCondition {
 			Operator:        c.Operator,
 			Quantifier:      c.Quantifier,
 			TargetType:      c.TargetType,
-			RobotID:         c.RobotID,
 			AgentID:         c.AgentID,
 			State:           c.State,
 			StateOperator:   c.StateOperator,
@@ -573,14 +571,14 @@ type ExecuteMessage struct {
 	CorrelationID string                 `json:"correlation_id"`
 	Action        string                 `json:"action"` // "execute"
 	ActionGraphID string                 `json:"action_graph_id"`
-	RobotID       string                 `json:"robot_id"`
+	AgentID       string                 `json:"agent_id"`
 	Params        map[string]interface{} `json:"params,omitempty"`
 }
 
 // StatusMessage is the message for execution status updates
 type StatusMessage struct {
 	ActionGraphID string                 `json:"action_graph_id"`
-	RobotID       string                 `json:"robot_id"`
+	AgentID       string                 `json:"agent_id"`
 	ExecutionID   string                 `json:"execution_id"`
 	Status        string                 `json:"status"` // running, completed, failed, cancelled
 	CurrentStepID string                 `json:"current_step_id,omitempty"`
