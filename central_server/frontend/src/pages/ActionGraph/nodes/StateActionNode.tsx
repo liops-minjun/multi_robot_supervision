@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useMemo } from 'react'
-import { Handle, Position, NodeProps, useReactFlow } from 'reactflow'
+import { Handle, Position, NodeProps, useReactFlow, useUpdateNodeInternals } from 'reactflow'
 import { ChevronDown, ChevronUp, Plus, X, Filter, Settings, Loader2, Sparkles } from 'lucide-react'
 import type { StartStateConfig, EndStateConfig, ActionField, ActionOutcome, DuringStateTarget, GraphState } from '../../../types'
 import { capabilityApi } from '../../../api/client'
@@ -161,6 +161,15 @@ const OUTCOME_COLORS: Record<ActionOutcome, string> = {
   rejected: '#ef4444',
 }
 
+const OUTCOME_HANDLE_IDS: Record<ActionOutcome, string> = {
+  success: 'success',
+  failed: 'failed',
+  aborted: 'aborted',
+  cancelled: 'cancelled',
+  timeout: 'timeout',
+  rejected: 'failed',
+}
+
 const END_STATE_COLORS: Record<string, string> = {
   success: '#22c55e',
   completed: '#22c55e',
@@ -186,6 +195,18 @@ const DURING_TARGET_OPTIONS: Array<{ value: NonNullable<DuringStateTarget['targe
   { value: 'all', label: 'All' },
   { value: 'agent', label: 'Agent' },
 ]
+
+const normalizeOutcomeValue = (value?: string): ActionOutcome | undefined => {
+  if (!value) return undefined
+  const lower = value.toLowerCase()
+  if (lower === 'success' || lower === 'succeeded') return 'success'
+  if (lower === 'failed' || lower === 'failure' || lower === 'error') return 'failed'
+  if (lower === 'aborted' || lower === 'abort') return 'aborted'
+  if (lower === 'cancelled' || lower === 'canceled' || lower === 'cancel') return 'cancelled'
+  if (lower === 'timeout' || lower === 'timed_out') return 'timeout'
+  if (lower === 'rejected') return 'rejected'
+  return undefined
+}
 
 const inferOutcomeFromEndState = (endState: EndStateConfig): ActionOutcome => {
   const label = (endState.label || '').toLowerCase()
@@ -246,7 +267,8 @@ type NormalizedDuringStateTarget = {
 
 const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeData>) => {
   const color = data.color || '#3b82f6'
-  const { setNodes } = useReactFlow()
+  const { setNodes, setEdges } = useReactFlow()
+  const updateNodeInternals = useUpdateNodeInternals()
   const baseStates = data.availableStates || []
   const [expandedSection, setExpandedSection] = useState<string | null>(null)
 
@@ -423,12 +445,40 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
     ]
 
     // Update end states with auto-generated state codes
+    // Use stable IDs (not Date.now()) so ReactFlow can track handles properly
+    const existingEndStates = data.endStates || []
+    const existingByOutcome = new Map<ActionOutcome, EndStateConfig>()
+    const handleIdRemap = new Map<string, string>()
+
+    existingEndStates.forEach((endState) => {
+      const inferred = normalizeOutcomeValue(endState.outcome) || inferOutcomeFromEndState(endState)
+      const handleId = OUTCOME_HANDLE_IDS[inferred]
+      if (handleId && endState.id !== handleId) {
+        handleIdRemap.set(endState.id, handleId)
+      }
+      if (!existingByOutcome.has(inferred)) {
+        existingByOutcome.set(inferred, endState)
+      }
+    })
+
+    const buildEndState = (outcome: ActionOutcome, state: string, label: string, color: string): EndStateConfig => {
+      const existing = existingByOutcome.get(outcome)
+      return {
+        ...existing,
+        id: OUTCOME_HANDLE_IDS[outcome],
+        state,
+        label: existing?.label || label,
+        outcome,
+        color: existing?.color || color,
+      }
+    }
+
     const newEndStates: EndStateConfig[] = [
-      { id: `end-success-${Date.now()}`, state: generatedStates.succeed, label: 'Success', outcome: 'success', color: '#22C55E' },
-      { id: `end-failed-${Date.now() + 1}`, state: generatedStates.failed, label: 'Failed', outcome: 'failed', color: '#EF4444' },
-      { id: `end-aborted-${Date.now() + 2}`, state: generatedStates.aborted, label: 'Aborted', outcome: 'aborted', color: '#EF4444' },
-      { id: `end-cancelled-${Date.now() + 3}`, state: generatedStates.cancelled, label: 'Cancelled', outcome: 'cancelled', color: '#6B7280' },
-      { id: `end-timeout-${Date.now() + 4}`, state: generatedStates.timeout, label: 'Timeout', outcome: 'timeout', color: '#F59E0B' },
+      buildEndState('success', generatedStates.succeed, 'Success', '#22C55E'),
+      buildEndState('failed', generatedStates.failed, 'Failed', '#EF4444'),
+      buildEndState('aborted', generatedStates.aborted, 'Aborted', '#EF4444'),
+      buildEndState('cancelled', generatedStates.cancelled, 'Cancelled', '#6B7280'),
+      buildEndState('timeout', generatedStates.timeout, 'Timeout', '#F59E0B'),
     ]
 
     // Store generated GraphState objects for saving
@@ -445,6 +495,15 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
         }
       } : n
     ))
+
+    if (handleIdRemap.size > 0) {
+      setEdges((eds) => eds.map((edge) => {
+        if (edge.source !== id || !edge.sourceHandle) return edge
+        const mapped = handleIdRemap.get(edge.sourceHandle)
+        if (!mapped || mapped === edge.sourceHandle) return edge
+        return { ...edge, sourceHandle: mapped }
+      }))
+    }
   }
 
   // Toggle auto-generate states
@@ -462,6 +521,16 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
       applyAutoGeneratedStates()
     }
   }, [jobName, autoGenerateStates])
+
+  // CRITICAL: Update ReactFlow internals after node data changes
+  // This ensures handles remain interactive after re-renders
+  useEffect(() => {
+    // Small delay to ensure DOM has updated
+    const timer = setTimeout(() => {
+      updateNodeInternals(id)
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [id, jobName, updateNodeInternals])
 
   // Available agent types, robots, and waypoints for conditions
   const availableAgents = data.availableAgents || []
@@ -567,62 +636,38 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
     ])
   }
 
-  // Calculate handle positions for end states (positioned in End States section area)
-  const getEndStateHandlePosition = (index: number, total: number) => {
-    const startY = 70 // Start at 70% (End States section starts around here)
-    const endY = 92   // End at 92% (just above footer)
-    if (total === 1) return 80
-    return startY + (index * (endY - startY) / (total - 1))
-  }
-
   const hasStartConditions = startStates.length > 0
 
-  return (
-    <div
-      className={`
-        min-w-[260px] max-w-[320px] rounded-lg overflow-hidden
-        bg-[#1e1e2e] border-2
-        shadow-lg
-        ${selected ? 'border-white/60 shadow-xl shadow-blue-500/20' : 'border-[#2a2a4a]'}
-        transition-all duration-150
-      `}
-    >
-      {/* Input Handle - Left side, aligned with Start Conditions section */}
-      <Handle
-        type="target"
-        position={Position.Left}
-        id="in"
-        className="!w-4 !h-4 !bg-cyan-500 !border-2 !border-cyan-300 !rounded-full hover:!w-5 hover:!h-5 hover:!bg-cyan-400 transition-all cursor-crosshair"
-        style={{ left: -8, top: '18%' }}
-        title="Input (from previous action)"
-      />
-
-      {/* Header - Action Server & Job Name */}
-      <div style={{ backgroundColor: `${color}25` }}>
-        {/* Action Server Name (primary) & Action Type (secondary) */}
-        <div className="px-3 pt-2 pb-1 flex items-center gap-2">
+	  return (
+	    <div
+	      className={`
+	        relative min-w-[260px] max-w-[320px] rounded-lg overflow-visible
+	        bg-[#1e1e2e] border-2
+	        shadow-lg
+	        ${selected ? 'border-white/60 shadow-xl shadow-blue-500/20' : 'border-[#2a2a4a]'}
+	        transition-all duration-150
+	      `}
+	    >
+	      {/* Header - Job Name (primary) & Action Server (secondary) */}
+	      <div style={{ backgroundColor: `${color}25` }}>
+	        {/* Job Name (primary - main title) */}
+	        <div className="px-3 pt-2 pb-1 flex items-center gap-2">
           <div
             className="w-2 h-2 rounded-sm flex-shrink-0"
             style={{ backgroundColor: color }}
           />
-          <div className="flex flex-col min-w-0 flex-1">
-            {/* Action Server (primary identifier) */}
-            <span
-              className="text-[10px] font-mono text-white truncate"
-              title={data.server || data.subtype}
-            >
-              {(data.server || data.subtype).replace(/^\//, '')}
-            </span>
-            {/* Action Type (secondary info) */}
-            {data.actionType && (
-              <span
-                className="text-[8px] px-1 py-0.5 rounded truncate w-fit"
-                style={{ backgroundColor: `${color}30`, color: color }}
-                title={data.actionType}
-              >
-                {data.actionType.split('/').pop()}
-              </span>
-            )}
+          <div className="flex-1 min-w-0">
+            <input
+              type="text"
+              value={jobName}
+              onChange={(e) => {
+                e.stopPropagation()
+                updateData('jobName', e.target.value)
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full text-sm font-semibold text-white bg-transparent border-b border-transparent hover:border-gray-600 focus:border-white focus:outline-none truncate"
+              placeholder="Enter job name..."
+            />
           </div>
           {hasStartConditions && (
             <div className="flex items-center gap-1 px-1.5 py-0.5 bg-cyan-500/20 rounded flex-shrink-0">
@@ -631,19 +676,23 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
             </div>
           )}
         </div>
-        {/* Editable Job Name */}
-        <div className="px-3 pb-2">
-          <input
-            type="text"
-            value={jobName}
-            onChange={(e) => {
-              e.stopPropagation()
-              updateData('jobName', e.target.value)
-            }}
-            onClick={(e) => e.stopPropagation()}
-            className="w-full text-sm font-semibold text-white bg-transparent border-b border-transparent hover:border-gray-600 focus:border-white focus:outline-none"
-            placeholder="Enter job name..."
-          />
+        {/* Action Server & Type (secondary info) */}
+        <div className="px-3 pb-2 flex items-center gap-2">
+          <span
+            className="text-[9px] font-mono text-gray-400 truncate"
+            title={data.server || data.subtype}
+          >
+            {(data.server || data.subtype).replace(/^\//, '')}
+          </span>
+          {data.actionType && (
+            <span
+              className="text-[8px] px-1 py-0.5 rounded truncate"
+              style={{ backgroundColor: `${color}30`, color: color }}
+              title={data.actionType}
+            >
+              {data.actionType.split('/').pop()}
+            </span>
+          )}
         </div>
 
         {/* Auto-Generate States Toggle */}
@@ -1205,7 +1254,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
           {endStates.map((endState) => (
             <div
               key={endState.id}
-              className="flex items-center gap-2 pr-4"
+              className="flex items-center gap-2"
             >
               <div
                 className="w-2 h-2 rounded-full flex-shrink-0"
@@ -1250,17 +1299,6 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
               >
                 {states.map(s => <option key={s} value={s} className="bg-[#16162a]">{s}</option>)}
               </select>
-              <input
-                type="text"
-                value={endState.condition || ''}
-                onChange={(e) => {
-                  e.stopPropagation()
-                  updateEndState(endState.id, 'condition', e.target.value)
-                }}
-                onClick={(e) => e.stopPropagation()}
-                placeholder="Condition (optional)"
-                className="w-20 px-1 py-0.5 bg-transparent border-b border-gray-700 text-[9px] text-gray-400 focus:outline-none focus:border-gray-500"
-              />
               {endStates.length > 1 && (
                 <button
                   onClick={(e) => { e.stopPropagation(); removeEndState(endState.id) }}
@@ -1275,35 +1313,60 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
       </div>
 
       {/* Footer */}
-      <div
-        className="px-3 py-1 border-t border-[#2a2a4a] flex items-center justify-between"
-        style={{ backgroundColor: '#16162a' }}
-      >
-        <span className="text-[9px] text-gray-500 font-mono truncate max-w-[180px]">
-          {data.server || data.subtype}
-        </span>
-        <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
-      </div>
+	      <div
+	        className="px-3 py-1 border-t border-[#2a2a4a] flex items-center justify-between"
+	        style={{ backgroundColor: '#16162a' }}
+	      >
+	        <span className="text-[9px] text-gray-500 font-mono truncate max-w-[180px]">
+	          {data.server || data.subtype}
+	        </span>
+	        <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
+	      </div>
 
-      {/* Dynamic End State Handles */}
-      {endStates.map((endState, index) => (
-        <Handle
-          key={endState.id}
-          type="source"
-          position={Position.Right}
-          id={endState.id}
-          className="!w-4 !h-4 !border-2 !rounded-full hover:!w-5 hover:!h-5 transition-all cursor-crosshair"
-          style={{
-            right: -8,
-            top: `${getEndStateHandlePosition(index, endStates.length)}%`,
-            backgroundColor: endState.color || getEndStateColor(endState),
-            borderColor: `${endState.color || getEndStateColor(endState)}99`,
-          }}
-        />
-      ))}
-    </div>
-  )
-})
+	      {/* Handles (render last to avoid being covered by overflowing content) */}
+	      <Handle
+	        type="target"
+	        position={Position.Left}
+	        id="in"
+	        className="!w-4 !h-4 !bg-cyan-500 !border-2 !border-cyan-300 !rounded-full hover:!w-5 hover:!h-5 hover:!bg-cyan-400 transition-all cursor-crosshair !pointer-events-auto"
+	        style={{ position: 'absolute', left: -8, top: '18%', zIndex: 1000, pointerEvents: 'auto' }}
+	        title="Input (from previous action)"
+	      />
+	      <Handle
+	        type="source"
+	        position={Position.Right}
+	        id="success"
+	        className="!w-4 !h-4 !border-2 !rounded-full hover:!w-5 hover:!h-5 transition-all cursor-crosshair !pointer-events-auto"
+	        style={{ position: 'absolute', right: -8, top: '70%', backgroundColor: '#22c55e', borderColor: '#22c55e99', zIndex: 1000, pointerEvents: 'auto' }}
+	        title="Success: Drag to connect"
+	      />
+	      <Handle
+	        type="source"
+	        position={Position.Right}
+	        id="failed"
+	        className="!w-4 !h-4 !border-2 !rounded-full hover:!w-5 hover:!h-5 transition-all cursor-crosshair !pointer-events-auto"
+	        style={{ position: 'absolute', right: -8, top: '77%', backgroundColor: '#ef4444', borderColor: '#ef444499', zIndex: 1000, pointerEvents: 'auto' }}
+	        title="Failed: Drag to connect"
+	      />
+	      <Handle
+	        type="source"
+	        position={Position.Right}
+	        id="aborted"
+	        className="!w-4 !h-4 !border-2 !rounded-full hover:!w-5 hover:!h-5 transition-all cursor-crosshair !pointer-events-auto"
+	        style={{ position: 'absolute', right: -8, top: '84%', backgroundColor: '#ef4444', borderColor: '#ef444499', zIndex: 1000, pointerEvents: 'auto' }}
+	        title="Aborted: Drag to connect"
+	      />
+	      <Handle
+	        type="source"
+	        position={Position.Right}
+	        id="cancelled"
+	        className="!w-4 !h-4 !border-2 !rounded-full hover:!w-5 hover:!h-5 transition-all cursor-crosshair !pointer-events-auto"
+	        style={{ position: 'absolute', right: -8, top: '91%', backgroundColor: '#6b7280', borderColor: '#6b728099', zIndex: 1000, pointerEvents: 'auto' }}
+	        title="Cancelled: Drag to connect"
+	      />
+	    </div>
+	  )
+	})
 
 StateActionNode.displayName = 'StateActionNode'
 

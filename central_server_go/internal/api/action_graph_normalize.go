@@ -35,6 +35,18 @@ func normalizeActionGraphStep(step map[string]interface{}) {
 	delete(step, "startStates")
 	delete(step, "startConditions")
 
+	// Normalize job_name (camelCase to snake_case)
+	if jobName, ok := step["jobName"].(string); ok && jobName != "" {
+		step["job_name"] = jobName
+	}
+	delete(step, "jobName")
+
+	// Normalize auto_generate_states (camelCase to snake_case)
+	if autoGen, ok := step["autoGenerateStates"].(bool); ok {
+		step["auto_generate_states"] = autoGen
+	}
+	delete(step, "autoGenerateStates")
+
 	preStates := extractStateList(step["pre_states"])
 	if len(preStates) == 0 {
 		preStates = extractStateList(step["preStates"])
@@ -426,9 +438,8 @@ func normalizeEndStates(raw interface{}) []map[string]interface{} {
 		if outcome != "" {
 			out["outcome"] = outcome
 		}
-		if v, ok := out["condition"]; ok {
-			out["condition"] = v
-		}
+		// condition field has been removed from EndState
+		delete(out, "condition")
 		normalized = append(normalized, out)
 	}
 	return normalized
@@ -452,6 +463,8 @@ func normalizeOutcomeTransitions(raw interface{}) []map[string]interface{} {
 		if outcome != "" {
 			out["outcome"] = outcome
 		}
+		// condition field has been removed from OutcomeTransition
+		delete(out, "condition")
 		normalized = append(normalized, out)
 	}
 	return normalized

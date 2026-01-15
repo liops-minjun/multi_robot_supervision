@@ -305,18 +305,21 @@ func (ActionGraphDeploymentLog) TableName() string {
 
 // ActionGraphStep represents a step in an action graph
 type ActionGraphStep struct {
-	ID           string                   `json:"id"`
-	Name         string                   `json:"name,omitempty"`
-	Type         string                   `json:"type,omitempty"`         // terminal, fallback
-	TerminalType string                   `json:"terminal_type,omitempty"` // success, failure
-	Alert        bool                     `json:"alert,omitempty"`
-	Message      string                   `json:"message,omitempty"`
+	ID           string `json:"id"`
+	Name         string `json:"name,omitempty"`
+	JobName      string `json:"job_name,omitempty"`      // User-defined job name for this step
+	Type         string `json:"type,omitempty"`          // terminal, fallback
+	TerminalType string `json:"terminal_type,omitempty"` // success, failure
+	Alert        bool   `json:"alert,omitempty"`
+	Message      string `json:"message,omitempty"`
 
-	PreStates     []string `json:"pre_states,omitempty"`
-	DuringStates  []string `json:"during_states,omitempty"`
+	AutoGenerateStates bool `json:"auto_generate_states,omitempty"` // Whether to auto-generate states from job name
+
+	PreStates          []string      `json:"pre_states,omitempty"`
+	DuringStates       []string      `json:"during_states,omitempty"`
 	DuringStateTargets []StateTarget `json:"during_state_targets,omitempty"`
-	SuccessStates []string `json:"success_states,omitempty"`
-	FailureStates []string `json:"failure_states,omitempty"`
+	SuccessStates      []string      `json:"success_states,omitempty"`
+	FailureStates      []string      `json:"failure_states,omitempty"`
 
 	StartConditions []StartCondition `json:"start_conditions,omitempty"`
 	EndStates       []EndState       `json:"end_states,omitempty"`
@@ -362,19 +365,17 @@ type TransitionOnFailure struct {
 }
 
 type OutcomeTransition struct {
-	Outcome   string `json:"outcome"`
-	Next      string `json:"next,omitempty"`
-	Condition string `json:"condition,omitempty"`
-	State     string `json:"state,omitempty"`
+	Outcome string `json:"outcome"`
+	Next    string `json:"next,omitempty"`
+	State   string `json:"state,omitempty"`
 }
 
 type EndState struct {
-	ID        string `json:"id"`
-	State     string `json:"state"`
-	Label     string `json:"label,omitempty"`
-	Color     string `json:"color,omitempty"`
-	Outcome   string `json:"outcome,omitempty"`
-	Condition string `json:"condition,omitempty"`
+	ID      string `json:"id"`
+	State   string `json:"state"`
+	Label   string `json:"label,omitempty"`
+	Color   string `json:"color,omitempty"`
+	Outcome string `json:"outcome,omitempty"`
 }
 
 // StateTarget defines which agents receive a state during execution.

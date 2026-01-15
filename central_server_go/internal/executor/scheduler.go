@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -290,7 +289,17 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 	// Start step execution in background
 	go s.runTask(taskCtx, task)
 
-	log.Printf("Task started: %s (graph=%s, agent=%s)", taskID, actionGraphID, agentID)
+	log.Printf("Task started: %s (graph=%s, agent=%s, entry=%s)", taskID, actionGraphID, agentID, entryStepID)
+
+	// Debug: Log graph structure
+	for i, step := range steps {
+		trans := ""
+		if step.Transition != nil {
+			trans = fmt.Sprintf("on_success=%v on_failure=%v on_outcomes=%d",
+				step.Transition.OnSuccess, step.Transition.OnFailure, len(step.Transition.OnOutcomes))
+		}
+		log.Printf("[GRAPH] Step[%d] id=%s type=%s transition={%s}", i, step.ID, step.Type, trans)
+	}
 
 	return taskID, nil
 }
@@ -856,17 +865,15 @@ func (s *Scheduler) resolveOutcomeTransition(transitions []db.OutcomeTransition,
 
 	var defaultNext string
 	for _, transition := range transitions {
-		if !outcomeMatches(outcome, transition.Outcome) {
-			continue
-		}
-		condition := strings.TrimSpace(transition.Condition)
-		if condition == "" || strings.EqualFold(condition, "default") || strings.EqualFold(condition, "else") {
+		// No outcome specified - this is a default fallback
+		if transition.Outcome == "" {
 			if defaultNext == "" {
 				defaultNext = transition.Next
 			}
 			continue
 		}
-		if evaluateTransitionCondition(condition, vars) {
+		// Check if outcome matches
+		if outcomeMatches(outcome, transition.Outcome) {
 			return transition.Next
 		}
 	}
@@ -979,68 +986,6 @@ func outcomeMatches(actual, expected string) bool {
 	return false
 }
 
-var transitionConditionPattern = regexp.MustCompile(
-	`^\s*\$([a-zA-Z0-9_]+)\.?([a-zA-Z0-9_]*)\s*(==|!=|<=|>=|<|>)\s*(.+)\s*$`,
-)
-
-func evaluateTransitionCondition(condition string, vars map[string]string) bool {
-	trimmed := strings.TrimSpace(condition)
-	if trimmed == "" {
-		return true
-	}
-	if strings.EqualFold(trimmed, "true") {
-		return true
-	}
-	if strings.EqualFold(trimmed, "false") {
-		return false
-	}
-
-	matches := transitionConditionPattern.FindStringSubmatch(trimmed)
-	if len(matches) != 5 {
-		return false
-	}
-
-	varName := matches[1]
-	field := matches[2]
-	op := matches[3]
-	expectedRaw := strings.TrimSpace(matches[4])
-	expectedRaw = strings.Trim(expectedRaw, "\"'")
-
-	key := varName
-	if field != "" {
-		key = varName + "." + field
-	}
-	actual, ok := vars[key]
-	if !ok {
-		return false
-	}
-
-	switch op {
-	case "==":
-		return actual == expectedRaw
-	case "!=":
-		return actual != expectedRaw
-	case "<", "<=", ">", ">=":
-		actualVal, err1 := strconv.ParseFloat(actual, 64)
-		expectedVal, err2 := strconv.ParseFloat(expectedRaw, 64)
-		if err1 != nil || err2 != nil {
-			return false
-		}
-		switch op {
-		case "<":
-			return actualVal < expectedVal
-		case "<=":
-			return actualVal <= expectedVal
-		case ">":
-			return actualVal > expectedVal
-		case ">=":
-			return actualVal >= expectedVal
-		}
-		return false
-	default:
-		return false
-	}
-}
 
 // extractRequiredZones extracts zone requirements from a step
 func (s *Scheduler) extractRequiredZones(step db.ActionGraphStep) []string {

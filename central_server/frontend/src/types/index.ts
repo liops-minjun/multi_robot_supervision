@@ -95,7 +95,6 @@ export interface EndStateConfig {
   label?: string  // Display label (e.g., "Success", "Timeout", "Error")
   color?: string  // Handle color
   outcome?: ActionOutcome  // Action outcome this state represents
-  condition?: string  // Optional edge condition for this outcome
 }
 
 // Legacy StateConfig for backward compatibility
@@ -156,6 +155,8 @@ export const SystemStates: GraphState[] = [
 export interface GraphStep {
   id: string
   name?: string
+  job_name?: string                // User-defined job name for this step
+  auto_generate_states?: boolean   // Whether to auto-generate states from this step
   type?: 'fallback' | 'terminal' | null
   terminal_type?: 'success' | 'failure'
   // Legacy preconditions (simple string-based)
@@ -225,7 +226,6 @@ export interface TransitionCondition {
 export interface OutcomeTransition {
   outcome: ActionOutcome
   next?: string
-  condition?: string
   state?: string
 }
 

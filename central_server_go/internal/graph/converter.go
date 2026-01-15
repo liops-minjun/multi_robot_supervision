@@ -144,6 +144,8 @@ func stepToVertex(step *db.ActionGraphStep) Vertex {
 		vertex.Type = VertexTypeStep
 
 		stepData := &StepData{
+			JobName:            step.JobName,
+			AutoGenerateStates: step.AutoGenerateStates,
 			States: &StateConfig{
 				Pre:     step.PreStates,
 				During:  selectPrimaryDuringStates(step),
@@ -221,7 +223,7 @@ func extractEdges(step *db.ActionGraphStep) []Edge {
 			if transition.Next == "" {
 				continue
 			}
-			condition := encodeOutcomeCondition(transition.Outcome, transition.Condition, transition.State)
+			condition := encodeOutcomeCondition(transition.Outcome, transition.State)
 			edges = append(edges, Edge{
 				From: step.ID,
 				To:   transition.Next,
@@ -329,6 +331,10 @@ func vertexToStep(v *Vertex, cg *CanonicalGraph) db.ActionGraphStep {
 		step.Alert = v.Terminal.Alert
 		step.Message = v.Terminal.Message
 	} else if v.Step != nil {
+		// Job name and auto-generate states
+		step.JobName = v.Step.JobName
+		step.AutoGenerateStates = v.Step.AutoGenerateStates
+
 		// States
 		if v.Step.States != nil {
 			step.PreStates = v.Step.States.Pre
@@ -431,12 +437,11 @@ func toGraphEndStates(states []db.EndState) []EndState {
 	out := make([]EndState, 0, len(states))
 	for _, state := range states {
 		out = append(out, EndState{
-			ID:        state.ID,
-			State:     state.State,
-			Label:     state.Label,
-			Color:     state.Color,
-			Outcome:   state.Outcome,
-			Condition: state.Condition,
+			ID:      state.ID,
+			State:   state.State,
+			Label:   state.Label,
+			Color:   state.Color,
+			Outcome: state.Outcome,
 		})
 	}
 	return out
@@ -449,12 +454,11 @@ func toDBEndStates(states []EndState) []db.EndState {
 	out := make([]db.EndState, 0, len(states))
 	for _, state := range states {
 		out = append(out, db.EndState{
-			ID:        state.ID,
-			State:     state.State,
-			Label:     state.Label,
-			Color:     state.Color,
-			Outcome:   state.Outcome,
-			Condition: state.Condition,
+			ID:      state.ID,
+			State:   state.State,
+			Label:   state.Label,
+			Color:   state.Color,
+			Outcome: state.Outcome,
 		})
 	}
 	return out
@@ -493,15 +497,11 @@ func buildTransitionFromEdges(vertexID string, cg *CanonicalGraph) *db.StepTrans
 			if e.Config != nil {
 				cond = e.Config.Condition
 			}
-			outcome, condition, state, ok := decodeOutcomeCondition(cond)
-			if !ok {
-				condition = strings.TrimSpace(cond)
-			}
+			outcome, state, _ := decodeOutcomeCondition(cond)
 			transition.OnOutcomes = append(transition.OnOutcomes, db.OutcomeTransition{
-				Outcome:   outcome,
-				Next:      e.To,
-				Condition: condition,
-				State:     state,
+				Outcome: outcome,
+				Next:    e.To,
+				State:   state,
 			})
 		}
 	}
@@ -509,13 +509,10 @@ func buildTransitionFromEdges(vertexID string, cg *CanonicalGraph) *db.StepTrans
 	return transition
 }
 
-func encodeOutcomeCondition(outcome, condition, state string) string {
+func encodeOutcomeCondition(outcome, state string) string {
 	payload := map[string]string{}
 	if strings.TrimSpace(outcome) != "" {
 		payload["outcome"] = strings.TrimSpace(outcome)
-	}
-	if strings.TrimSpace(condition) != "" {
-		payload["condition"] = strings.TrimSpace(condition)
 	}
 	if strings.TrimSpace(state) != "" {
 		payload["state"] = strings.TrimSpace(state)
@@ -525,24 +522,23 @@ func encodeOutcomeCondition(outcome, condition, state string) string {
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return condition
+		return ""
 	}
 	return string(raw)
 }
 
-func decodeOutcomeCondition(raw string) (string, string, string, bool) {
+func decodeOutcomeCondition(raw string) (string, string, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || !strings.HasPrefix(raw, "{") {
-		return "", "", "", false
+		return "", "", false
 	}
 	payload := map[string]string{}
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		return "", "", "", false
+		return "", "", false
 	}
 	outcome := strings.TrimSpace(payload["outcome"])
-	condition := strings.TrimSpace(payload["condition"])
 	state := strings.TrimSpace(payload["state"])
-	return outcome, condition, state, outcome != "" || condition != "" || state != ""
+	return outcome, state, outcome != "" || state != ""
 }
 
 // =============================================================================

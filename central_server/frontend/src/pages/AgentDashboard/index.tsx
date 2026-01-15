@@ -530,11 +530,18 @@ export default function AgentDashboard() {
 
   // Task execution control mutations
   const executeGraphMutation = useMutation({
-    mutationFn: ({ graphId, agentId }: { graphId: string; agentId: string }) =>
-      actionGraphApi.execute(graphId, agentId),
-    onSuccess: () => {
+    mutationFn: ({ graphId, agentId }: { graphId: string; agentId: string }) => {
+      console.log('[executeGraphMutation] Starting execution:', { graphId, agentId })
+      return actionGraphApi.execute(graphId, agentId)
+    },
+    onSuccess: (data) => {
+      console.log('[executeGraphMutation] Success:', data)
       queryClient.invalidateQueries({ queryKey: ['agent-state'] })
       queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    },
+    onError: (error: Error) => {
+      console.error('[executeGraphMutation] Error:', error)
+      alert(`Failed to start execution: ${error.message}`)
     },
   })
 
@@ -810,14 +817,15 @@ export default function AgentDashboard() {
                   <div className="space-y-3">
                     {agentCapabilities.capabilities.map((capability) => {
                       // Find if this capability is currently in use by a step
+                      // Match by action_server (unique identifier) only
                       let inUseByStep: { id: string; name: string } | null = null
                       if (selectedRobotExecuting && currentStepId && fleetGraph) {
                         const currentStep = fleetGraph.steps.find(s => s.id === currentStepId)
-                        if (currentStep?.action?.server === capability.action_server ||
-                            currentStep?.action?.type === capability.action_type) {
+                        if (currentStep?.action?.server === capability.action_server) {
                           inUseByStep = {
                             id: currentStep.id,
-                            name: currentStep.name || currentStep.id,
+                            // Show job_name first, then step name, then step id
+                            name: currentStep.job_name || currentStep.name || currentStep.id,
                           }
                         }
                       }
@@ -893,7 +901,7 @@ export default function AgentDashboard() {
                           <span className="text-xs text-gray-500 uppercase tracking-wider">Execution Status</span>
                           <ExecutionPhaseBadge
                             phase={selectedRobotState.execution_phase}
-                            currentStepName={currentStepId ? fleetGraph?.steps.find(s => s.id === currentStepId)?.name : null}
+                            currentStepName={currentStepId ? (fleetGraph?.steps.find(s => s.id === currentStepId)?.job_name || fleetGraph?.steps.find(s => s.id === currentStepId)?.name) : null}
                             graphName={fleetGraph?.name}
                           />
                         </div>
@@ -1014,7 +1022,7 @@ export default function AgentDashboard() {
                             <div>
                               <span className="text-gray-500">Current Step:</span>
                               <div className="text-blue-400 font-medium mt-0.5">
-                                {fleetGraph?.steps.find(s => s.id === currentStepId)?.name || currentStepId}
+                                {fleetGraph?.steps.find(s => s.id === currentStepId)?.job_name || fleetGraph?.steps.find(s => s.id === currentStepId)?.name || currentStepId}
                               </div>
                             </div>
                           )}

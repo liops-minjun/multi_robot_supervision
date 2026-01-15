@@ -54,7 +54,7 @@ bool outcome_matches(const std::string& actual, const std::string& expected) {
 
 struct EdgeConditionConfig {
     std::string outcome;
-    std::string expr;
+    std::string state;
 };
 
 EdgeConditionConfig parse_edge_condition(const std::string& raw) {
@@ -70,29 +70,21 @@ EdgeConditionConfig parse_edge_condition(const std::string& raw) {
                 if (parsed.contains("outcome") && parsed["outcome"].is_string()) {
                     cfg.outcome = parsed["outcome"].get<std::string>();
                 }
-                if (parsed.contains("condition") && parsed["condition"].is_string()) {
-                    cfg.expr = parsed["condition"].get<std::string>();
+                if (parsed.contains("state") && parsed["state"].is_string()) {
+                    cfg.state = parsed["state"].get<std::string>();
                 }
                 return cfg;
             }
         } catch (...) {
-            // Fall back to raw expression
+            // Fall back to raw outcome string
         }
     }
 
-    cfg.expr = raw;
+    // Treat raw string as outcome
+    cfg.outcome = raw;
     return cfg;
 }
 
-bool is_default_condition(const std::string& expr) {
-    if (expr.empty()) {
-        return true;
-    }
-    std::string lower;
-    lower.reserve(expr.size());
-    std::transform(expr.begin(), expr.end(), std::back_inserter(lower), ::tolower);
-    return lower == "default" || lower == "else";
-}
 }
 
 GraphExecutor::GraphExecutor(
@@ -197,9 +189,8 @@ std::optional<fleet::v1::Vertex> GraphExecutor::get_next_step(
     const std::string normalized_outcome = normalize_outcome(outcome);
     std::optional<std::string> next_id;
 
-    // Conditional edges (priority order)
+    // Conditional edges - match by outcome
     std::string default_id;
-    std::string default_condition;
     for (const auto& edge : graph.edges()) {
         if (edge.from_vertex() != ctx.current_vertex_id) {
             continue;
@@ -209,28 +200,20 @@ std::optional<fleet::v1::Vertex> GraphExecutor::get_next_step(
         }
 
         EdgeConditionConfig cfg = parse_edge_condition(edge.condition());
-        if (!cfg.outcome.empty() && !outcome_matches(normalized_outcome, cfg.outcome)) {
-            continue;
-        }
 
-        if (is_default_condition(cfg.expr)) {
+        // If no outcome specified, this is a default edge
+        if (cfg.outcome.empty()) {
             if (default_id.empty()) {
                 default_id = edge.to_vertex();
-                default_condition = cfg.expr;
             }
             continue;
         }
 
-        auto eval_result = precond_evaluator_.evaluate(cfg.expr, {
-            ctx.agent_id,
-            state_tracker_mgr_,
-            &execution_contexts_,
-            &ctx.variables
-        });
-        if (eval_result == executor::PreconditionEvaluator::Result::SATISFIED) {
+        // Check if outcome matches
+        if (outcome_matches(normalized_outcome, cfg.outcome)) {
             next_id = edge.to_vertex();
             if (matched_condition) {
-                *matched_condition = cfg.expr;
+                *matched_condition = cfg.outcome;
             }
             break;
         }
@@ -239,7 +222,7 @@ std::optional<fleet::v1::Vertex> GraphExecutor::get_next_step(
     if (!next_id && !default_id.empty()) {
         next_id = default_id;
         if (matched_condition) {
-            *matched_condition = default_condition;
+            matched_condition->clear();
         }
     }
 

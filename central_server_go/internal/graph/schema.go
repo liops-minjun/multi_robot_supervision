@@ -133,6 +133,10 @@ type Vertex struct {
 type StepData struct {
 	StepType StepType `json:"step_type"` // action, wait, condition
 
+	// Job name (user-defined name for this step)
+	JobName            string `json:"job_name,omitempty"`
+	AutoGenerateStates bool   `json:"auto_generate_states,omitempty"`
+
 	// Action configuration (when StepType == "action")
 	Action *ActionConfig `json:"action,omitempty"`
 
@@ -211,12 +215,11 @@ type StartCondition struct {
 
 // EndState defines an outcome-specific state for a step.
 type EndState struct {
-	ID        string `json:"id"`
-	State     string `json:"state"`
-	Label     string `json:"label,omitempty"`
-	Color     string `json:"color,omitempty"`
-	Outcome   string `json:"outcome,omitempty"`
-	Condition string `json:"condition,omitempty"`
+	ID      string `json:"id"`
+	State   string `json:"state"`
+	Label   string `json:"label,omitempty"`
+	Color   string `json:"color,omitempty"`
+	Outcome string `json:"outcome,omitempty"`
 }
 
 // TerminalData contains terminal-specific data

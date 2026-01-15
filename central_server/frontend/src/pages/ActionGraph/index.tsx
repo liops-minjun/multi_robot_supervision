@@ -15,6 +15,8 @@ import ReactFlow, {
   ReactFlowProvider,
   ConnectionLineType,
   MarkerType,
+  OnConnectStart,
+  OnConnectEnd,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
 import {
@@ -278,7 +280,6 @@ const buildEndStatesFromOutcomes = (
       state: outcome.state || (normalized === 'success' ? defaultSuccess : defaultFailure),
       label: outcome.outcome.charAt(0).toUpperCase() + outcome.outcome.slice(1),
       outcome: normalized,
-      condition: outcome.condition,
     }
   })
 }
@@ -363,6 +364,13 @@ function ActionGraphEditor() {
     queryFn: () => templateApi.get(selectedTemplateId!),
     enabled: !!selectedTemplateId,
   })
+
+  // Debug: Log modal state changes
+  useEffect(() => {
+    console.log('[ActionGraphEditor] showAssignModal changed to:', showAssignModal)
+    console.log('[ActionGraphEditor] selectedTemplate:', selectedTemplate?.id, selectedTemplate?.name)
+    console.log('[ActionGraphEditor] selectedTemplateId:', selectedTemplateId)
+  }, [showAssignModal, selectedTemplate, selectedTemplateId])
 
   // Fetch first state definition (for states reference - legacy support)
   const { data: stateDefinitions = [], refetch: refetchStateDefinitions } = useQuery({
@@ -536,7 +544,34 @@ function ActionGraphEditor() {
   }, [selectedTemplate, selectedStateDef, availableStates, availableAgents])
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
+  const [edges, setEdges, defaultOnEdgesChange] = useEdgesState(initialEdges)
+
+  // Custom onEdgesChange that prevents automatic edge removal when nodes are re-rendering
+  // ReactFlow can try to remove edges when handles temporarily unmount during re-render
+  const onEdgesChange = useCallback((changes: import('reactflow').EdgeChange[]) => {
+    // Filter out 'remove' changes that happen due to handle re-registration
+    // Only allow explicit user deletions (via backspace/delete key or UI)
+    const filteredChanges = changes.filter(change => {
+      if (change.type === 'remove') {
+        // Check if the source and target nodes still exist
+        // If they do, this is likely a spurious removal from re-render, not user action
+        const edge = edges.find(e => e.id === change.id)
+        if (edge) {
+          const sourceExists = nodes.some(n => n.id === edge.source)
+          const targetExists = nodes.some(n => n.id === edge.target)
+          if (sourceExists && targetExists) {
+            console.log('[onEdgesChange] Blocking spurious edge removal:', change.id)
+            return false // Block this removal
+          }
+        }
+      }
+      return true
+    })
+
+    if (filteredChanges.length > 0) {
+      defaultOnEdgesChange(filteredChanges)
+    }
+  }, [defaultOnEdgesChange, edges, nodes])
 
   // Only reset graph when template changes (by ID), not when state definition loads
   // This prevents newly added nodes from being lost when async data loads
@@ -556,23 +591,51 @@ function ActionGraphEditor() {
   }, [templateId])
 
   // Track last applied states to prevent infinite loops
-  const lastAppliedStatesRef = useRef<string[]>([])
+  const lastAppliedCombinedStatesRef = useRef<string>('')
   const lastAppliedAgentsRef = useRef<Array<{ id: string; name: string }>>([])
 
-  // Update existing nodes' availableStates when state definition loads (without resetting the graph)
+  // Collect all generated state codes from all nodes
+  const allGeneratedStateCodes = useMemo(() => {
+    const codes: string[] = []
+    nodes.forEach((node) => {
+      if (node.data.autoGenerateStates && node.data.generatedStates?.length > 0) {
+        node.data.generatedStates.forEach((gs: { code: string }) => {
+          if (gs.code && !codes.includes(gs.code)) {
+            codes.push(gs.code)
+          }
+        })
+      }
+    })
+    return codes.sort() // Sort for consistent comparison
+  }, [nodes])
+
+  // Combine base states with all generated states from all nodes
+  const combinedAvailableStates = useMemo(() => {
+    const combined = [...availableStates]
+    allGeneratedStateCodes.forEach((code) => {
+      if (!combined.includes(code)) {
+        combined.push(code)
+      }
+    })
+    return combined
+  }, [availableStates, allGeneratedStateCodes])
+
+  // Update existing nodes' availableStates when state definition loads OR when generated states change
   useEffect(() => {
     // Only update if states actually changed (by value, not reference)
-    const statesChanged = JSON.stringify(availableStates) !== JSON.stringify(lastAppliedStatesRef.current)
-    if (availableStates.length > 0 && statesChanged) {
-      lastAppliedStatesRef.current = availableStates
+    const combinedKey = JSON.stringify(combinedAvailableStates.slice().sort())
+    const statesChanged = combinedKey !== lastAppliedCombinedStatesRef.current
+
+    if (combinedAvailableStates.length > 0 && statesChanged) {
+      lastAppliedCombinedStatesRef.current = combinedKey
       setNodes((nds) =>
         nds.map((node) => ({
           ...node,
-          data: { ...node.data, availableStates },
+          data: { ...node.data, availableStates: combinedAvailableStates },
         }))
       )
     }
-  }, [availableStates, setNodes])
+  }, [combinedAvailableStates, setNodes])
 
   useEffect(() => {
     const agentsChanged = JSON.stringify(availableAgents) !== JSON.stringify(lastAppliedAgentsRef.current)
@@ -629,13 +692,12 @@ function ActionGraphEditor() {
         outcomeTransitions.push({
           outcome: normalizedOutcome,
           next: edge.target,
-          condition: endState.condition,
           state: endState.state,
         })
       })
 
-      const fallbackSuccess = outcomeTransitions.find(t => t.outcome === 'success' && !t.condition)
-      const fallbackFailure = outcomeTransitions.find(t => t.outcome !== 'success' && !t.condition)
+      const fallbackSuccess = outcomeTransitions.find(t => t.outcome === 'success')
+      const fallbackFailure = outcomeTransitions.find(t => t.outcome !== 'success')
 
       const rawPreStates = node.data.preStates || []
       const preStates = Array.isArray(rawPreStates)
@@ -657,6 +719,9 @@ function ActionGraphEditor() {
       const step: ActionGraph['steps'][0] = {
         id: node.id,
         name: node.data.label,
+        // Job name for this step (user-defined name)
+        job_name: node.data.jobName || undefined,
+        auto_generate_states: node.data.autoGenerateStates || undefined,
         // Regular action steps don't need type set (only 'fallback' or 'terminal' use type)
         action: {
           type: node.data.actionType || node.data.subtype,
@@ -679,6 +744,9 @@ function ActionGraphEditor() {
           on_outcomes: outcomeTransitions.length > 0 ? outcomeTransitions : undefined,
         },
       }
+
+      // Debug: Log transitions being saved
+      console.log(`[SAVE] Step ${node.id} (${node.data.label}): on_success=${fallbackSuccess?.next}, on_failure=${fallbackFailure?.next}, outcomeTransitions=`, outcomeTransitions)
 
       // Add preconditions if any
       if (node.data.preconditions && node.data.preconditions.length > 0) {
@@ -874,6 +942,15 @@ function ActionGraphEditor() {
     [nodes, setEdges]
   )
 
+  // Debug: Track connection start/end
+  const onConnectStart: OnConnectStart = useCallback((event, params) => {
+    console.log('[onConnectStart] event:', event.type, 'params:', params)
+  }, [])
+
+  const onConnectEnd: OnConnectEnd = useCallback((event) => {
+    console.log('[onConnectEnd] event:', event.type, (event.target as HTMLElement)?.className)
+  }, [])
+
   // Use React.DragEvent for type compatibility with ReactFlow
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault()
@@ -911,6 +988,15 @@ function ActionGraphEditor() {
       const defaultSuccessState = availableStates.includes('idle') ? 'idle' : availableStates[0]
       const defaultFailureState = availableStates.includes('error') ? 'error' : availableStates[availableStates.length - 1]
 
+      // Generate default end states for the action node
+      // Use stable IDs so ReactFlow can track handles properly
+      const defaultEndStates = [
+        { id: 'success', state: defaultSuccessState, label: 'Success', outcome: 'success' as const, color: '#22c55e' },
+        { id: 'failed', state: defaultFailureState, label: 'Failed', outcome: 'failed' as const, color: '#ef4444' },
+        { id: 'aborted', state: defaultFailureState, label: 'Aborted', outcome: 'aborted' as const, color: '#ef4444' },
+        { id: 'cancelled', state: defaultFailureState, label: 'Cancelled', outcome: 'cancelled' as const, color: '#6b7280' },
+      ]
+
       const newNode: Node = {
         id: getNodeId(),
         type: data.type,
@@ -941,6 +1027,8 @@ function ActionGraphEditor() {
           // Auto-generate states feature (enabled by default)
           autoGenerateStates: true,
           generatedStates: [],
+          // Default end states for handle rendering
+          endStates: defaultEndStates,
         },
       }
 
@@ -952,7 +1040,7 @@ function ActionGraphEditor() {
         return newNodes
       })
     },
-    [screenToFlowPosition, setNodes, availableStates]
+    [screenToFlowPosition, setNodes, availableStates, availableAgents]
   )
 
   const onDragStart = (event: React.DragEvent<HTMLDivElement>, item: any) => {
@@ -1454,7 +1542,10 @@ function ActionGraphEditor() {
                 {saveTemplate.isPending ? 'Saving...' : 'Save'}
               </button>
               <button
-                onClick={() => setShowAssignModal(true)}
+                onClick={() => {
+                  console.log('[Assign Button] Clicked, selectedTemplate:', selectedTemplate?.id, selectedTemplate?.name)
+                  setShowAssignModal(true)
+                }}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600/20 text-blue-400 rounded-lg hover:bg-blue-600/30 text-sm"
               >
                 <Link2 size={14} />
@@ -1483,6 +1574,8 @@ function ActionGraphEditor() {
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
+              onConnectStart={onConnectStart}
+              onConnectEnd={onConnectEnd}
               onDrop={onDrop}
               onDragOver={onDragOver}
               nodeTypes={nodeTypes}
@@ -1543,14 +1636,29 @@ function ActionGraphEditor() {
       )}
 
       {/* Assign Template Modal */}
-      {showAssignModal && selectedTemplate && (
-        <AssignTemplateModal
-          template={selectedTemplate}
-          currentAssignments={templateAssignments}
-          onAssign={(agentId) => assignTemplate.mutate({ templateId: selectedTemplate.id, agentId })}
-          onUnassign={(agentId) => unassignTemplate.mutate({ templateId: selectedTemplate.id, agentId })}
-          onClose={() => setShowAssignModal(false)}
-        />
+      {showAssignModal && (
+        selectedTemplate ? (
+          <AssignTemplateModal
+            template={selectedTemplate}
+            currentAssignments={templateAssignments}
+            onAssign={(agentId) => assignTemplate.mutate({ templateId: selectedTemplate.id, agentId })}
+            onUnassign={(agentId) => unassignTemplate.mutate({ templateId: selectedTemplate.id, agentId })}
+            onClose={() => setShowAssignModal(false)}
+          />
+        ) : (
+          // Debug: Modal was triggered but no template selected
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+            <div className="bg-[#16162a] rounded-xl shadow-2xl p-6 border border-[#2a2a4a]">
+              <p className="text-white mb-4">Error: No template selected</p>
+              <button
+                onClick={() => setShowAssignModal(false)}
+                className="px-4 py-2 bg-blue-600 text-white rounded"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        )
       )}
 
       {/* Create State Definition Modal */}
@@ -1652,7 +1760,6 @@ function convertActionGraphToGraph(
         const match = enriched.find(es => {
           const esOutcome = normalizeOutcome(es.outcome) || inferOutcome(es, idx)
           return esOutcome === normalizedOutcome &&
-            (es.condition || '') === (transition.condition || '') &&
             (!transition.state || es.state === transition.state)
         })
         if (!match) {
@@ -1661,7 +1768,6 @@ function convertActionGraphToGraph(
             state: transition.state || (normalizedOutcome === 'success' ? defaultState : errorState),
             label: transition.outcome.charAt(0).toUpperCase() + transition.outcome.slice(1),
             outcome: normalizedOutcome,
-            condition: transition.condition,
           })
         }
       })
@@ -1693,6 +1799,8 @@ function convertActionGraphToGraph(
         failureState: stepFailureStates[0] || errorState,
         params: step.action?.params?.data || {},
         waypointId: step.action?.params?.waypoint_id,
+        jobName: step.job_name || '',
+        autoGenerateStates: step.auto_generate_states ?? true,
         finalState: isTerminal ? (step.terminal_type === 'success' ? defaultState : errorState) : undefined,
         preconditions: [],
         availableStates,
@@ -1707,7 +1815,6 @@ function convertActionGraphToGraph(
         const match = stepEndStates.find(es => {
           const esOutcome = normalizeOutcome(es.outcome) || inferOutcome(es, idx)
           return esOutcome === normalizedOutcome &&
-            (es.condition || '') === (transition.condition || '') &&
             (!transition.state || es.state === transition.state)
         })
         const handleId = match ? match.id : `end-outcome-${step.id}-${idx}`
@@ -1999,13 +2106,20 @@ function AssignTemplateModal({
   onUnassign: (agentId: string) => void
   onClose: () => void
 }) {
+  console.log('[AssignTemplateModal] Rendering, template:', template?.id, template?.name)
+  console.log('[AssignTemplateModal] currentAssignments:', currentAssignments)
+
   const assignedAgentIds = currentAssignments.map(a => a.agent_id)
 
   // Fetch compatible agents using capability-based API
-  const { data: compatibleAgentsData, isLoading: compatibleLoading } = useQuery({
+  const { data: compatibleAgentsData, isLoading: compatibleLoading, error: compatibleError } = useQuery({
     queryKey: ['template-compatible-agents', template.id],
     queryFn: () => templateApi.getCompatibleAgents(template.id),
   })
+
+  console.log('[AssignTemplateModal] compatibleAgentsData:', compatibleAgentsData)
+  console.log('[AssignTemplateModal] compatibleLoading:', compatibleLoading)
+  console.log('[AssignTemplateModal] compatibleError:', compatibleError)
 
   const requiredActionTypes = compatibleAgentsData?.required_action_types || []
   const compatibleAgents = compatibleAgentsData?.agents || []

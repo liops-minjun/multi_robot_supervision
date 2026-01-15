@@ -288,7 +288,7 @@ function ActionGraphViewerInner({
         type: nodeType,
         position: { x, y },
         data: {
-          label: step.name || step.id,
+          label: step.job_name || step.name || step.id,
           subtype: isTerminal ? (step.terminal_type === 'success' ? 'End' : 'Error') : subtype,
           color,
           server: step.action?.server,
@@ -452,14 +452,14 @@ export function ActionGraphMini({
             <div
               key={step.id}
               className={`flex-1 h-2 rounded-full ${bgColor} transition-colors`}
-              title={step.name || step.id}
+              title={step.job_name || step.name || step.id}
             />
           )
         })}
       </div>
       {currentStepId && (
         <p className="text-[10px] text-gray-500 truncate">
-          Current: {actionGraph.steps.find(s => s.id === currentStepId)?.name || currentStepId}
+          Current: {actionGraph.steps.find(s => s.id === currentStepId)?.job_name || actionGraph.steps.find(s => s.id === currentStepId)?.name || currentStepId}
         </p>
       )}
     </div>
