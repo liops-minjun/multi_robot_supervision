@@ -471,6 +471,153 @@ func (r *Repository) DeleteAgent(id string) error {
 	return err
 }
 
+// UpdateAgentEnhancedState updates an agent's enhanced state (state code, semantic tags, graph ID)
+func (r *Repository) UpdateAgentEnhancedState(id, stateCode string, semanticTags []string, graphID string) error {
+	ctx := context.Background()
+
+	tagsJSON := "[]"
+	if len(semanticTags) > 0 {
+		if b, err := json.Marshal(semanticTags); err == nil {
+			tagsJSON = string(b)
+		}
+	}
+
+	props := map[string]any{
+		"id":             id,
+		"state_code":     stateCode,
+		"semantic_tags":  tagsJSON,
+		"graph_id":       graphID,
+		"updated_at_ms":  time.Now().UTC().UnixMilli(),
+	}
+
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		_, err := tx.Run(ctx, `
+			MATCH (a:Agent {id: $id})
+			SET a.current_state_code = $state_code,
+			    a.semantic_tags = $semantic_tags,
+			    a.current_graph_id = $graph_id,
+			    a.updated_at_ms = $updated_at_ms
+		`, props)
+		return nil, err
+	})
+	return err
+}
+
+// GetAgentEnhancedState retrieves an agent's enhanced state
+func (r *Repository) GetAgentEnhancedState(id string) (stateCode string, semanticTags []string, graphID string, err error) {
+	ctx := context.Background()
+
+	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
+		result, err := tx.Run(ctx, `
+			MATCH (a:Agent {id: $id})
+			RETURN a.current_state_code AS state_code,
+			       a.semantic_tags AS semantic_tags,
+			       a.current_graph_id AS graph_id
+		`, map[string]any{"id": id})
+		if err != nil {
+			return nil, err
+		}
+
+		if result.Next(ctx) {
+			record := result.Record()
+			return map[string]any{
+				"state_code":    getString(record.AsMap(), "state_code"),
+				"semantic_tags": getString(record.AsMap(), "semantic_tags"),
+				"graph_id":      getString(record.AsMap(), "graph_id"),
+			}, nil
+		}
+		return nil, nil
+	})
+
+	if err != nil {
+		return "", nil, "", err
+	}
+	if result == nil {
+		return "", nil, "", fmt.Errorf("agent %s not found", id)
+	}
+
+	m := result.(map[string]any)
+	stateCode = m["state_code"].(string)
+	graphID = m["graph_id"].(string)
+
+	tagsJSON := m["semantic_tags"].(string)
+	if tagsJSON != "" && tagsJSON != "[]" {
+		json.Unmarshal([]byte(tagsJSON), &semanticTags)
+	}
+
+	return stateCode, semanticTags, graphID, nil
+}
+
+// GetAllAgentStates retrieves enhanced state info for all agents
+func (r *Repository) GetAllAgentStates() (map[string]struct {
+	StateCode    string
+	SemanticTags []string
+	GraphID      string
+	IsOnline     bool
+}, error) {
+	ctx := context.Background()
+
+	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
+		result, err := tx.Run(ctx, `
+			MATCH (a:Agent)
+			RETURN a.id AS id,
+			       a.current_state_code AS state_code,
+			       a.semantic_tags AS semantic_tags,
+			       a.current_graph_id AS graph_id,
+			       a.status AS status
+		`, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		states := make(map[string]struct {
+			StateCode    string
+			SemanticTags []string
+			GraphID      string
+			IsOnline     bool
+		})
+
+		for result.Next(ctx) {
+			record := result.Record()
+			m := record.AsMap()
+			id := getString(m, "id")
+			stateCode := getString(m, "state_code")
+			graphID := getString(m, "graph_id")
+			status := getString(m, "status")
+
+			var tags []string
+			tagsJSON := getString(m, "semantic_tags")
+			if tagsJSON != "" && tagsJSON != "[]" {
+				json.Unmarshal([]byte(tagsJSON), &tags)
+			}
+
+			states[id] = struct {
+				StateCode    string
+				SemanticTags []string
+				GraphID      string
+				IsOnline     bool
+			}{
+				StateCode:    stateCode,
+				SemanticTags: tags,
+				GraphID:      graphID,
+				IsOnline:     status == "online",
+			}
+		}
+
+		return states, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return result.(map[string]struct {
+		StateCode    string
+		SemanticTags []string
+		GraphID      string
+		IsOnline     bool
+	}), nil
+}
+
 // =============================================================================
 // ActionGraph Operations
 // =============================================================================
@@ -493,17 +640,19 @@ func (r *Repository) GetActionGraph(id string) (*ActionGraph, error) {
 				props := gNode.Props
 				stepsJSON := getString(props, "steps_json")
 				preconditionsJSON := getString(props, "preconditions_json")
+				statesJSON := getString(props, "states_json")
 				entryPoint := getString(props, "entry_point")
 				ag := ActionGraph{
-					ID:               getString(props, "id"),
-					Name:             getString(props, "name"),
-					Description:      toNullString(getString(props, "description")),
-					AgentID:          toNullString(getString(props, "agent_id")),
-					Version:          int(getInt64(props, "version")),
-					IsTemplate:       getBool(props, "is_template"),
-					TemplateCategory: toNullString(getString(props, "template_category")),
-					CreatedAt:        time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
-					UpdatedAt:        time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
+					ID:                 getString(props, "id"),
+					Name:               getString(props, "name"),
+					Description:        toNullString(getString(props, "description")),
+					AgentID:            toNullString(getString(props, "agent_id")),
+					Version:            int(getInt64(props, "version")),
+					IsTemplate:         getBool(props, "is_template"),
+					TemplateCategory:   toNullString(getString(props, "template_category")),
+					AutoGenerateStates: getBool(props, "auto_generate_states"),
+					CreatedAt:          time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
+					UpdatedAt:          time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
 				}
 				if entryPoint != "" {
 					ag.EntryPoint = toNullString(entryPoint)
@@ -513,6 +662,9 @@ func (r *Repository) GetActionGraph(id string) (*ActionGraph, error) {
 				}
 				if preconditionsJSON != "" {
 					ag.Preconditions = datatypes.JSON([]byte(preconditionsJSON))
+				}
+				if statesJSON != "" {
+					ag.States = datatypes.JSON([]byte(statesJSON))
 				}
 				return &ag, nil
 			}
@@ -561,18 +713,32 @@ func (r *Repository) GetActionGraphs(agentID string, includeTemplates bool) ([]A
 				if entryPoint != "" {
 					entryPointValue = toNullString(entryPoint)
 				}
-				graphs = append(graphs, ActionGraph{
-					ID:               getString(props, "id"),
-					Name:             getString(props, "name"),
-					Description:      toNullString(getString(props, "description")),
-					AgentID:          toNullString(getString(props, "agent_id")),
-					EntryPoint:       entryPointValue,
-					Version:          int(getInt64(props, "version")),
-					IsTemplate:       getBool(props, "is_template"),
-					TemplateCategory: toNullString(getString(props, "template_category")),
-					CreatedAt:        time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
-					UpdatedAt:        time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
-				})
+				stepsJSON := getString(props, "steps_json")
+				preconditionsJSON := getString(props, "preconditions_json")
+				statesJSON := getString(props, "states_json")
+				ag := ActionGraph{
+					ID:                 getString(props, "id"),
+					Name:               getString(props, "name"),
+					Description:        toNullString(getString(props, "description")),
+					AgentID:            toNullString(getString(props, "agent_id")),
+					EntryPoint:         entryPointValue,
+					Version:            int(getInt64(props, "version")),
+					IsTemplate:         getBool(props, "is_template"),
+					TemplateCategory:   toNullString(getString(props, "template_category")),
+					AutoGenerateStates: getBool(props, "auto_generate_states"),
+					CreatedAt:          time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
+					UpdatedAt:          time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
+				}
+				if stepsJSON != "" {
+					ag.Steps = datatypes.JSON([]byte(stepsJSON))
+				}
+				if preconditionsJSON != "" {
+					ag.Preconditions = datatypes.JSON([]byte(preconditionsJSON))
+				}
+				if statesJSON != "" {
+					ag.States = datatypes.JSON([]byte(statesJSON))
+				}
+				graphs = append(graphs, ag)
 			}
 		}
 		return graphs, res.Err()
@@ -599,6 +765,21 @@ func (r *Repository) CreateActionGraph(graph *ActionGraph) error {
 		entryPoint = steps[0].ID
 		graph.EntryPoint = toNullString(entryPoint)
 	}
+
+	// Auto-generate states if enabled (default: true)
+	statesJSON := string(graph.States)
+	if graph.AutoGenerateStates || len(graph.States) == 0 {
+		var existingStates []GraphState
+		if len(graph.States) > 0 {
+			json.Unmarshal(graph.States, &existingStates)
+		}
+		generatedStates := GenerateStatesFromSteps(steps, existingStates)
+		if b, err := json.Marshal(generatedStates); err == nil {
+			statesJSON = string(b)
+			graph.States = datatypes.JSON(b)
+		}
+	}
+
 	ctx := context.Background()
 	props := map[string]any{
 		"id":                    graph.ID,
@@ -615,6 +796,8 @@ func (r *Repository) CreateActionGraph(graph *ActionGraph) error {
 		"execution_mode":        executionMode,
 		"checksum":              checksumForJSON(stepsJSON),
 		"schema_version":        "1.0.0",
+		"states_json":           statesJSON,
+		"auto_generate_states":  graph.AutoGenerateStates,
 		"created_at_ms":         timeToMillis(graph.CreatedAt),
 		"updated_at_ms":         timeToMillis(graph.UpdatedAt),
 	}
@@ -635,6 +818,8 @@ func (r *Repository) CreateActionGraph(graph *ActionGraph) error {
 				execution_mode: $execution_mode,
 				checksum: $checksum,
 				schema_version: $schema_version,
+				states_json: $states_json,
+				auto_generate_states: $auto_generate_states,
 				created_at_ms: $created_at_ms,
 				updated_at_ms: $updated_at_ms
 			})
@@ -666,6 +851,21 @@ func (r *Repository) UpdateActionGraph(graph *ActionGraph) error {
 		entryPoint = steps[0].ID
 		graph.EntryPoint = toNullString(entryPoint)
 	}
+
+	// Auto-generate states if enabled
+	statesJSON := string(graph.States)
+	if graph.AutoGenerateStates {
+		var existingStates []GraphState
+		if len(graph.States) > 0 {
+			json.Unmarshal(graph.States, &existingStates)
+		}
+		generatedStates := GenerateStatesFromSteps(steps, existingStates)
+		if b, err := json.Marshal(generatedStates); err == nil {
+			statesJSON = string(b)
+			graph.States = datatypes.JSON(b)
+		}
+	}
+
 	ctx := context.Background()
 	props := map[string]any{
 		"id":                    graph.ID,
@@ -682,6 +882,8 @@ func (r *Repository) UpdateActionGraph(graph *ActionGraph) error {
 		"execution_mode":        executionMode,
 		"checksum":              checksumForJSON(stepsJSON),
 		"schema_version":        "1.0.0",
+		"states_json":           statesJSON,
+		"auto_generate_states":  graph.AutoGenerateStates,
 		"updated_at_ms":         time.Now().UTC().UnixMilli(),
 	}
 	_, err = r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
@@ -700,6 +902,8 @@ func (r *Repository) UpdateActionGraph(graph *ActionGraph) error {
 			    g.execution_mode = $execution_mode,
 			    g.checksum = $checksum,
 			    g.schema_version = $schema_version,
+			    g.states_json = $states_json,
+			    g.auto_generate_states = $auto_generate_states,
 			    g.updated_at_ms = $updated_at_ms
 		`, props)
 		if err != nil {
@@ -2248,17 +2452,34 @@ func (r *Repository) GetAgentActionTypes(agentID string) ([]string, error) {
 	return types, nil
 }
 
+// FindCompatibleAgents returns agents that have all required action types
+// Optimized: Uses batch queries instead of N+1 pattern
 func (r *Repository) FindCompatibleAgents(requiredActionTypes []string) ([]Agent, error) {
 	agents, err := r.GetAllAgents()
 	if err != nil {
 		return nil, err
 	}
+
+	// Get all capabilities in one query
+	allCaps, err := r.GetAllAgentCapabilities()
+	if err != nil {
+		return nil, err
+	}
+
+	// Build action types set per agent
+	actionTypesByAgent := make(map[string]map[string]bool)
+	for _, cap := range allCaps {
+		if actionTypesByAgent[cap.AgentID] == nil {
+			actionTypesByAgent[cap.AgentID] = make(map[string]bool)
+		}
+		actionTypesByAgent[cap.AgentID][cap.ActionType] = true
+	}
+
 	var result []Agent
 	for _, agent := range agents {
-		types, _ := r.GetAgentActionTypes(agent.ID)
-		available := map[string]bool{}
-		for _, t := range types {
-			available[t] = true
+		available := actionTypesByAgent[agent.ID]
+		if available == nil {
+			available = make(map[string]bool)
 		}
 		ok := true
 		for _, req := range requiredActionTypes {
@@ -2274,17 +2495,34 @@ func (r *Repository) FindCompatibleAgents(requiredActionTypes []string) ([]Agent
 	return result, nil
 }
 
+// FindAgentsWithCompatibility returns all agents with compatibility info for required action types
+// Optimized: Uses batch queries instead of N+1 pattern
 func (r *Repository) FindAgentsWithCompatibility(requiredActionTypes []string) ([]CompatibleAgentInfo, error) {
 	agents, err := r.GetAllAgents()
 	if err != nil {
 		return nil, err
 	}
+
+	// Get all capabilities in one query
+	allCaps, err := r.GetAllAgentCapabilities()
+	if err != nil {
+		return nil, err
+	}
+
+	// Build action types set per agent
+	actionTypesByAgent := make(map[string]map[string]bool)
+	for _, cap := range allCaps {
+		if actionTypesByAgent[cap.AgentID] == nil {
+			actionTypesByAgent[cap.AgentID] = make(map[string]bool)
+		}
+		actionTypesByAgent[cap.AgentID][cap.ActionType] = true
+	}
+
 	var result []CompatibleAgentInfo
 	for _, agent := range agents {
-		types, _ := r.GetAgentActionTypes(agent.ID)
-		typeSet := map[string]bool{}
-		for _, t := range types {
-			typeSet[t] = true
+		typeSet := actionTypesByAgent[agent.ID]
+		if typeSet == nil {
+			typeSet = make(map[string]bool)
 		}
 		var missing []string
 		for _, req := range requiredActionTypes {
@@ -2480,6 +2718,106 @@ func (r *Repository) CountTemplates() (int, error) {
 		return 0, err
 	}
 	return len(templates), nil
+}
+
+// =============================================================================
+// Batch Query Methods (for N+1 query optimization)
+// =============================================================================
+
+// GetAllAgentActionGraphs returns all agent action graph assignments in a single query
+func (r *Repository) GetAllAgentActionGraphs() ([]AgentActionGraph, error) {
+	ctx := context.Background()
+	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
+		res, err := tx.Run(ctx, `MATCH (aag:AgentActionGraph) RETURN aag`, nil)
+		if err != nil {
+			return nil, err
+		}
+		var list []AgentActionGraph
+		for res.Next(ctx) {
+			node, _ := res.Record().Get("aag")
+			if aagNode, ok := node.(neo4j.Node); ok {
+				props := aagNode.Props
+				list = append(list, AgentActionGraph{
+					ID:               getString(props, "id"),
+					AgentID:          getString(props, "agent_id"),
+					ActionGraphID:    getString(props, "action_graph_id"),
+					ServerVersion:    int(getInt64(props, "server_version")),
+					DeployedVersion:  int(getInt64(props, "deployed_version")),
+					DeploymentStatus: getString(props, "deployment_status"),
+					DeploymentError:  toNullString(getString(props, "deployment_error")),
+					DeployedAt:       toNullTimeMillis(getInt64(props, "deployed_at_ms")),
+					Enabled:          getBool(props, "enabled"),
+					Priority:         int(getInt64(props, "priority")),
+					CreatedAt:        time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
+					UpdatedAt:        time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
+				})
+			}
+		}
+		return list, res.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.([]AgentActionGraph), nil
+}
+
+// GetActionGraphsByIDs retrieves multiple action graphs by their IDs in a single query
+func (r *Repository) GetActionGraphsByIDs(ids []string) (map[string]*ActionGraph, error) {
+	if len(ids) == 0 {
+		return make(map[string]*ActionGraph), nil
+	}
+	ctx := context.Background()
+	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
+		res, err := tx.Run(ctx, `
+			MATCH (g:ActionGraph)
+			WHERE g.id IN $ids
+			RETURN g
+		`, map[string]any{"ids": ids})
+		if err != nil {
+			return nil, err
+		}
+		graphs := make(map[string]*ActionGraph)
+		for res.Next(ctx) {
+			node, _ := res.Record().Get("g")
+			if gNode, ok := node.(neo4j.Node); ok {
+				props := gNode.Props
+				stepsJSON := getString(props, "steps_json")
+				preconditionsJSON := getString(props, "preconditions_json")
+				statesJSON := getString(props, "states_json")
+				entryPoint := getString(props, "entry_point")
+				ag := ActionGraph{
+					ID:                 getString(props, "id"),
+					Name:               getString(props, "name"),
+					Description:        toNullString(getString(props, "description")),
+					AgentID:            toNullString(getString(props, "agent_id")),
+					Version:            int(getInt64(props, "version")),
+					IsTemplate:         getBool(props, "is_template"),
+					TemplateCategory:   toNullString(getString(props, "template_category")),
+					AutoGenerateStates: getBool(props, "auto_generate_states"),
+					CreatedAt:          time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
+					UpdatedAt:          time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
+				}
+				if entryPoint != "" {
+					ag.EntryPoint = toNullString(entryPoint)
+				}
+				if stepsJSON != "" {
+					ag.Steps = datatypes.JSON([]byte(stepsJSON))
+				}
+				if preconditionsJSON != "" {
+					ag.Preconditions = datatypes.JSON([]byte(preconditionsJSON))
+				}
+				if statesJSON != "" {
+					ag.States = datatypes.JSON([]byte(statesJSON))
+				}
+				graphs[ag.ID] = &ag
+			}
+		}
+		return graphs, res.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.(map[string]*ActionGraph), nil
 }
 
 // =============================================================================

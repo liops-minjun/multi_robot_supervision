@@ -8,8 +8,6 @@ import ReactFlow, {
   BackgroundVariant,
   MarkerType,
   ReactFlowProvider,
-  useNodesState,
-  useEdgesState,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
 import { memo } from 'react'
@@ -40,9 +38,14 @@ const ViewerActionNode = memo(({ data, selected }: NodeProps<any>) => {
 
   let borderColor = '#2a2a4a'
   let glowClass = ''
+  let glowStyle: React.CSSProperties = {}
   if (isActive) {
-    borderColor = '#22c55e'
-    glowClass = 'shadow-lg shadow-green-500/30'
+    borderColor = '#22d3ee'  // Cyan-400 for blue fluorescent
+    glowClass = 'shadow-[0_0_15px_3px_rgba(34,211,238,0.6)]'  // Stronger cyan glow
+    glowStyle = {
+      boxShadow: '0 0 15px 3px rgba(34, 211, 238, 0.6), 0 0 30px 6px rgba(34, 211, 238, 0.3)',
+      animation: 'pulse-glow 1.5s ease-in-out infinite'
+    }
   } else if (isCompleted) {
     borderColor = '#22c55e'
   } else if (isFailed) {
@@ -59,7 +62,7 @@ const ViewerActionNode = memo(({ data, selected }: NodeProps<any>) => {
         transition-all duration-300
         ${glowClass}
       `}
-      style={{ borderColor }}
+      style={{ borderColor, ...glowStyle }}
     >
       {/* Header */}
       <div
@@ -74,7 +77,7 @@ const ViewerActionNode = memo(({ data, selected }: NodeProps<any>) => {
           {data.label}
         </span>
         {isActive && (
-          <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+          <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
         )}
         {isCompleted && (
           <svg className="w-3 h-3 text-green-400" fill="currentColor" viewBox="0 0 20 20">
@@ -139,8 +142,13 @@ const ViewerEventNode = memo(({ data, selected }: NodeProps<any>) => {
   const bgColor = isStart ? '#22c55e' : isError ? '#ef4444' : '#3b82f6'
 
   let borderColor = bgColor
+  let glowStyle: React.CSSProperties = {}
   if (isActive) {
-    borderColor = '#22c55e'
+    borderColor = '#22d3ee'  // Cyan-400 for blue fluorescent
+    glowStyle = {
+      boxShadow: '0 0 15px 3px rgba(34, 211, 238, 0.6), 0 0 30px 6px rgba(34, 211, 238, 0.3)',
+      animation: 'pulse-glow 1.5s ease-in-out infinite'
+    }
   } else if (selected) {
     borderColor = 'white'
   }
@@ -151,9 +159,9 @@ const ViewerEventNode = memo(({ data, selected }: NodeProps<any>) => {
         min-w-[80px] rounded-lg overflow-hidden
         bg-[#1e1e2e] border-2
         transition-all duration-300
-        ${isActive ? 'shadow-lg shadow-green-500/30' : ''}
+        ${isActive ? 'shadow-[0_0_15px_3px_rgba(34,211,238,0.6)]' : ''}
       `}
-      style={{ borderColor }}
+      style={{ borderColor, ...glowStyle }}
     >
       <div
         className="px-3 py-2 flex items-center justify-center gap-1.5"
@@ -297,6 +305,8 @@ function ActionGraphViewerInner({
           : step.transition.on_success.next
 
         if (target) {
+          // Use cyan color for active edges, green for inactive
+          const edgeColor = isActive ? '#22d3ee' : '#22c55e'
           edges.push({
             id: `${step.id}->${target}`,
             source: step.id,
@@ -304,8 +314,8 @@ function ActionGraphViewerInner({
             sourceHandle: 'success-out',
             targetHandle: 'state-in',
             type: 'smoothstep',
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#22c55e' },
-            style: { stroke: '#22c55e', strokeWidth: 1.5 },
+            markerEnd: { type: MarkerType.ArrowClosed, color: edgeColor },
+            style: { stroke: edgeColor, strokeWidth: isActive ? 2.5 : 1.5 },
             animated: isActive,
           })
         }
@@ -347,9 +357,9 @@ function ActionGraphViewerInner({
     return { nodes, edges }
   }, [actionGraph, stateDef, currentStepId, completedSteps, failedSteps, compact])
 
-  const { nodes: initialNodes, edges: initialEdges } = useMemo(() => convertActionGraphToGraph(), [convertActionGraphToGraph])
-  const [nodes] = useNodesState(initialNodes)
-  const [edges] = useEdgesState(initialEdges)
+  // Use computed nodes/edges directly (no state hooks needed since nodes aren't draggable)
+  // This ensures nodes update immediately when currentStepId changes
+  const { nodes, edges } = useMemo(() => convertActionGraphToGraph(), [convertActionGraphToGraph])
 
   if (!actionGraph) {
     return (

@@ -8,7 +8,6 @@
 #include "fleet/v1/common.pb.h"
 
 #include <nlohmann/json.hpp>
-#include <rclcpp/serialization.hpp>
 
 namespace fleet_agent {
 namespace executor {
@@ -96,8 +95,12 @@ bool ActionExecutor::create_action_client(
     const std::string& server_name) {
 
     try {
-        action_client_ = std::make_unique<GenericActionClient>(
-            node_, server_name, action_type);
+        // Create dynamic action client using factory (supports any action type)
+        action_client_ = ActionClientFactory::create(node_, server_name, action_type);
+        if (!action_client_) {
+            log.error("[{}] Failed to create action client for type: {}", agent_id_, action_type);
+            return false;
+        }
 
         // Wait for server
         if (!action_client_->wait_for_server(std::chrono::milliseconds(5000))) {
@@ -106,6 +109,8 @@ bool ActionExecutor::create_action_client(
             return false;
         }
 
+        log.info("[{}] Action client created for {} (type: {})",
+                 agent_id_, server_name, action_type);
         return true;
     } catch (const std::exception& e) {
         log.error("[{}] Failed to create action client: {}", agent_id_, e.what());
@@ -168,7 +173,7 @@ bool ActionExecutor::execute(const ActionRequest& request) {
     }
 
     // Send goal
-    auto goal_handle = action_client_->send_goal(
+    current_goal_handle_ = action_client_->send_goal(
         request.params_json,
         [this](bool success, const std::string& result_json) {
             this->on_result(success, result_json);
@@ -178,9 +183,14 @@ bool ActionExecutor::execute(const ActionRequest& request) {
         }
     );
 
-    if (!goal_handle) {
+    if (!current_goal_handle_) {
         log.error("[{}] Failed to send goal", agent_id_);
         executing_.store(false);
+
+        // Mark capability as not executing
+        if (capabilities_.find(acc, server_name)) {
+            acc->second.executing.store(false);
+        }
         return false;
     }
 
@@ -201,11 +211,11 @@ void ActionExecutor::cancel(const std::string& reason) {
         timeout_timer_.reset();
     }
 
-    // Cancel goal
-    if (action_client_) {
-        // Note: In real implementation, need to track goal handle
-        // action_client_->cancel_goal(current_goal_handle_);
+    // Cancel goal via action client
+    if (action_client_ && current_goal_handle_) {
+        action_client_->cancel_goal(current_goal_handle_);
     }
+    current_goal_handle_.reset();
 
     complete_execution(
         static_cast<int>(fleet::v1::ACTION_STATUS_CANCELLED),
@@ -248,10 +258,11 @@ void ActionExecutor::on_timeout() {
         timeout_timer_.reset();
     }
 
-    // Cancel action
-    if (action_client_) {
-        // action_client_->cancel_goal(current_goal_handle_);
+    // Cancel the action via action client
+    if (action_client_ && current_goal_handle_) {
+        action_client_->cancel_goal(current_goal_handle_);
     }
+    current_goal_handle_.reset();
 
     complete_execution(
         static_cast<int>(fleet::v1::ACTION_STATUS_TIMEOUT),
@@ -270,6 +281,9 @@ void ActionExecutor::complete_execution(
     }
 
     executing_.store(false);
+
+    // Clear goal handle
+    current_goal_handle_.reset();
 
     // Mark capability as not executing (use action_server as key)
     std::string action_server;
@@ -348,117 +362,6 @@ std::string ActionExecutor::current_task_id() const {
 std::string ActionExecutor::current_step_id() const {
     std::lock_guard<std::mutex> lock(request_mutex_);
     return current_request_.step_id;
-}
-
-// ============================================================
-// GenericActionClient Implementation (Skeleton)
-// ============================================================
-
-GenericActionClient::GenericActionClient(
-    rclcpp::Node::SharedPtr node,
-    const std::string& action_name,
-    const std::string& action_type)
-    : node_(node)
-    , action_name_(action_name)
-    , action_type_(action_type) {
-
-    // Note: Full implementation requires:
-    // 1. Creating generic service clients for _action/send_goal, etc.
-    // 2. Creating generic subscriptions for feedback/status
-    // 3. Serialization/deserialization using type support
-
-    log.debug("Created GenericActionClient for {} ({})", action_name, action_type);
-}
-
-GenericActionClient::~GenericActionClient() = default;
-
-std::shared_ptr<GenericActionClient::GoalHandle> GenericActionClient::send_goal(
-    const std::string& goal_json,
-    std::function<void(bool, const std::string&)> result_callback,
-    std::function<void(const std::string&)> feedback_callback) {
-
-    auto handle = std::make_shared<GoalHandle>();
-    handle->goal_id = "goal_" + std::to_string(now_ms());
-    handle->result_callback = result_callback;
-    handle->feedback_callback = feedback_callback;
-
-    {
-        std::lock_guard<std::mutex> lock(goals_mutex_);
-        active_goals_[handle->goal_id] = handle;
-    }
-
-    // TODO: Implement actual goal sending using generic service client
-    // For now, this is a placeholder that simulates success after 2 seconds
-
-    log.debug("Sending goal {} to {}", handle->goal_id, action_name_);
-
-    // Simulate async result (in production, this comes from ROS2 callbacks)
-    // node_->create_wall_timer(std::chrono::seconds(2), [handle, result_callback]() {
-    //     if (result_callback) {
-    //         result_callback(true, "{}");
-    //     }
-    // });
-
-    return handle;
-}
-
-void GenericActionClient::cancel_goal(std::shared_ptr<GoalHandle> handle) {
-    if (!handle || !handle->active.load()) {
-        return;
-    }
-
-    handle->active.store(false);
-
-    // TODO: Implement actual cancellation using generic service client
-
-    {
-        std::lock_guard<std::mutex> lock(goals_mutex_);
-        active_goals_.erase(handle->goal_id);
-    }
-}
-
-bool GenericActionClient::is_server_ready() const {
-    // TODO: Check if service clients are ready
-    return true;
-}
-
-bool GenericActionClient::wait_for_server(std::chrono::milliseconds timeout) {
-    // TODO: Wait for service clients to be ready
-    (void)timeout;
-    return true;
-}
-
-std::vector<uint8_t> GenericActionClient::serialize_goal(const std::string& goal_json) {
-    // TODO: Convert JSON to ROS2 message bytes using type support
-    (void)goal_json;
-    return {};
-}
-
-std::string GenericActionClient::deserialize_result(const std::vector<uint8_t>& data) {
-    // TODO: Convert ROS2 message bytes to JSON using type support
-    (void)data;
-    return "{}";
-}
-
-std::string GenericActionClient::deserialize_feedback(const std::vector<uint8_t>& data) {
-    // TODO: Convert ROS2 message bytes to JSON using type support
-    (void)data;
-    return "{}";
-}
-
-void GenericActionClient::on_feedback_received(std::shared_ptr<rclcpp::SerializedMessage> msg) {
-    // TODO: Deserialize and dispatch to appropriate goal handle
-    (void)msg;
-}
-
-void GenericActionClient::on_status_received(std::shared_ptr<rclcpp::SerializedMessage> msg) {
-    // TODO: Update goal status and trigger result polling if complete
-    (void)msg;
-}
-
-void GenericActionClient::poll_result(std::shared_ptr<GoalHandle> handle) {
-    // TODO: Call get_result service and invoke callback
-    (void)handle;
 }
 
 }  // namespace executor

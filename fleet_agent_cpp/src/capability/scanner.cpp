@@ -496,19 +496,23 @@ int CapabilityScanner::refresh() {
 
                     // Determine availability based on all signals
                     // Server is available if:
-                    // 1. Probe succeeded (most reliable - server actually responded)
-                    // 2. OR has services AND status not timed out
-                    // 3. AND probe didn't explicitly fail
+                    // 1. Currently executing (we're using it right now!)
+                    // 2. OR Probe succeeded (most reliable - server actually responded)
+                    // 3. OR has services AND status not timed out
+                    // 4. AND probe didn't explicitly fail
                     bool allow_available = false;
-                    if (probe_ok) {
+                    if (is_executing) {
+                        // Currently executing an action - it MUST be available
+                        allow_available = true;
+                    } else if (probe_ok) {
                         // Probe succeeded - server is definitely alive
                         allow_available = true;
                     } else if (has_services && !status_timed_out) {
                         // Has services and status not timed out
                         allow_available = true;
                     }
-                    // If probe explicitly failed, override to unavailable
-                    if (probe_failed) {
+                    // If probe explicitly failed, override to unavailable (but not if executing)
+                    if (probe_failed && !is_executing) {
                         allow_available = false;
                     }
 
@@ -581,17 +585,20 @@ int CapabilityScanner::refresh() {
             }
 
             // Determine if we should keep this capability
-            // Keep if: probe succeeded OR (has services AND status not timed out)
+            // Keep if: executing OR probe succeeded OR (has services AND status not timed out)
             bool should_keep = false;
-            if (probe_ok) {
+            if (is_executing) {
+                // Currently executing - definitely keep
+                should_keep = true;
+            } else if (probe_ok) {
                 should_keep = true;
             } else if (has_services && !status_timed_out) {
                 should_keep = true;
             } else if (status_alive.value_or(false) && !status_timed_out) {
                 should_keep = true;
             }
-            // If probe explicitly failed, don't keep
-            if (probe_failed) {
+            // If probe explicitly failed, don't keep (but not if executing)
+            if (probe_failed && !is_executing) {
                 should_keep = false;
             }
 
@@ -656,17 +663,20 @@ int CapabilityScanner::refresh() {
         }
 
         // Determine if server is alive
-        // Alive if: probe succeeded OR (has services AND status not timed out)
-        // NOT alive if: probe explicitly failed
+        // Alive if: executing OR probe succeeded OR (has services AND status not timed out)
+        // NOT alive if: probe explicitly failed (unless executing)
         bool alive = false;
-        if (probe_ok) {
+        if (is_executing) {
+            // Currently executing - it MUST be alive
+            alive = true;
+        } else if (probe_ok) {
             alive = true;
         } else if (has_services && !status_timed_out) {
             alive = true;
         } else if (status_alive.has_value() && status_alive.value() && !status_timed_out) {
             alive = true;
         }
-        if (probe_failed) {
+        if (probe_failed && !is_executing) {
             alive = false;
         }
 

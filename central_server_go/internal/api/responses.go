@@ -63,6 +63,7 @@ type ActionGraphListResponse struct {
 	AgentName        string    `json:"agent_name,omitempty"`
 	EntryPoint       string    `json:"entry_point,omitempty"`
 	StepCount        int       `json:"step_count"`
+	StateCount       int       `json:"state_count"`
 	Version          int       `json:"version"`
 	IsTemplate       bool      `json:"is_template"`
 	DeploymentStatus string    `json:"deployment_status,omitempty"`
@@ -70,38 +71,56 @@ type ActionGraphListResponse struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
+// GraphStateResponse represents a state in the API response
+type GraphStateResponse struct {
+	Code         string   `json:"code"`
+	Name         string   `json:"name"`
+	Type         string   `json:"type"`
+	StepID       string   `json:"step_id,omitempty"`
+	Phase        string   `json:"phase,omitempty"`
+	Color        string   `json:"color,omitempty"`
+	Description  string   `json:"description,omitempty"`
+	SemanticTags []string `json:"semantic_tags,omitempty"`
+}
+
 type ActionGraphResponse struct {
-	ID               string                   `json:"id"`
-	Name             string                   `json:"name"`
-	Description      string                   `json:"description,omitempty"`
-	AgentID          string                   `json:"agent_id,omitempty"`
-	AgentName        string                   `json:"agent_name,omitempty"`
-	EntryPoint       string                   `json:"entry_point,omitempty"`
-	Preconditions    []map[string]interface{} `json:"preconditions,omitempty"`
-	Steps            []map[string]interface{} `json:"steps"`
-	Version          int                      `json:"version"`
-	IsTemplate       bool                     `json:"is_template"`
-	DeploymentStatus string                   `json:"deployment_status,omitempty"`
-	CreatedAt        time.Time                `json:"created_at"`
-	UpdatedAt        time.Time                `json:"updated_at"`
+	ID                 string                   `json:"id"`
+	Name               string                   `json:"name"`
+	Description        string                   `json:"description,omitempty"`
+	AgentID            string                   `json:"agent_id,omitempty"`
+	AgentName          string                   `json:"agent_name,omitempty"`
+	EntryPoint         string                   `json:"entry_point,omitempty"`
+	Preconditions      []map[string]interface{} `json:"preconditions,omitempty"`
+	Steps              []map[string]interface{} `json:"steps"`
+	States             []GraphStateResponse     `json:"states,omitempty"`
+	AutoGenerateStates bool                     `json:"auto_generate_states"`
+	Version            int                      `json:"version"`
+	IsTemplate         bool                     `json:"is_template"`
+	DeploymentStatus   string                   `json:"deployment_status,omitempty"`
+	CreatedAt          time.Time                `json:"created_at"`
+	UpdatedAt          time.Time                `json:"updated_at"`
 }
 
 type ActionGraphCreateRequest struct {
-	ID            string                   `json:"id"`
-	Name          string                   `json:"name"`
-	Description   string                   `json:"description,omitempty"`
-	AgentID       string                   `json:"agent_id,omitempty"`
-	EntryPoint    string                   `json:"entry_point,omitempty"`
-	Preconditions []map[string]interface{} `json:"preconditions,omitempty"`
-	Steps         []map[string]interface{} `json:"steps"`
+	ID                 string                   `json:"id"`
+	Name               string                   `json:"name"`
+	Description        string                   `json:"description,omitempty"`
+	AgentID            string                   `json:"agent_id,omitempty"`
+	EntryPoint         string                   `json:"entry_point,omitempty"`
+	Preconditions      []map[string]interface{} `json:"preconditions,omitempty"`
+	Steps              []map[string]interface{} `json:"steps"`
+	States             []GraphStateResponse     `json:"states,omitempty"`
+	AutoGenerateStates *bool                    `json:"auto_generate_states,omitempty"` // Pointer to detect if set
 }
 
 type ActionGraphUpdateRequest struct {
-	Name          string                   `json:"name,omitempty"`
-	Description   string                   `json:"description,omitempty"`
-	EntryPoint    string                   `json:"entry_point,omitempty"`
-	Preconditions []map[string]interface{} `json:"preconditions,omitempty"`
-	Steps         []map[string]interface{} `json:"steps,omitempty"`
+	Name               string                   `json:"name,omitempty"`
+	Description        string                   `json:"description,omitempty"`
+	EntryPoint         string                   `json:"entry_point,omitempty"`
+	Preconditions      []map[string]interface{} `json:"preconditions,omitempty"`
+	Steps              []map[string]interface{} `json:"steps,omitempty"`
+	States             []GraphStateResponse     `json:"states,omitempty"`
+	AutoGenerateStates *bool                    `json:"auto_generate_states,omitempty"` // Pointer to detect if set
 }
 
 type ActionGraphExecuteRequest struct {
@@ -110,20 +129,67 @@ type ActionGraphExecuteRequest struct {
 }
 
 // ============================================================
+// Multi-Agent Execution Request/Response Models
+// ============================================================
+
+// MultiAgentExecuteRequest represents a request to execute an action graph on multiple agents simultaneously
+type MultiAgentExecuteRequest struct {
+	AgentIDs    []string                          `json:"agent_ids"`
+	Params      map[string]interface{}            `json:"params,omitempty"`       // Common params for all agents
+	AgentParams map[string]map[string]interface{} `json:"agent_params,omitempty"` // Per-agent params
+	SyncMode    string                            `json:"sync_mode,omitempty"`    // "barrier" (default) or "best_effort"
+	TimeoutSec  int                               `json:"timeout_sec,omitempty"`  // Timeout for barrier sync
+}
+
+// MultiAgentTaskInfo represents info about a single agent's task in a multi-agent execution
+type MultiAgentTaskInfo struct {
+	AgentID   string `json:"agent_id"`
+	AgentName string `json:"agent_name,omitempty"`
+	TaskID    string `json:"task_id"`
+	Status    string `json:"status"`
+}
+
+// MultiAgentExecuteResponse represents the response for a successful multi-agent execution
+type MultiAgentExecuteResponse struct {
+	ExecutionGroupID string               `json:"execution_group_id"`
+	Tasks            []MultiAgentTaskInfo `json:"tasks"`
+	StartedAt        time.Time            `json:"started_at"`
+	SyncMode         string               `json:"sync_mode"`
+	Message          string               `json:"message"`
+}
+
+// MultiAgentFailedAgent represents an agent that failed validation in multi-agent execution
+type MultiAgentFailedAgent struct {
+	AgentID string `json:"agent_id"`
+	Reason  string `json:"reason"`
+}
+
+// MultiAgentExecuteErrorResponse represents an error response for multi-agent execution validation failure
+type MultiAgentExecuteErrorResponse struct {
+	Error        string                  `json:"error"`
+	Message      string                  `json:"message"`
+	FailedAgents []MultiAgentFailedAgent `json:"failed_agents"`
+	PassedAgents []string                `json:"passed_agents,omitempty"`
+}
+
+// ============================================================
 // Agent Action Graph Response Models
 // ============================================================
 
 type AgentResponse struct {
-	ID           string     `json:"id"`
-	Name         string     `json:"name"`
-	Namespace    string     `json:"namespace,omitempty"`
-	IPAddress    string     `json:"ip_address,omitempty"`
-	LastSeen     *time.Time `json:"last_seen,omitempty"`
-	Status       string     `json:"status"`
-	CurrentState string     `json:"current_state,omitempty"`
-	RobotCount   int        `json:"robot_count"`
-	CreatedAt    time.Time  `json:"created_at"`
-	Robots       []string   `json:"robots,omitempty"` // In 1:1 model, contains single agent ID
+	ID               string     `json:"id"`
+	Name             string     `json:"name"`
+	Namespace        string     `json:"namespace,omitempty"`
+	IPAddress        string     `json:"ip_address,omitempty"`
+	LastSeen         *time.Time `json:"last_seen,omitempty"`
+	Status           string     `json:"status"`
+	CurrentState     string     `json:"current_state,omitempty"`
+	CurrentStateCode string     `json:"current_state_code,omitempty"` // Enhanced state code
+	SemanticTags     []string   `json:"semantic_tags,omitempty"`      // Current semantic tags
+	CurrentGraphID   string     `json:"current_graph_id,omitempty"`   // Currently executing graph
+	RobotCount       int        `json:"robot_count"`
+	CreatedAt        time.Time  `json:"created_at"`
+	Robots           []string   `json:"robots,omitempty"` // In 1:1 model, contains single agent ID
 }
 
 type AgentActionGraphResponse struct {
@@ -228,15 +294,19 @@ type FleetStateResponse struct {
 }
 
 type RobotStateSnapshot struct {
-	ID            string  `json:"id"`
-	Name          string  `json:"name"`
-	AgentID       string  `json:"agent_id,omitempty"`
-	CurrentState  string  `json:"current_state"`
-	IsOnline      bool    `json:"is_online"`
-	IsExecuting   bool    `json:"is_executing"`
-	CurrentTaskID string  `json:"current_task_id,omitempty"`
-	CurrentStepID string  `json:"current_step_id,omitempty"`
-	StalenessSec  float64 `json:"staleness_sec"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	AgentID        string   `json:"agent_id,omitempty"`
+	CurrentState   string   `json:"current_state"`
+	StateCode      string   `json:"state_code,omitempty"`       // Enhanced state code (e.g., "pick:executing")
+	CurrentGraphID string   `json:"current_graph_id,omitempty"` // Currently executing graph ID
+	ExecutionPhase string   `json:"execution_phase,omitempty"`  // idle, offline, starting, executing
+	SemanticTags   []string `json:"semantic_tags,omitempty"`    // State semantic tags
+	IsOnline       bool     `json:"is_online"`
+	IsExecuting    bool     `json:"is_executing"`
+	CurrentTaskID  string   `json:"current_task_id,omitempty"`
+	CurrentStepID  string   `json:"current_step_id,omitempty"`
+	StalenessSec   float64  `json:"staleness_sec"`
 }
 
 type AgentStateSnapshot struct {

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
+
+	"central_server_go/internal/db"
 )
 
 // GetCacheStats returns cache statistics
@@ -65,4 +67,26 @@ func (s *Server) EvictStaleCache(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// GetSystemStates returns all predefined system states
+func (s *Server) GetSystemStates(w http.ResponseWriter, r *http.Request) {
+	response := make([]GraphStateResponse, len(db.SystemStates))
+	for i, state := range db.SystemStates {
+		response[i] = GraphStateResponse{
+			Code:         state.Code,
+			Name:         state.Name,
+			Type:         state.Type,
+			StepID:       state.StepID,
+			Phase:        state.Phase,
+			Color:        state.Color,
+			Description:  state.Description,
+			SemanticTags: state.SemanticTags,
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"system_states": response,
+		"count":         len(response),
+	})
 }

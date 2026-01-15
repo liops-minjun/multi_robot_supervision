@@ -1,14 +1,35 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Bot, Workflow, Wifi, WifiOff, ChevronRight, RefreshCw, Server } from 'lucide-react'
-import { robotApi, actionGraphApi, agentApi } from '../../api/client'
-import type { Robot, Agent } from '../../types'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Bot, Workflow, Wifi, WifiOff, ChevronRight, RefreshCw, Server, Play, Loader2, Circle, CheckCircle, XCircle } from 'lucide-react'
+import { robotApi, actionGraphApi, agentApi, fleetApi } from '../../api/client'
+import type { Robot, Agent, ExecutionPhase, RobotStateSnapshot } from '../../types'
 import { useTranslation } from '../../i18n'
+
+// Execution status component
+function ExecutionStatusIndicator({ phase, size = 'sm' }: { phase: ExecutionPhase | string | undefined; size?: 'sm' | 'md' }) {
+  const config: Record<string, { bg: string; text: string; icon: React.ReactNode; label: string }> = {
+    idle: { bg: 'bg-gray-500/20', text: 'text-gray-400', icon: <Circle className={size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} />, label: 'Idle' },
+    offline: { bg: 'bg-gray-600/20', text: 'text-gray-500', icon: <XCircle className={size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} />, label: 'Offline' },
+    starting: { bg: 'bg-yellow-500/20', text: 'text-yellow-400', icon: <Loader2 className={`${size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} animate-spin`} />, label: 'Starting' },
+    executing: { bg: 'bg-blue-500/20', text: 'text-blue-400', icon: <Play className={size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} />, label: 'Executing' },
+    completing: { bg: 'bg-green-500/20', text: 'text-green-400', icon: <CheckCircle className={size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} />, label: 'Completing' },
+  }
+  const c = config[phase || 'idle'] || config.idle
+
+  return (
+    <span className={`flex items-center gap-1 px-1.5 py-0.5 rounded ${c.bg} ${c.text} text-[9px] font-medium`}>
+      {c.icon}
+      {c.label}
+    </span>
+  )
+}
 
 export default function Monitoring() {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const [selectedRobot, setSelectedRobot] = useState<Robot | null>(null)
   const [selectedActionGraphId, setSelectedActionGraphId] = useState<string | null>(null)
+  const [executingGraphId, setExecutingGraphId] = useState<string | null>(null)
 
   // Fetch all robots
   const { data: robots = [], isLoading: robotsLoading, refetch: refetchRobots } = useQuery({
@@ -23,6 +44,20 @@ export default function Monitoring() {
     queryFn: () => agentApi.list(),
     refetchInterval: 5000,
   })
+
+  // Fetch fleet state for execution phase info
+  const { data: fleetState } = useQuery({
+    queryKey: ['fleet-state'],
+    queryFn: () => fleetApi.getState(),
+    refetchInterval: 1000, // 1s for real-time updates
+    refetchIntervalInBackground: true,
+  })
+
+  // Get robot state snapshot with execution phase
+  const getRobotStateSnapshot = (robotId: string): RobotStateSnapshot | undefined => {
+    if (!fleetState?.robots) return undefined
+    return fleetState.robots[robotId]
+  }
 
   // Fetch all action graphs
   const { data: actionGraphs = [] } = useQuery({
@@ -49,6 +84,22 @@ export default function Monitoring() {
     if (!agentId) return []
     return actionGraphs.filter(f => f.agent_id === agentId)
   }
+
+  // Execute action graph mutation
+  const executeMutation = useMutation({
+    mutationFn: ({ graphId, agentId }: { graphId: string; agentId: string }) =>
+      actionGraphApi.execute(graphId, agentId),
+    onMutate: ({ graphId }) => {
+      setExecutingGraphId(graphId)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks'] })
+      setExecutingGraphId(null)
+    },
+    onError: () => {
+      setExecutingGraphId(null)
+    },
+  })
 
   return (
     <div className="h-screen flex bg-[#0f0f1a]">
@@ -97,51 +148,50 @@ export default function Monitoring() {
                 </div>
 
                 {/* Robots */}
-                {agentRobots.map(robot => (
-                  <div
-                    key={robot.id}
-                    onClick={() => setSelectedRobot(robot)}
-                    className={`px-4 py-3 flex items-center gap-3 cursor-pointer transition-colors ${
-                      selectedRobot?.id === robot.id
-                        ? 'bg-blue-600/20 border-l-2 border-blue-500'
-                        : 'hover:bg-[#1a1a2e]'
-                    }`}
-                  >
-                    {/* Online Status */}
-                    <div className="flex-shrink-0">
-                      {robot.is_online ? (
-                        <Wifi className="w-4 h-4 text-green-500" />
-                      ) : (
-                        <WifiOff className="w-4 h-4 text-gray-600" />
-                      )}
-                    </div>
+                {agentRobots.map(robot => {
+                  const stateSnapshot = getRobotStateSnapshot(robot.id)
+                  const executionPhase = stateSnapshot?.execution_phase || (robot.is_online ? 'idle' : 'offline')
 
-                    {/* Robot Info */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-white truncate">
-                          {robot.name}
-                        </span>
-                        {robot.is_online && (
-                          <span
-                            className="px-1.5 py-0.5 rounded text-[9px] font-medium"
-                            style={{
-                              backgroundColor: getStateColor(robot.current_state) + '20',
-                              color: getStateColor(robot.current_state),
-                            }}
-                          >
-                            {robot.current_state}
-                          </span>
+                  return (
+                    <div
+                      key={robot.id}
+                      onClick={() => setSelectedRobot(robot)}
+                      className={`px-4 py-3 flex items-center gap-3 cursor-pointer transition-colors ${
+                        selectedRobot?.id === robot.id
+                          ? 'bg-blue-600/20 border-l-2 border-blue-500'
+                          : 'hover:bg-[#1a1a2e]'
+                      }`}
+                    >
+                      {/* Online Status */}
+                      <div className="flex-shrink-0">
+                        {robot.is_online ? (
+                          <Wifi className="w-4 h-4 text-green-500" />
+                        ) : (
+                          <WifiOff className="w-4 h-4 text-gray-600" />
                         )}
                       </div>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-[10px] text-gray-600 font-mono">{robot.ip_address}</span>
-                      </div>
-                    </div>
 
-                    <ChevronRight className="w-4 h-4 text-gray-600" />
-                  </div>
-                ))}
+                      {/* Robot Info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-white truncate">
+                            {robot.name}
+                          </span>
+                          {/* Execution phase indicator */}
+                          <ExecutionStatusIndicator phase={executionPhase} />
+                        </div>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-[10px] text-gray-600 font-mono">{robot.ip_address}</span>
+                          {robot.is_online && stateSnapshot?.state_code && (
+                            <span className="text-[10px] text-gray-500">{stateSnapshot.state_code}</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <ChevronRight className="w-4 h-4 text-gray-600" />
+                    </div>
+                  )
+                })}
               </div>
             )})
           )}
@@ -172,32 +222,55 @@ export default function Monitoring() {
           <>
             {/* Robot Header */}
             <div className="bg-[#16162a] border-b border-[#2a2a4a] p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className={`w-3 h-3 rounded-full ${selectedRobot.is_online ? 'bg-green-500' : 'bg-gray-600'}`} />
-                  <div>
-                    <h2 className="text-lg font-semibold text-white">{selectedRobot.name}</h2>
-                    <p className="text-sm text-gray-500">
-                      {getAgent(selectedRobot.agent_id)?.name || 'Unassigned'} • {selectedRobot.ip_address}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-4">
-                  {selectedRobot.is_online && (
-                    <>
-                      <div className="text-right">
-                        <div className="text-xs text-gray-500">{t('monitoring.currentState')}</div>
-                        <div
-                          className="text-sm font-medium"
-                          style={{ color: getStateColor(selectedRobot.current_state) }}
-                        >
-                          {selectedRobot.current_state}
-                        </div>
+              {(() => {
+                const stateSnapshot = getRobotStateSnapshot(selectedRobot.id)
+                const executionPhase = stateSnapshot?.execution_phase || (selectedRobot.is_online ? 'idle' : 'offline')
+
+                return (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-3 h-3 rounded-full ${selectedRobot.is_online ? 'bg-green-500' : 'bg-gray-600'}`} />
+                      <div>
+                        <h2 className="text-lg font-semibold text-white">{selectedRobot.name}</h2>
+                        <p className="text-sm text-gray-500">
+                          {getAgent(selectedRobot.agent_id)?.name || 'Unassigned'} • {selectedRobot.ip_address}
+                        </p>
                       </div>
-                    </>
-                  )}
-                </div>
-              </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      {/* Execution Status */}
+                      <div className="text-right">
+                        <div className="text-xs text-gray-500 mb-1">{t('monitoring.currentState')}</div>
+                        <ExecutionStatusIndicator phase={executionPhase} size="md" />
+                      </div>
+
+                      {/* State Code */}
+                      {selectedRobot.is_online && (
+                        <div className="text-right">
+                          <div className="text-xs text-gray-500">State Code</div>
+                          <div
+                            className="text-sm font-medium"
+                            style={{ color: getStateColor(stateSnapshot?.state_code || selectedRobot.current_state) }}
+                          >
+                            {stateSnapshot?.state_code || selectedRobot.current_state || 'idle'}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Current Graph */}
+                      {stateSnapshot?.current_graph_id && (
+                        <div className="text-right">
+                          <div className="text-xs text-gray-500">Graph</div>
+                          <div className="text-sm font-medium text-blue-400">
+                            {actionGraphs.find(g => g.id === stateSnapshot.current_graph_id)?.name
+                              || stateSnapshot.current_graph_id.slice(0, 8)}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })()}
             </div>
 
             {/* Available Workflows */}
@@ -247,10 +320,21 @@ export default function Monitoring() {
                           <button
                             onClick={(e) => {
                               e.stopPropagation()
-                              // TODO: Execute action graph
+                              if (selectedRobot?.agent_id) {
+                                executeMutation.mutate({
+                                  graphId: actionGraph.id,
+                                  agentId: selectedRobot.agent_id,
+                                })
+                              }
                             }}
-                            className="px-2 py-1 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors"
+                            disabled={executingGraphId === actionGraph.id || !selectedRobot?.agent_id}
+                            className="flex items-center gap-1 px-2 py-1 bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                           >
+                            {executingGraphId === actionGraph.id ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <Play className="w-3 h-3" />
+                            )}
                             {t('monitoring.execute')}
                           </button>
                         </div>

@@ -52,6 +52,11 @@ func main() {
 	}
 	log.Println("Database connection established")
 
+	// Ensure indexes for better query performance
+	if err := database.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure indexes: %v", err)
+	}
+
 	// Create repository
 	repo := db.NewRepository(database)
 
@@ -137,6 +142,10 @@ func main() {
 				}
 			}()
 		}
+
+		// Start fleet state broadcasting for cross-agent coordination
+		go rawQUICHandler.StartFleetStateBroadcast(time.Second)
+		log.Println("Fleet state broadcast started (1s interval)")
 	}
 
 	// Print server info

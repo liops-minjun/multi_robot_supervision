@@ -23,7 +23,11 @@ import type {
   ActionServerInfo,
   CompatibleAgentsResponse,
   AgentCompatibleTemplatesResponse,
-  AgentConnectionStatus
+  AgentConnectionStatus,
+  SystemStatesResponse,
+  TaskLogEntry,
+  TaskLogStats,
+  MultiAgentExecuteResponse
 } from '../types'
 
 const api = axios.create({
@@ -66,6 +70,17 @@ export const agentApi = {
   // Get connection status for a specific agent
   getSingleConnectionStatus: async (agentId: string): Promise<AgentConnectionStatus> => {
     const { data } = await api.get(`/agents/${agentId}/connection-status`)
+    return data
+  },
+
+  // Reset agent state to idle
+  resetState: async (agentId: string): Promise<{
+    success: boolean
+    agent_id: string
+    state: string
+    message: string
+  }> => {
+    const { data } = await api.post(`/agents/${agentId}/reset-state`)
     return data
   },
 }
@@ -199,6 +214,27 @@ export const actionGraphApi = {
     return data
   },
 
+  // Multi-agent simultaneous execution
+  executeMulti: async (
+    graphId: string,
+    agentIds: string[],
+    options?: {
+      commonParams?: Record<string, unknown>
+      agentParams?: Record<string, Record<string, unknown>>
+      syncMode?: 'barrier' | 'best_effort'
+      timeoutSec?: number
+    }
+  ): Promise<MultiAgentExecuteResponse> => {
+    const { data } = await api.post(`/action-graphs/${graphId}/execute-multi`, {
+      agent_ids: agentIds,
+      params: options?.commonParams,
+      agent_params: options?.agentParams,
+      sync_mode: options?.syncMode || 'barrier',
+      timeout_sec: options?.timeoutSec || 30,
+    })
+    return data
+  },
+
   validate: async (id: string): Promise<{ valid: boolean; errors: string[]; warnings: string[] }> => {
     const { data } = await api.post(`/action-graphs/${id}/validate`)
     return data
@@ -232,8 +268,37 @@ export const taskApi = {
     await api.post(`/tasks/${id}/resume`)
   },
 
-  confirm: async (id: string, confirmed: boolean = true): Promise<void> => {
-    await api.post(`/tasks/${id}/confirm`, null, { params: { confirmed } })
+  // Get execution logs for a task
+  getLogs: async (taskId: string, limit?: number): Promise<TaskLogEntry[]> => {
+    const params: Record<string, number> = {}
+    if (limit) params.limit = limit
+    const { data } = await api.get(`/tasks/${taskId}/logs`, { params })
+    return data
+  },
+}
+
+// Task Execution Logs APIs
+export const logsApi = {
+  // Get recent logs across all agents
+  getRecent: async (limit?: number): Promise<TaskLogEntry[]> => {
+    const params: Record<string, number> = {}
+    if (limit) params.limit = limit
+    const { data } = await api.get('/logs', { params })
+    return data
+  },
+
+  // Get logs for a specific agent
+  getAgentLogs: async (agentId: string, limit?: number): Promise<TaskLogEntry[]> => {
+    const params: Record<string, number> = {}
+    if (limit) params.limit = limit
+    const { data } = await api.get(`/agents/${agentId}/logs`, { params })
+    return data
+  },
+
+  // Get log statistics
+  getStats: async (): Promise<TaskLogStats> => {
+    const { data } = await api.get('/logs/stats')
+    return data
   },
 }
 
@@ -265,8 +330,8 @@ export const waypointApi = {
     await api.delete(`/waypoints/${id}`)
   },
 
-  teach: async (agentId: string, request: { waypoint_type: string; name: string; description?: string; tags?: string[] }): Promise<Waypoint> => {
-    const { data } = await api.post(`/agents/${agentId}/teach`, request)
+  teach: async (robotId: string, request: { waypoint_type: string; name: string; description?: string; tags?: string[] }): Promise<Waypoint> => {
+    const { data } = await api.post(`/robots/${robotId}/teach`, request)
     return data
   },
 }
@@ -369,9 +434,9 @@ export const fleetApi = {
     return data
   },
 
-  // Get single agent state (1:1 model: agent = robot)
-  getAgentRobotState: async (agentId: string): Promise<RobotStateSnapshot> => {
-    const { data } = await api.get(`/fleet/state/agent/${agentId}`)
+  // Get single robot state
+  getRobotState: async (robotId: string): Promise<RobotStateSnapshot> => {
+    const { data } = await api.get(`/fleet/robots/${robotId}`)
     return data
   },
 
@@ -383,7 +448,7 @@ export const fleetApi = {
     total: number
     online: number
   }> => {
-    const { data } = await api.get(`/fleet/state/agent/${agentId}`)
+    const { data } = await api.get(`/fleet/agents/${agentId}/robots`)
     return data
   },
 
@@ -411,6 +476,43 @@ export const fleetApi = {
     by_agent: Record<string, number>
   }> => {
     const { data } = await api.get('/fleet/summary')
+    return data
+  },
+}
+
+// System APIs
+export const systemApi = {
+  // Get predefined system states
+  getSystemStates: async (): Promise<SystemStatesResponse> => {
+    const { data } = await api.get('/system/states')
+    return data
+  },
+
+  // Get cache statistics
+  getCacheStats: async (): Promise<{
+    graph_cache: {
+      total_entries: number
+      template_count: number
+      deployed_count: number
+      total_hits: number
+      total_misses: number
+      hit_rate: number
+    }
+    timestamp: string
+  }> => {
+    const { data } = await api.get('/system/cache/stats')
+    return data
+  },
+
+  // Evict stale cache entries
+  evictStaleCache: async (maxAgeMinutes?: number): Promise<{
+    evicted_count: number
+    max_age_minutes: number
+    timestamp: string
+  }> => {
+    const { data } = await api.post('/system/cache/evict', {
+      max_age_minutes: maxAgeMinutes || 60
+    })
     return data
   },
 }

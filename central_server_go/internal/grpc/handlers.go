@@ -27,6 +27,10 @@ type FleetControlHandler struct {
 	// Pending command tracking
 	pendingCommands map[string]*PendingCommand
 	pendingMu       sync.RWMutex
+
+	// Fleet state broadcast control
+	broadcastStop chan struct{}
+	broadcastMu   sync.Mutex
 }
 
 // CommandHandler is a callback for handling specific command types
@@ -257,15 +261,12 @@ func (h *FleetControlHandler) HandleAgentMessage(agentID string, msg *AgentMessa
 // processHeartbeat updates agent state from heartbeat (1:1 model: agent_id = robot_id)
 func (h *FleetControlHandler) processHeartbeat(agentID string, hb *AgentHeartbeat) {
 	// Update robot state (agent_id = robot_id in 1:1 model)
+	// NOTE: Execution state (taskID, stepID, graphID) is managed by the scheduler.
+	// Heartbeat only updates state and lastSeen, NOT execution state.
 	if hb.State != "" {
 		if err := h.stateManager.UpdateRobotState(agentID, hb.State); err != nil {
 			log.Printf("Failed to update robot state: %v", err)
 		}
-	}
-
-	// Update execution state
-	if err := h.stateManager.UpdateRobotExecution(agentID, hb.IsExecuting, "", hb.CurrentAction); err != nil {
-		log.Printf("Failed to update robot execution state: %v", err)
 	}
 }
 
@@ -303,10 +304,9 @@ func (h *FleetControlHandler) processActionResult(result *ActionResult) {
 		}()
 	}
 
-	// Update execution state (agent_id = robot_id in 1:1 model)
-	if result.Status == ActionStatusSucceeded || result.Status == ActionStatusFailed || result.Status == ActionStatusCancelled {
-		h.stateManager.CompleteExecution(result.AgentID, nil)
-	}
+	// NOTE: Execution state completion is handled by the scheduler.
+	// Do NOT call CompleteExecution here - it would clear CurrentGraphID prematurely
+	// when a multi-step task moves to the next step.
 }
 
 // processStatusUpdate handles agent status changes (1:1 model)
@@ -581,4 +581,91 @@ func (h *FleetControlHandler) GetFleetState(ctx context.Context, req *FleetState
 	}
 
 	return response, nil
+}
+
+// ============================================================
+// Fleet State Broadcasting (for cross-agent coordination)
+// ============================================================
+
+// FleetStateUpdateMsg represents a fleet state broadcast message
+type FleetStateUpdateMsg struct {
+	TimestampMs int64
+	Agents      []*AgentStateEntry
+}
+
+// AgentStateEntry represents an agent state in broadcast
+type AgentStateEntry struct {
+	AgentID        string
+	State          string
+	StateCode      string
+	SemanticTags   []string
+	CurrentGraphID string
+	IsOnline       bool
+	IsExecuting    bool
+	StalenessSec   float32
+}
+
+// StartFleetStateBroadcast starts periodic fleet state broadcasts to agents
+func (h *FleetControlHandler) StartFleetStateBroadcast(interval time.Duration) {
+	h.broadcastMu.Lock()
+	if h.broadcastStop != nil {
+		h.broadcastMu.Unlock()
+		return // Already running
+	}
+	h.broadcastStop = make(chan struct{})
+	h.broadcastMu.Unlock()
+
+	log.Printf("[FleetState] Starting broadcast loop (interval: %v)", interval)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-h.broadcastStop:
+			log.Println("[FleetState] Broadcast loop stopped")
+			return
+		case <-ticker.C:
+			h.broadcastFleetState()
+		}
+	}
+}
+
+// StopFleetStateBroadcast stops the fleet state broadcast loop
+func (h *FleetControlHandler) StopFleetStateBroadcast() {
+	h.broadcastMu.Lock()
+	defer h.broadcastMu.Unlock()
+
+	if h.broadcastStop != nil {
+		close(h.broadcastStop)
+		h.broadcastStop = nil
+	}
+}
+
+// broadcastFleetState sends fleet state to all connected agents
+func (h *FleetControlHandler) broadcastFleetState() {
+	snapshot := h.stateManager.GetSnapshot()
+
+	agents := make([]*AgentStateEntry, 0, len(snapshot.Robots))
+	for _, robot := range snapshot.Robots {
+		entry := &AgentStateEntry{
+			AgentID:        robot.ID,
+			State:          robot.CurrentState,
+			StateCode:      robot.CurrentStateCode,
+			SemanticTags:   robot.SemanticTags,
+			CurrentGraphID: robot.CurrentGraphID,
+			IsOnline:       robot.IsOnline,
+			IsExecuting:    robot.IsExecuting,
+			StalenessSec:   float32(time.Since(robot.LastSeen).Seconds()),
+		}
+		agents = append(agents, entry)
+	}
+
+	msg := &FleetStateUpdateMsg{
+		TimestampMs: time.Now().UnixMilli(),
+		Agents:      agents,
+	}
+
+	// Broadcast to all connected agents
+	h.server.BroadcastToAgents(msg)
 }

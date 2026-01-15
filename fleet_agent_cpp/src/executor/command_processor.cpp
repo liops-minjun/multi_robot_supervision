@@ -38,7 +38,8 @@ CommandProcessor::CommandProcessor(
     , capability_store_(capability_store)
     , execution_contexts_(execution_contexts)
     , graph_storage_(graph_storage)
-    , state_tracker_mgr_(state_tracker_mgr) {
+    , state_tracker_mgr_(state_tracker_mgr)
+    , task_log_sender_(std::make_unique<TaskLogSender>(agent_id, quic_outbound_queue)) {
 
     log.info("Initialized for agent: {} (state tracking: {})",
              agent_id_, state_tracker_mgr_ != nullptr ? "enabled" : "disabled");
@@ -67,6 +68,9 @@ void CommandProcessor::stop() {
     }
 
     running_.store(false);
+
+    // Wake up the processing thread if waiting on queue
+    inbound_queue_.notify_all();
 
     if (processor_thread_.joinable()) {
         processor_thread_.join();
@@ -134,11 +138,15 @@ void CommandProcessor::enqueue_execute_command(
 
 void CommandProcessor::update_fleet_state(
     const std::unordered_map<std::string, int>& robot_states,
-    const std::unordered_map<std::string, bool>& robot_executing) {
+    const std::unordered_map<std::string, bool>& robot_executing,
+    const std::unordered_map<std::string, float>& robot_staleness,
+    const std::unordered_map<std::string, bool>& robot_online) {
 
     std::lock_guard<std::mutex> lock(fleet_state_mutex_);
     fleet_states_ = robot_states;
     fleet_executing_ = robot_executing;
+    fleet_staleness_ = robot_staleness;
+    fleet_online_ = robot_online;
 }
 
 void CommandProcessor::set_server_query_callback(ServerQueryCallback callback) {
@@ -151,18 +159,16 @@ void CommandProcessor::process_loop() {
     while (running_.load() && FLEET_AGENT_RUNNING) {
         InboundCommand cmd;
 
-        // Try to get command from queue (with timeout to allow shutdown check)
-        // Note: TBB concurrent_queue doesn't have blocking pop, so we use try_pop with sleep
-        if (inbound_queue_.try_pop(cmd)) {
+        // Wait for command with condition variable notification
+        // Uses NotifiableQueue::wait_pop() for low-latency (<1ms) wake-up
+        if (inbound_queue_.wait_pop(cmd, std::chrono::milliseconds(100), running_)) {
             try {
                 handle_message(cmd);
             } catch (const std::exception& e) {
                 log.error("Error processing message: {}", e.what());
             }
-        } else {
-            // No message, sleep briefly
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
+        // No sleep needed - wait_pop handles efficient waiting
     }
 
     log.debug("Process loop ended");
@@ -206,6 +212,10 @@ void CommandProcessor::handle_message(const InboundCommand& cmd) {
                      server_msg.config_update().agent_id());
             break;
 
+        case fleet::v1::ServerMessage::kFleetState:
+            handle_fleet_state_broadcast(server_msg.fleet_state());
+            break;
+
         default:
             log.warn("Unknown message payload type");
             break;
@@ -219,10 +229,29 @@ void CommandProcessor::handle_execute_command(
     log.info("Execute command: {} for robot {} (action: {})",
              cmd.command_id(), cmd.agent_id(), cmd.action_type());
 
+    // Set task context for logging
+    task_log_sender_->set_task_context(cmd.task_id(), cmd.step_id(), cmd.command_id());
+
+    // Stream execution log
+    task_log_sender_->info(
+        "Received execute command",
+        "CommandProcessor",
+        {
+            {"action_type", cmd.action_type()},
+            {"action_server", cmd.action_server()},
+            {"timeout_sec", std::to_string(cmd.timeout_sec())}
+        }
+    );
+
     // Get executor for robot
     auto* executor = get_executor(cmd.agent_id());
     if (!executor) {
         log.error("No executor for robot: {}", cmd.agent_id());
+        task_log_sender_->error(
+            "No executor found for robot",
+            "CommandProcessor",
+            {{"agent_id", cmd.agent_id()}}
+        );
         // Send failure result
         ActionResultInternal result;
         result.command_id = cmd.command_id();
@@ -263,6 +292,10 @@ void CommandProcessor::handle_execute_command(
         if (result == PreconditionEvaluator::Result::NOT_SATISFIED) {
             // For direct commands, we don't wait - reject if not satisfied
             log.warn("Start condition not satisfied for command {}", cmd.command_id());
+            task_log_sender_->warn(
+                "Start condition not satisfied - rejecting command",
+                "CommandProcessor"
+            );
             ActionResultInternal res;
             res.command_id = cmd.command_id();
             res.agent_id = cmd.agent_id();
@@ -279,6 +312,10 @@ void CommandProcessor::handle_execute_command(
             // Need to query server for multi-robot state
             // For now, treat as not satisfied
             log.warn("Multi-robot condition needs server query");
+            task_log_sender_->warn(
+                "Multi-robot condition needs server query",
+                "CommandProcessor"
+            );
         }
     }
 
@@ -304,20 +341,25 @@ void CommandProcessor::handle_execute_command(
         cmd.action_type()
     );
 
-    bool hasCustomStates = cmd.during_states_size() > 0 ||
-                           cmd.success_states_size() > 0 ||
-                           cmd.failure_states_size() > 0;
-
-    if (hasCustomStates) {
+    // Store action info for detailed logging on completion
+    {
         CommandStateTransitions transitions;
         transitions.during_states.assign(cmd.during_states().begin(), cmd.during_states().end());
         transitions.success_states.assign(cmd.success_states().begin(), cmd.success_states().end());
         transitions.failure_states.assign(cmd.failure_states().begin(), cmd.failure_states().end());
+        transitions.action_type = cmd.action_type();
+        transitions.action_server = cmd.action_server();
+        transitions.goal_params = request.params_json;
         std::lock_guard<std::mutex> lock(command_states_mutex_);
         command_states_[cmd.command_id()] = std::move(transitions);
     }
 
+    bool hasCustomStates = cmd.during_states_size() > 0 ||
+                           cmd.success_states_size() > 0 ||
+                           cmd.failure_states_size() > 0;
+
     // Update state tracker: action started
+    std::string current_state = "executing";
     if (state_tracker_mgr_) {
         auto tracker = state_tracker_mgr_->get_tracker(cmd.agent_id());
         if (tracker) {
@@ -327,12 +369,38 @@ void CommandProcessor::handle_execute_command(
             } else {
                 tracker->on_action_start(cmd.action_type());
             }
+            current_state = tracker->current_state();
         }
     }
+
+    // Send immediate state update to server (don't wait for heartbeat)
+    send_immediate_state_update(
+        cmd.agent_id(),
+        current_state,
+        true,  // is_executing
+        cmd.task_id(),
+        cmd.step_id()
+    );
+
+    // Log action execution start
+    task_log_sender_->info(
+        "Starting action execution",
+        "CommandProcessor",
+        {
+            {"action_type", request.action_type},
+            {"action_server", request.action_server},
+            {"params", request.params_json.substr(0, 200)}  // Truncate params for logging
+        }
+    );
 
     // Execute
     if (!executor->execute(request)) {
         log.error("Failed to start action for command {}", cmd.command_id());
+        task_log_sender_->error(
+            "Failed to start action execution",
+            "CommandProcessor",
+            {{"reason", "executor->execute() returned false"}}
+        );
 
         update_execution_context(cmd.agent_id(), RobotExecutionState::ERROR);
 
@@ -345,6 +413,11 @@ void CommandProcessor::handle_execute_command(
         result.error = "Failed to start action";
         result.completed_at_ms = now_ms();
         send_action_result(result);
+    } else {
+        task_log_sender_->info(
+            "Action execution started successfully",
+            "CommandProcessor"
+        );
     }
 }
 
@@ -379,16 +452,60 @@ void CommandProcessor::handle_ping(const fleet::v1::PingRequest& ping) {
     send_pong(ping.ping_id(), ping.timestamp_ms());
 }
 
+void CommandProcessor::handle_fleet_state_broadcast(const fleet::v1::FleetStateBroadcast& broadcast) {
+    std::unordered_map<std::string, int> states;
+    std::unordered_map<std::string, bool> executing;
+    std::unordered_map<std::string, float> staleness;
+    std::unordered_map<std::string, bool> online;
+
+    for (const auto& agent : broadcast.agents()) {
+        // Skip self
+        if (agent.agent_id() == agent_id_) {
+            continue;
+        }
+
+        // Parse state string to int
+        std::string state_str = agent.state();
+        int state_int = 0;  // Unknown
+        if (state_str == "idle") state_int = 1;
+        else if (state_str == "executing") state_int = 2;
+        else if (state_str == "error") state_int = 3;
+        else if (state_str == "charging") state_int = 4;
+        else if (state_str == "manual") state_int = 5;
+        else if (state_str == "emergency") state_int = 6;
+
+        states[agent.agent_id()] = state_int;
+        executing[agent.agent_id()] = agent.is_executing();
+        staleness[agent.agent_id()] = agent.staleness_sec();
+        online[agent.agent_id()] = agent.is_online();
+    }
+
+    update_fleet_state(states, executing, staleness, online);
+
+    log.debug("Fleet state updated: {} agents", broadcast.agents_size());
+}
+
 void CommandProcessor::on_action_result(const ActionResultInternal& result) {
     log.info("Action result: {} status={}", result.command_id, result.status);
 
+    // Update task context and log result
+    task_log_sender_->set_task_context(result.task_id, result.step_id, result.command_id);
+
     // Update execution context
     bool success = (result.status == static_cast<int>(fleet::v1::ACTION_STATUS_SUCCEEDED));
-    update_execution_context(
-        result.agent_id,
-        success ? RobotExecutionState::IDLE : RobotExecutionState::ERROR
-    );
 
+    // Log action completion
+    std::string status_str;
+    switch (result.status) {
+        case static_cast<int>(fleet::v1::ACTION_STATUS_SUCCEEDED): status_str = "SUCCEEDED"; break;
+        case static_cast<int>(fleet::v1::ACTION_STATUS_FAILED): status_str = "FAILED"; break;
+        case static_cast<int>(fleet::v1::ACTION_STATUS_CANCELLED): status_str = "CANCELLED"; break;
+        case static_cast<int>(fleet::v1::ACTION_STATUS_TIMEOUT): status_str = "TIMEOUT"; break;
+        case static_cast<int>(fleet::v1::ACTION_STATUS_REJECTED): status_str = "REJECTED"; break;
+        default: status_str = "UNKNOWN"; break;
+    }
+
+    // Retrieve stored action info for detailed logging
     CommandStateTransitions transitions;
     bool hasTransitions = false;
     {
@@ -401,10 +518,61 @@ void CommandProcessor::on_action_result(const ActionResultInternal& result) {
         }
     }
 
+    // Format duration as human-readable
+    int64_t duration_ms = result.completed_at_ms - result.started_at_ms;
+    std::string duration_str;
+    if (duration_ms >= 1000) {
+        duration_str = std::to_string(duration_ms / 1000) + "." +
+                      std::to_string((duration_ms % 1000) / 100) + "s";
+    } else {
+        duration_str = std::to_string(duration_ms) + "ms";
+    }
+
+    // Truncate result JSON for logging (max 300 chars)
+    std::string result_preview = result.result_json;
+    if (result_preview.length() > 300) {
+        result_preview = result_preview.substr(0, 297) + "...";
+    }
+
+    if (success) {
+        task_log_sender_->info(
+            "Action completed successfully",
+            "ActionExecutor",
+            {
+                {"status", status_str},
+                {"duration", duration_str},
+                {"duration_ms", std::to_string(duration_ms)},
+                {"action_type", hasTransitions ? transitions.action_type : "unknown"},
+                {"action_server", hasTransitions ? transitions.action_server : "unknown"},
+                {"result", result_preview}
+            }
+        );
+    } else {
+        task_log_sender_->error(
+            "Action failed: " + result.error,
+            "ActionExecutor",
+            {
+                {"status", status_str},
+                {"duration", duration_str},
+                {"duration_ms", std::to_string(duration_ms)},
+                {"action_type", hasTransitions ? transitions.action_type : "unknown"},
+                {"action_server", hasTransitions ? transitions.action_server : "unknown"},
+                {"error", result.error},
+                {"result", result_preview}
+            }
+        );
+    }
+
+    update_execution_context(
+        result.agent_id,
+        success ? RobotExecutionState::IDLE : RobotExecutionState::ERROR
+    );
+
     // Send result to server
     send_action_result(result);
 
     // Update state tracker
+    std::string final_state = "idle";
     if (state_tracker_mgr_) {
         auto tracker = state_tracker_mgr_->get_tracker(result.agent_id);
         if (tracker) {
@@ -418,11 +586,21 @@ void CommandProcessor::on_action_result(const ActionResultInternal& result) {
                 tracker->on_action_complete(success, std::nullopt);
             }
 
+            final_state = tracker->current_state();
             log.info("Robot {} state updated to: {} (action {})",
-                     result.agent_id, tracker->current_state(),
+                     result.agent_id, final_state,
                      success ? "succeeded" : "failed");
         }
     }
+
+    // Send immediate state update to server (don't wait for heartbeat)
+    send_immediate_state_update(
+        result.agent_id,
+        final_state,
+        false,  // is_executing = false (action completed)
+        result.task_id,
+        result.step_id
+    );
 }
 
 void CommandProcessor::on_action_feedback(const std::string& agent_id, float progress) {
@@ -452,6 +630,8 @@ PreconditionEvaluator::Context CommandProcessor::build_precond_context(
         std::lock_guard<std::mutex> lock(fleet_state_mutex_);
         ctx.other_robot_states = fleet_states_;
         ctx.other_robot_executing = fleet_executing_;
+        ctx.other_robot_staleness = fleet_staleness_;
+        ctx.other_robot_online = fleet_online_;
     }
 
     return ctx;
@@ -542,6 +722,40 @@ void CommandProcessor::send_action_feedback(
     out.priority = 5;  // Medium priority for feedback
 
     quic_outbound_queue_.push(std::move(out));
+}
+
+void CommandProcessor::send_immediate_state_update(
+    const std::string& agent_id,
+    const std::string& state_name,
+    bool is_executing,
+    const std::string& task_id,
+    const std::string& step_id) {
+
+    auto msg = std::make_shared<fleet::v1::AgentMessage>();
+    msg->set_agent_id(agent_id_);
+    msg->set_timestamp_ms(now_ms());
+
+    // Send as heartbeat message for immediate state visibility
+    auto* heartbeat = msg->mutable_heartbeat();
+    heartbeat->set_agent_id(agent_id);
+    heartbeat->set_state(state_name);
+    heartbeat->set_is_executing(is_executing);
+    if (!task_id.empty()) {
+        heartbeat->set_current_task_id(task_id);
+    }
+    if (!step_id.empty()) {
+        heartbeat->set_current_step_id(step_id);
+    }
+
+    OutboundMessage out;
+    out.message = msg;
+    out.created_at = std::chrono::steady_clock::now();
+    out.priority = 15;  // High priority for immediate state updates
+
+    quic_outbound_queue_.push(std::move(out));
+
+    log.debug("Sent immediate state update: agent={} state={} executing={}",
+              agent_id, state_name, is_executing);
 }
 
 void CommandProcessor::send_deploy_response(

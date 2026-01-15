@@ -181,9 +181,14 @@ void StateTracker::set_during_states(const std::vector<std::string>& during_stat
 
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // Use first valid state
+    // Use first state - auto-register graph-provided states if not already valid
     for (const auto& state : during_states) {
-        if (is_valid_state(state)) {
+        if (!state.empty()) {
+            // Dynamically register graph-defined states (e.g., "navigate_during", "pick_during")
+            if (!is_valid_state(state)) {
+                available_states_.push_back(state);
+                log.debug("Dynamically registered graph state: {}", state);
+            }
             transition_to(state, "graph_during_state");
             return;
         }
@@ -200,7 +205,12 @@ void StateTracker::set_success_states(const std::vector<std::string>& success_st
     std::lock_guard<std::mutex> lock(mutex_);
 
     for (const auto& state : success_states) {
-        if (is_valid_state(state)) {
+        if (!state.empty()) {
+            // Dynamically register graph-defined states (e.g., "navigate_succeed", "pick_succeed")
+            if (!is_valid_state(state)) {
+                available_states_.push_back(state);
+                log.debug("Dynamically registered graph state: {}", state);
+            }
             transition_to(state, "graph_success_state");
             return;
         }
@@ -217,7 +227,12 @@ void StateTracker::set_failure_states(const std::vector<std::string>& failure_st
     std::lock_guard<std::mutex> lock(mutex_);
 
     for (const auto& state : failure_states) {
-        if (is_valid_state(state)) {
+        if (!state.empty()) {
+            // Dynamically register graph-defined states (e.g., "navigate_failed", "pick_aborted")
+            if (!is_valid_state(state)) {
+                available_states_.push_back(state);
+                log.debug("Dynamically registered graph state: {}", state);
+            }
             transition_to(state, "graph_failure_state");
             return;
         }

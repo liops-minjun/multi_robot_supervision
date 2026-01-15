@@ -416,6 +416,9 @@ MessageHandler::HandleResult MessageHandler::handle(const fleet::v1::ServerMessa
         case fleet::v1::ServerMessage::kDeployGraph:
             return handle_deploy_graph(message.deploy_graph());
 
+        case fleet::v1::ServerMessage::kFleetState:
+            return handle_fleet_state(message.fleet_state());
+
         case fleet::v1::ServerMessage::kAck:
             // Server acknowledgment - just log
             log.debug("Received server ack for message: {}",
@@ -630,6 +633,45 @@ MessageHandler::HandleResult MessageHandler::handle_deploy_graph(
              graph.metadata().id(), graph.metadata().version());
 
     return HandleResult{true, "", response};
+}
+
+MessageHandler::HandleResult MessageHandler::handle_fleet_state(
+    const fleet::v1::FleetStateBroadcast& fleet_state) {
+
+    if (!deps_.fleet_state_cache) {
+        log.debug("Fleet state broadcast received but no cache configured, ignoring");
+        return HandleResult{true, "", nullptr};
+    }
+
+    log.debug("Fleet state broadcast: timestamp={}, agents={}",
+              fleet_state.timestamp_ms(), fleet_state.agents_size());
+
+    // Convert protobuf to FleetStateEntry and update cache
+    std::vector<state::FleetStateEntry> entries;
+    entries.reserve(fleet_state.agents_size());
+
+    for (const auto& agent : fleet_state.agents()) {
+        state::FleetStateEntry entry;
+        entry.agent_id = agent.agent_id();
+        entry.state_code = agent.state();
+        entry.is_online = agent.is_online();
+        entry.is_executing = agent.is_executing();
+        entry.updated_at = std::chrono::system_clock::now();
+
+        // Parse optional fields
+        if (agent.has_current_task_id()) {
+            entry.current_graph_id = agent.current_task_id();
+        }
+
+        entries.push_back(std::move(entry));
+    }
+
+    // Batch update fleet state cache
+    deps_.fleet_state_cache->update_batch(entries);
+
+    log.debug("Updated fleet state cache with {} agent entries", entries.size());
+
+    return HandleResult{true, "", nullptr};
 }
 
 // ============================================================

@@ -66,6 +66,9 @@ message AgentMessage {
 
     // Capability registration
     CapabilityRegistration capability_registration = 18;
+
+    // Task execution logs
+    TaskLog task_log = 19;
   }
 }
 
@@ -78,7 +81,12 @@ message AgentHeartbeat {
   string state = 2;
   bool is_executing = 3;
   string current_action = 4;
-  reserved 5, 6;
+  uint32 network_latency_ms = 5;
+  uint32 network_latency_us = 6;
+  // Fields 7-9 reserved for Go server compatibility
+  reserved 7, 8, 9;
+  string current_task_id = 10;
+  string current_step_id = 11;
 }
 
 message AgentStatusUpdate {
@@ -122,7 +130,16 @@ message ServerMessage {
 
     // Ping
     PingRequest ping = 16;
+
+    // Fleet state broadcast (for cross-agent coordination)
+    FleetStateBroadcast fleet_state = 17;
   }
+}
+
+// Fleet state broadcast message for cross-agent coordination
+message FleetStateBroadcast {
+  int64 timestamp_ms = 1;
+  repeated AgentStateSnapshot agents = 2;
 }
 
 message ServerAck {

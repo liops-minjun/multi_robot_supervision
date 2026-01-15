@@ -5,7 +5,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -210,6 +212,106 @@ struct ActionResultInternal {
 };
 
 // ============================================================
+// NotifiableQueue - Lock-free queue with condition variable notification
+// ============================================================
+
+/**
+ * NotifiableQueue wraps TBB concurrent_queue with condition variable support.
+ *
+ * This allows consumers to efficiently wait for new items without polling,
+ * reducing latency from ~10ms (polling) to <1ms (immediate notification).
+ *
+ * Thread-safe for multiple producers and single consumer.
+ */
+template <typename T>
+class NotifiableQueue {
+public:
+    /**
+     * Push an item to the queue and notify waiting consumers.
+     */
+    void push(T item) {
+        queue_.push(std::move(item));
+        cv_.notify_one();
+    }
+
+    /**
+     * Try to pop an item without blocking.
+     * @return true if item was popped
+     */
+    bool try_pop(T& item) {
+        return queue_.try_pop(item);
+    }
+
+    /**
+     * Wait for an item with timeout.
+     *
+     * Efficiently blocks until an item is available or timeout expires.
+     * Uses condition variable for immediate wake-up on push.
+     *
+     * @param item Output item
+     * @param timeout Maximum wait time
+     * @param running_flag External running flag to check (false = stop)
+     * @return true if item was popped, false on timeout or stop
+     */
+    template <typename Rep, typename Period>
+    bool wait_pop(T& item,
+                  std::chrono::duration<Rep, Period> timeout,
+                  const std::atomic<bool>& running_flag) {
+        // Fast path: try without waiting
+        if (queue_.try_pop(item)) {
+            return true;
+        }
+
+        // Slow path: wait for notification
+        std::unique_lock<std::mutex> lock(mtx_);
+        cv_.wait_for(lock, timeout, [this, &running_flag] {
+            return !running_flag.load() || queue_.unsafe_size() > 0;
+        });
+
+        if (!running_flag.load()) {
+            return false;
+        }
+
+        // Try again after notification
+        return queue_.try_pop(item);
+    }
+
+    /**
+     * Get approximate queue size (not thread-safe snapshot).
+     */
+    size_t unsafe_size() const {
+        return queue_.unsafe_size();
+    }
+
+    /**
+     * Check if queue is empty (approximate).
+     */
+    bool empty() const {
+        return queue_.empty();
+    }
+
+    /**
+     * Clear all items from queue.
+     */
+    void clear() {
+        T item;
+        while (queue_.try_pop(item)) {}
+    }
+
+    /**
+     * Wake up any waiting consumers (for shutdown).
+     */
+    void notify_all() {
+        cv_.notify_all();
+    }
+
+private:
+    tbb::concurrent_queue<T> queue_;
+    mutable std::mutex mtx_;
+    std::condition_variable cv_;
+};
+
+// ============================================================
 // TBB Container Type Aliases
 // ============================================================
 
@@ -219,9 +321,9 @@ using CapabilityStore = tbb::concurrent_hash_map<std::string, ActionCapability>;
 // Execution context: agent_id -> execution context (1:1 model)
 using ExecutionContextMap = tbb::concurrent_hash_map<std::string, RobotExecutionContext>;
 
-// Message queues
-using InboundQueue = tbb::concurrent_queue<InboundCommand>;
-using QuicOutboundQueue = tbb::concurrent_queue<OutboundMessage>;
+// Message queues (using NotifiableQueue for low-latency notification)
+using InboundQueue = NotifiableQueue<InboundCommand>;
+using QuicOutboundQueue = NotifiableQueue<OutboundMessage>;
 
 // Command queues (for ExecuteCommand from protobuf)
 // Note: These use ActionRequest since fleet::v1::ExecuteCommand requires protobuf include

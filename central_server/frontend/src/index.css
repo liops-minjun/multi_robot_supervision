@@ -13,3 +13,13 @@ body {
   min-width: 320px;
   min-height: 100vh;
 }
+
+/* Pulse glow animation for active Action Graph nodes */
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 15px 3px rgba(34, 211, 238, 0.6), 0 0 30px 6px rgba(34, 211, 238, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 20px 5px rgba(34, 211, 238, 0.8), 0 0 40px 10px rgba(34, 211, 238, 0.4);
+  }
+}

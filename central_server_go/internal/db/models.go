@@ -20,6 +20,11 @@ type Agent struct {
 	CreatedAt    time.Time `gorm:"autoCreateTime"`
 	UpdatedAt    time.Time `gorm:"autoUpdateTime"`
 
+	// Enhanced state tracking
+	CurrentStateCode string         `gorm:"size:100;default:idle"` // Current state code (e.g., "pick:executing")
+	SemanticTags     datatypes.JSON `gorm:"type:jsonb"`            // Current semantic tags []string
+	CurrentGraphID   sql.NullString `gorm:"size:50"`               // Currently executing graph ID
+
 	// Relationships
 	AgentActionGraphs []AgentActionGraph `gorm:"foreignKey:AgentID"`
 	ActionGraphs      []ActionGraph      `gorm:"foreignKey:AgentID"`
@@ -107,6 +112,27 @@ func (StateDefinition) TableName() string {
 	return "state_definitions"
 }
 
+// GraphState represents a state that can be reported during action graph execution
+type GraphState struct {
+	Code         string   `json:"code"`                    // Unique code: "pick:executing", "idle"
+	Name         string   `json:"name"`                    // Display name: "Picking - Executing"
+	Type         string   `json:"type"`                    // "system" | "auto" | "custom"
+	StepID       string   `json:"step_id,omitempty"`       // Related step ID (for auto type)
+	Phase        string   `json:"phase,omitempty"`         // "executing" | "success" | "failed"
+	Color        string   `json:"color,omitempty"`         // UI color: "#3b82f6"
+	Description  string   `json:"description,omitempty"`   // Optional description
+	SemanticTags []string `json:"semantic_tags,omitempty"` // Cross-graph tags: ["ready_for_handoff"]
+}
+
+// SystemStates are always available for all agents
+var SystemStates = []GraphState{
+	{Code: "idle", Name: "Idle", Type: "system", Color: "#22c55e"},
+	{Code: "executing", Name: "Executing", Type: "system", Color: "#3b82f6"},
+	{Code: "error", Name: "Error", Type: "system", Color: "#ef4444"},
+	{Code: "waiting_confirm", Name: "Waiting Confirmation", Type: "system", Color: "#eab308"},
+	{Code: "paused", Name: "Paused", Type: "system", Color: "#6b7280"},
+}
+
 // ActionGraph represents a workflow of steps (template or agent-specific)
 type ActionGraph struct {
 	ID               string         `gorm:"primaryKey;size:50"`
@@ -124,6 +150,10 @@ type ActionGraph struct {
 
 	// Capability-based: required action types for this graph
 	RequiredActionTypes datatypes.JSON `gorm:"type:jsonb;default:'[]'"` // ["nav2_msgs/NavigateToPose", ...]
+
+	// State management
+	States             datatypes.JSON `gorm:"type:jsonb"` // []GraphState - available states for this graph
+	AutoGenerateStates bool           `gorm:"default:true"` // Auto-generate states from steps
 
 	// Relationships
 	Agent             *Agent             `gorm:"foreignKey:AgentID"`
@@ -378,4 +408,103 @@ type Precondition struct {
 	Type      string `json:"type"`      // agent_state, zone_free, etc.
 	Condition string `json:"condition"` // Expression to evaluate
 	Message   string `json:"message"`   // Error message if failed
+}
+
+// ============================================================
+// Enhanced Precondition Types for Cross-Agent State Checking
+// ============================================================
+
+// EnhancedPrecondition represents a structured precondition with multiple types
+type EnhancedPrecondition struct {
+	Type string `json:"type"` // self_state, agent_state, semantic_tag, any_agent_state
+
+	// For self_state
+	StateCode string `json:"state_code,omitempty"`
+	Operator  string `json:"operator,omitempty"` // ==, !=
+
+	// For agent_state
+	TargetAgentID string `json:"target_agent_id,omitempty"`
+	SemanticTag   string `json:"semantic_tag,omitempty"`
+
+	// For any_agent_state
+	Filter         *PreconditionFilter `json:"filter,omitempty"`
+	CountCondition string              `json:"count_condition,omitempty"` // ">= 1", "== 0", etc.
+
+	// Common
+	Message string `json:"message,omitempty"`
+}
+
+// PreconditionFilter for any_agent_state type
+type PreconditionFilter struct {
+	GraphID       string   `json:"graph_id,omitempty"`
+	Capability    string   `json:"capability,omitempty"`
+	Tags          []string `json:"tags,omitempty"`           // Required semantic tags
+	OnlineOnly    bool     `json:"online_only,omitempty"`    // Only check online agents
+	ExecutingOnly bool     `json:"executing_only,omitempty"` // Only check executing agents
+	IncludeSelf   bool     `json:"include_self,omitempty"`   // Include self in any_agent_state
+}
+
+// ============================================================
+// State Generation Helpers
+// ============================================================
+
+// GenerateStatesFromSteps creates auto-generated states from action graph steps
+func GenerateStatesFromSteps(steps []ActionGraphStep, existingStates []GraphState) []GraphState {
+	states := make([]GraphState, 0)
+
+	// 1. Add system states
+	states = append(states, SystemStates...)
+
+	// 2. Keep existing custom states
+	for _, s := range existingStates {
+		if s.Type == "custom" {
+			states = append(states, s)
+		}
+	}
+
+	// 3. Generate auto states for each step
+	phases := []struct {
+		phase string
+		name  string
+		color string
+	}{
+		{"executing", "Executing", "#3b82f6"},
+		{"success", "Success", "#22c55e"},
+		{"failed", "Failed", "#ef4444"},
+	}
+
+	for _, step := range steps {
+		// Skip terminal steps
+		if step.Type == "terminal" {
+			continue
+		}
+
+		stepName := step.Name
+		if stepName == "" {
+			stepName = step.ID
+		}
+
+		for _, p := range phases {
+			states = append(states, GraphState{
+				Code:   step.ID + ":" + p.phase,
+				Name:   stepName + " - " + p.name,
+				Type:   "auto",
+				StepID: step.ID,
+				Phase:  p.phase,
+				Color:  p.color,
+			})
+		}
+	}
+
+	return states
+}
+
+// GetSemanticTagsForState returns semantic tags for a given state code
+func GetSemanticTagsForState(states []GraphState, stateCode string) []string {
+	for _, s := range states {
+		if s.Code == stateCode {
+			return s.SemanticTags
+		}
+	}
+	return nil
 }

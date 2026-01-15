@@ -113,3 +113,26 @@ message ConfigUpdateAck {
   bool success = 3;
   string error = 4;
 }
+
+// ============================================================
+// Agent → Server: Task Execution Log
+// ============================================================
+
+enum TaskLogLevel {
+  TASK_LOG_DEBUG = 0;
+  TASK_LOG_INFO = 1;
+  TASK_LOG_WARN = 2;
+  TASK_LOG_ERROR = 3;
+}
+
+message TaskLog {
+  string agent_id = 1;
+  string task_id = 2;
+  string step_id = 3;
+  string command_id = 4;
+  TaskLogLevel level = 5;
+  string message = 6;
+  int64 timestamp_ms = 7;
+  string component = 8;      // e.g., "CommandProcessor", "ActionExecutor"
+  map<string, string> metadata = 9;  // Additional context
+}

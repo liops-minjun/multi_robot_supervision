@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Play, Pause, Square, CheckCircle, XCircle, Clock, RefreshCw,
-  AlertCircle, ChevronRight, Timer, Bot, Workflow, Calendar
+  ChevronRight, Timer, Bot, Workflow, Calendar
 } from 'lucide-react'
 import { taskApi } from '../../api/client'
 import { useTranslation } from '../../i18n'
@@ -37,12 +37,6 @@ export default function TaskHistory() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tasks'] }),
   })
 
-  const confirmMutation = useMutation({
-    mutationFn: ({ id, confirmed }: { id: string; confirmed: boolean }) =>
-      taskApi.confirm(id, confirmed),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tasks'] }),
-  })
-
   const statusFilters = [
     { value: '', label: t('task.allStatus'), color: 'bg-slate-500/20 text-slate-300' },
     { value: 'running', label: t('status.running'), color: 'bg-blue-500/20 text-blue-300' },
@@ -50,7 +44,6 @@ export default function TaskHistory() {
     { value: 'completed', label: t('status.completed'), color: 'bg-emerald-500/20 text-emerald-300' },
     { value: 'failed', label: t('status.failed'), color: 'bg-red-500/20 text-red-300' },
     { value: 'paused', label: t('status.paused'), color: 'bg-amber-500/20 text-amber-300' },
-    { value: 'waiting_confirm', label: t('status.waiting_confirm'), color: 'bg-purple-500/20 text-purple-300' },
   ]
 
   return (
@@ -133,7 +126,6 @@ export default function TaskHistory() {
               onCancel={() => cancelMutation.mutate(selected.id)}
               onPause={() => pauseMutation.mutate(selected.id)}
               onResume={() => resumeMutation.mutate(selected.id)}
-              onConfirm={(confirmed) => confirmMutation.mutate({ id: selected.id, confirmed })}
             />
           ) : (
             <div className="h-full min-h-[400px] flex items-center justify-center">
@@ -167,7 +159,6 @@ function TaskListItem({
     failed: { icon: <XCircle size={16} />, bg: 'bg-red-500/20', text: 'text-red-400' },
     cancelled: { icon: <Square size={16} />, bg: 'bg-slate-500/20', text: 'text-slate-400' },
     paused: { icon: <Pause size={16} />, bg: 'bg-amber-500/20', text: 'text-amber-400' },
-    waiting_confirm: { icon: <AlertCircle size={16} />, bg: 'bg-purple-500/20', text: 'text-purple-400' },
   }
 
   const config = statusConfig[task.status] || statusConfig.pending
@@ -221,13 +212,11 @@ function TaskDetail({
   onCancel,
   onPause,
   onResume,
-  onConfirm,
 }: {
   task: Task
   onCancel: () => void
   onPause: () => void
   onResume: () => void
-  onConfirm: (confirmed: boolean) => void
 }) {
   const { t } = useTranslation()
 
@@ -238,15 +227,13 @@ function TaskDetail({
     failed: { bg: 'bg-red-500/20', text: 'text-red-300', bar: 'bg-red-500' },
     cancelled: { bg: 'bg-slate-500/20', text: 'text-slate-300', bar: 'bg-slate-500' },
     paused: { bg: 'bg-amber-500/20', text: 'text-amber-300', bar: 'bg-amber-500' },
-    waiting_confirm: { bg: 'bg-purple-500/20', text: 'text-purple-300', bar: 'bg-purple-500' },
   }
 
   const config = statusConfig[task.status] || statusConfig.pending
 
-  const canCancel = ['running', 'paused', 'waiting_confirm'].includes(task.status)
+  const canCancel = ['running', 'paused'].includes(task.status)
   const canPause = task.status === 'running'
   const canResume = task.status === 'paused'
-  const needsConfirm = task.status === 'waiting_confirm'
 
   const progressPercent = task.progress
     ? (task.progress.current / task.progress.total) * 100
@@ -298,37 +285,6 @@ function TaskDetail({
             </button>
           )}
         </div>
-
-        {/* Manual Confirmation */}
-        {needsConfirm && (
-          <div className="bg-purple-500/10 border border-purple-500/20 rounded-xl p-5">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center">
-                <AlertCircle className="w-5 h-5 text-purple-400" />
-              </div>
-              <div>
-                <h3 className="font-medium text-white">{t('task.manualConfirm')}</h3>
-                <p className="text-sm text-slate-400 mt-0.5">Waiting for operator approval to continue</p>
-              </div>
-            </div>
-            <div className="flex gap-3">
-              <button
-                onClick={() => onConfirm(true)}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl transition-colors"
-              >
-                <CheckCircle size={18} />
-                {t('common.confirm')}
-              </button>
-              <button
-                onClick={() => onConfirm(false)}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-red-500 hover:bg-red-600 text-white rounded-xl transition-colors"
-              >
-                <XCircle size={18} />
-                {t('common.reject')}
-              </button>
-            </div>
-          </div>
-        )}
 
         {/* Info Cards */}
         <div className="grid grid-cols-2 gap-4">

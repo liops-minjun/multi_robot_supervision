@@ -2,6 +2,8 @@ package state
 
 import (
 	"fmt"
+	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -190,19 +192,51 @@ func (c *GraphCache) InvalidateAllDeployments(graphID string) []string {
 	defer c.mu.Unlock()
 
 	affectedAgents := make([]string, 0)
+	affectedSet := make(map[string]bool) // Track unique agents
 
-	// Get all agents with this graph deployed
+	// Method 1: Use reverse index (fast path)
 	if agents, exists := c.graphToAgents[graphID]; exists {
 		for agentID := range agents {
-			affectedAgents = append(affectedAgents, agentID)
+			if !affectedSet[agentID] {
+				affectedAgents = append(affectedAgents, agentID)
+				affectedSet[agentID] = true
+			}
 			key := deployedKey(agentID, graphID)
 			delete(c.deployed, key)
 		}
 		delete(c.graphToAgents, graphID)
 	}
 
+	// Method 2: Direct scan of deployed map (fallback for any missed entries)
+	// This catches entries where graphToAgents index might be out of sync
+	suffix := ":" + graphID
+	keysToDelete := make([]string, 0)
+	for key := range c.deployed {
+		if strings.HasSuffix(key, suffix) {
+			keysToDelete = append(keysToDelete, key)
+		}
+	}
+
+	for _, key := range keysToDelete {
+		// Extract agentID from key (format: "agentID:graphID")
+		parts := strings.SplitN(key, ":", 2)
+		if len(parts) == 2 {
+			agentID := parts[0]
+			if !affectedSet[agentID] {
+				affectedAgents = append(affectedAgents, agentID)
+				affectedSet[agentID] = true
+				log.Printf("[GraphCache] WARNING: Found orphaned cache entry %s (not in graphToAgents index)", key)
+			}
+		}
+		delete(c.deployed, key)
+	}
+
 	// Also remove from templates
 	delete(c.templates, graphID)
+
+	if len(affectedAgents) > 0 {
+		log.Printf("[GraphCache] Invalidated graph %s for agents: %v", graphID, affectedAgents)
+	}
 
 	return affectedAgents
 }

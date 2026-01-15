@@ -6,6 +6,7 @@
 #include "fleet_agent/core/types.hpp"
 #include "fleet_agent/executor/precondition.hpp"
 #include "fleet_agent/executor/action_executor.hpp"
+#include "fleet_agent/executor/task_log_sender.hpp"
 
 #include <atomic>
 #include <memory>
@@ -133,7 +134,9 @@ public:
      */
     void update_fleet_state(
         const std::unordered_map<std::string, int>& robot_states,
-        const std::unordered_map<std::string, bool>& robot_executing
+        const std::unordered_map<std::string, bool>& robot_executing,
+        const std::unordered_map<std::string, float>& robot_staleness = {},
+        const std::unordered_map<std::string, bool>& robot_online = {}
     );
 
     /**
@@ -166,6 +169,9 @@ private:
     // Precondition evaluator
     PreconditionEvaluator precond_evaluator_;
 
+    // Task log sender for streaming execution logs
+    std::unique_ptr<TaskLogSender> task_log_sender_;
+
     // Processing thread
     std::atomic<bool> running_{false};
     std::thread processor_thread_;
@@ -173,6 +179,8 @@ private:
     // Multi-robot state cache (for Hybrid control)
     std::unordered_map<std::string, int> fleet_states_;
     std::unordered_map<std::string, bool> fleet_executing_;
+    std::unordered_map<std::string, float> fleet_staleness_;
+    std::unordered_map<std::string, bool> fleet_online_;
     std::mutex fleet_state_mutex_;
 
     // Server query callback
@@ -182,6 +190,10 @@ private:
         std::vector<std::string> during_states;
         std::vector<std::string> success_states;
         std::vector<std::string> failure_states;
+        // Additional info for detailed logging
+        std::string action_type;
+        std::string action_server;
+        std::string goal_params;  // JSON params for logging
     };
 
     std::unordered_map<std::string, CommandStateTransitions> command_states_;
@@ -203,6 +215,7 @@ private:
     void handle_cancel_command(const fleet::v1::CancelCommand& cmd);
     void handle_deploy_graph(const fleet::v1::DeployGraphRequest& req);
     void handle_ping(const fleet::v1::PingRequest& ping);
+    void handle_fleet_state_broadcast(const fleet::v1::FleetStateBroadcast& broadcast);
 
     // ============================================================
     // Action Result Handling
@@ -238,6 +251,18 @@ private:
         const std::string& error = ""
     );
     void send_pong(const std::string& ping_id, int64_t server_timestamp);
+
+    /**
+     * Send immediate state update to server (bypasses heartbeat interval).
+     * Called when action starts or completes to ensure real-time state visibility.
+     */
+    void send_immediate_state_update(
+        const std::string& agent_id,
+        const std::string& state_name,
+        bool is_executing,
+        const std::string& task_id = "",
+        const std::string& step_id = ""
+    );
 
     // ============================================================
     // Helpers

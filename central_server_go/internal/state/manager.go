@@ -21,6 +21,11 @@ type RobotState struct {
 	CurrentTaskID string
 	CurrentStepID string
 	LastSeen      time.Time
+
+	// Enhanced state tracking
+	CurrentStateCode string   // State code (e.g., "pick:executing")
+	SemanticTags     []string // Current semantic tags
+	CurrentGraphID   string   // Currently executing graph ID
 }
 
 // AgentConnection represents a connected agent (1:1 model: agent = robot)
@@ -92,6 +97,15 @@ type GlobalStateManager struct {
 	// Action Graph cache for fast lookup (avoids DB I/O during task execution)
 	graphCache *GraphCache
 
+	// Metadata cache for agent/capability/graph metadata (avoids N+1 queries)
+	metadataCache *MetadataCache
+
+	// State registry for enhanced state tracking and cross-agent queries
+	stateRegistry *StateRegistry
+
+	// Task log manager for execution log streaming
+	taskLogManager *TaskLogManager
+
 	// Heartbeat configuration
 	heartbeatConfig HeartbeatConfig
 
@@ -120,10 +134,28 @@ func NewGlobalStateManager() *GlobalStateManager {
 		agents:             make(map[string]*AgentConnection),
 		zoneExpiryDuration: 30 * time.Second,
 		graphCache:         NewGraphCache(),
+		metadataCache:      NewMetadataCache(30 * time.Second), // 30s TTL
+		stateRegistry:      NewStateRegistry(),
+		taskLogManager:     NewTaskLogManager(),
 		heartbeatConfig:    DefaultHeartbeatConfig(),
 		ctx:                ctx,
 		cancel:             cancel,
 	}
+}
+
+// TaskLogManager returns the task log manager for execution log streaming
+func (m *GlobalStateManager) TaskLogManager() *TaskLogManager {
+	return m.taskLogManager
+}
+
+// StateRegistry returns the state registry for enhanced state tracking
+func (m *GlobalStateManager) StateRegistry() *StateRegistry {
+	return m.stateRegistry
+}
+
+// MetadataCache returns the metadata cache for agent/capability lookups
+func (m *GlobalStateManager) MetadataCache() *MetadataCache {
+	return m.metadataCache
 }
 
 // SetHeartbeatConfig sets custom heartbeat configuration
@@ -257,15 +289,26 @@ func (m *GlobalStateManager) RegisterRobot(id, name, agentID, initialState strin
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.robots[id] = &RobotState{
-		ID:           id,
-		Name:         name,
-		AgentID:      agentID,
-		CurrentState: initialState,
-		ReportedState: initialState,
-		IsOnline:     true,
-		LastSeen:     time.Now(),
+	stateCode := initialState
+	if stateCode == "" {
+		stateCode = "idle"
 	}
+
+	robot := &RobotState{
+		ID:               id,
+		Name:             name,
+		AgentID:          agentID,
+		CurrentState:     initialState,
+		ReportedState:    initialState,
+		CurrentStateCode: stateCode,
+		SemanticTags:     []string{},
+		IsOnline:         true,
+		LastSeen:         time.Now(),
+	}
+	m.robots[id] = robot
+
+	// Also register in state registry for cross-agent queries
+	m.stateRegistry.UpdateAgentState(id, stateCode, nil, "", true, false)
 }
 
 // UnregisterRobot removes a robot from the state manager
@@ -282,6 +325,8 @@ func (m *GlobalStateManager) UnregisterRobot(id string) {
 			delete(m.zones, zoneID)
 		}
 	}
+	// Remove from state registry
+	m.stateRegistry.RemoveAgent(id)
 }
 
 // GetRobotState returns a copy of the robot state (thread-safe read)
@@ -318,6 +363,41 @@ func (m *GlobalStateManager) UpdateRobotState(agentID, newState string) error {
 	}
 	robot.LastSeen = time.Now()
 	return nil
+}
+
+// UpdateRobotEnhancedState atomically updates a robot's enhanced state (code + tags)
+// Also updates the StateRegistry for cross-agent queries
+func (m *GlobalStateManager) UpdateRobotEnhancedState(agentID, stateCode string, semanticTags []string, graphID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	robot, exists := m.robots[agentID]
+	if !exists {
+		return fmt.Errorf("robot %s not found", agentID)
+	}
+
+	robot.CurrentStateCode = stateCode
+	robot.SemanticTags = semanticTags
+	robot.CurrentGraphID = graphID
+	robot.LastSeen = time.Now()
+
+	// Update state registry for cross-agent queries
+	m.stateRegistry.UpdateAgentState(agentID, stateCode, semanticTags, graphID, robot.IsOnline, robot.IsExecuting)
+
+	return nil
+}
+
+// GetRobotEnhancedState returns the enhanced state info for a robot
+func (m *GlobalStateManager) GetRobotEnhancedState(agentID string) (stateCode string, semanticTags []string, graphID string, ok bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	robot, exists := m.robots[agentID]
+	if !exists {
+		return "", nil, "", false
+	}
+
+	return robot.CurrentStateCode, robot.SemanticTags, robot.CurrentGraphID, true
 }
 
 // SetRobotStateOverride applies a temporary coordination state for a robot.
@@ -453,6 +533,9 @@ func (m *GlobalStateManager) UpdateRobotExecution(agentID string, isExecuting bo
 	robot.CurrentTaskID = taskID
 	robot.CurrentStepID = stepID
 	robot.LastSeen = time.Now()
+
+	// Update state registry
+	m.stateRegistry.SetAgentExecuting(agentID, isExecuting)
 	return nil
 }
 
@@ -468,6 +551,9 @@ func (m *GlobalStateManager) SetRobotOnline(agentID string, isOnline bool) error
 
 	robot.IsOnline = isOnline
 	robot.LastSeen = time.Now()
+
+	// Update state registry
+	m.stateRegistry.SetAgentOnline(agentID, isOnline)
 	return nil
 }
 
@@ -1286,7 +1372,7 @@ func AreSelfOnlyConditions(conditions []StartCondition) bool {
 // This combines: precondition check + zone reservation + state update
 // In 1:1 model, agentID = agentID
 // Returns (success, error_message)
-func (m *GlobalStateManager) TryStartExecution(agentID, taskID, stepID string, requiredZones []string, preconditions []Precondition) (bool, string) {
+func (m *GlobalStateManager) TryStartExecution(agentID, taskID, stepID, graphID string, requiredZones []string, preconditions []Precondition) (bool, string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -1349,7 +1435,11 @@ func (m *GlobalStateManager) TryStartExecution(agentID, taskID, stepID string, r
 	robot.IsExecuting = true
 	robot.CurrentTaskID = taskID
 	robot.CurrentStepID = stepID
+	robot.CurrentGraphID = graphID
 	robot.LastSeen = now
+
+	// Update state registry for cross-agent queries
+	m.stateRegistry.UpdateAgentState(agentID, robot.CurrentStateCode, robot.SemanticTags, graphID, robot.IsOnline, true)
 
 	return true, ""
 }
@@ -1368,7 +1458,11 @@ func (m *GlobalStateManager) CompleteExecution(agentID string, releasedZones []s
 	robot.IsExecuting = false
 	robot.CurrentTaskID = ""
 	robot.CurrentStepID = ""
+	robot.CurrentGraphID = ""
 	robot.LastSeen = time.Now()
+
+	// Update state registry
+	m.stateRegistry.UpdateAgentState(agentID, robot.CurrentStateCode, robot.SemanticTags, "", robot.IsOnline, false)
 
 	// Release zones
 	for _, zoneID := range releasedZones {
@@ -1445,4 +1539,245 @@ func (m *GlobalStateManager) GetOnlineRobots() []string {
 		}
 	}
 	return result
+}
+
+// ResetAgentState resets an agent's state to the initial "idle" state
+// This clears execution state, cancels any running tasks, and resets all state fields
+// In 1:1 model, agentID = robotID
+func (m *GlobalStateManager) ResetAgentState(agentID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	robot, exists := m.robots[agentID]
+	if !exists {
+		return fmt.Errorf("agent %s not found", agentID)
+	}
+
+	// Reset to initial "idle" state
+	robot.CurrentState = "idle"
+	robot.ReportedState = "idle"
+	robot.CurrentStateCode = "idle"
+	robot.SemanticTags = []string{}
+	robot.CurrentGraphID = ""
+	robot.IsExecuting = false
+	robot.CurrentTaskID = ""
+	robot.CurrentStepID = ""
+	robot.LastSeen = time.Now()
+
+	// Clear any state overrides
+	delete(m.stateOverrides, agentID)
+
+	// Release any zone reservations held by this agent
+	for zoneID, res := range m.zones {
+		if res.AgentID == agentID {
+			delete(m.zones, zoneID)
+		}
+	}
+
+	// Update state registry
+	m.stateRegistry.UpdateAgentState(agentID, "idle", []string{}, "", robot.IsOnline, false)
+	m.stateRegistry.SetAgentExecuting(agentID, false)
+
+	return nil
+}
+
+// ============================================================
+// Multi-Agent Simultaneous Start Operations
+// ============================================================
+
+// MultiExecutionRequest represents a single agent's execution request in a multi-agent batch
+type MultiExecutionRequest struct {
+	AgentID       string
+	TaskID        string
+	StepID        string
+	GraphID       string
+	RequiredZones []string
+}
+
+// MultiExecutionResult contains the result of a multi-agent execution attempt
+type MultiExecutionResult struct {
+	Success       bool
+	FailedAgentID string
+	ErrorMessage  string
+}
+
+// TryStartMultiExecution attempts to start execution for multiple agents atomically
+// All agents must pass validation for any to start - atomic all-or-nothing semantics
+// Returns MultiExecutionResult with success/failure info
+func (m *GlobalStateManager) TryStartMultiExecution(
+	executions []MultiExecutionRequest,
+	preconditions []Precondition,
+) MultiExecutionResult {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Phase 1: Validate all agents exist and are not executing
+	for _, exec := range executions {
+		robot, exists := m.robots[exec.AgentID]
+		if !exists {
+			return MultiExecutionResult{
+				Success:       false,
+				FailedAgentID: exec.AgentID,
+				ErrorMessage:  fmt.Sprintf("agent %s not found", exec.AgentID),
+			}
+		}
+		if robot.IsExecuting {
+			return MultiExecutionResult{
+				Success:       false,
+				FailedAgentID: exec.AgentID,
+				ErrorMessage:  fmt.Sprintf("agent %s is already executing task %s", exec.AgentID, robot.CurrentTaskID),
+			}
+		}
+		if !robot.IsOnline {
+			return MultiExecutionResult{
+				Success:       false,
+				FailedAgentID: exec.AgentID,
+				ErrorMessage:  fmt.Sprintf("agent %s is offline", exec.AgentID),
+			}
+		}
+	}
+
+	// Phase 2: Check preconditions for all agents
+	for _, exec := range executions {
+		robot := m.robots[exec.AgentID]
+		for _, cond := range preconditions {
+			passed := true
+			switch cond.Type {
+			case "agent_state", "robot_state":
+				passed = m.evaluateStateCondition(robot, cond.Condition)
+			case "zone_free":
+				passed = m.evaluateZoneConditionForMulti(exec.AgentID, cond.Condition, executions)
+			case "agent_idle", "robot_idle":
+				passed = !robot.IsExecuting
+			case "agent_online", "robot_online":
+				passed = robot.IsOnline
+			}
+			if !passed {
+				return MultiExecutionResult{
+					Success:       false,
+					FailedAgentID: exec.AgentID,
+					ErrorMessage:  cond.Message,
+				}
+			}
+		}
+	}
+
+	// Phase 3: Check zone conflicts within the batch and with external agents
+	allRequestedZones := make(map[string]string) // zoneID -> agentID requesting it
+	for _, exec := range executions {
+		for _, zoneID := range exec.RequiredZones {
+			// Check if another agent in this batch wants the same zone
+			if existingAgent, conflict := allRequestedZones[zoneID]; conflict {
+				return MultiExecutionResult{
+					Success:       false,
+					FailedAgentID: exec.AgentID,
+					ErrorMessage:  fmt.Sprintf("zone %s is requested by both %s and %s", zoneID, existingAgent, exec.AgentID),
+				}
+			}
+			// Check if zone is already reserved by an external agent
+			if holder, exists := m.zones[zoneID]; exists {
+				if time.Now().Before(holder.ExpiresAt) && !m.isAgentInBatch(holder.AgentID, executions) {
+					return MultiExecutionResult{
+						Success:       false,
+						FailedAgentID: exec.AgentID,
+						ErrorMessage:  fmt.Sprintf("zone %s is reserved by agent %s", zoneID, holder.AgentID),
+					}
+				}
+			}
+			allRequestedZones[zoneID] = exec.AgentID
+		}
+	}
+
+	// Phase 4: All validations passed - commit changes atomically
+	now := time.Now()
+	for _, exec := range executions {
+		robot := m.robots[exec.AgentID]
+		robot.IsExecuting = true
+		robot.CurrentTaskID = exec.TaskID
+		robot.CurrentStepID = exec.StepID
+		robot.CurrentGraphID = exec.GraphID
+		robot.LastSeen = now
+
+		// Reserve zones
+		for _, zoneID := range exec.RequiredZones {
+			m.zones[zoneID] = &ZoneReservation{
+				ZoneID:     zoneID,
+				AgentID:    exec.AgentID,
+				ReservedAt: now,
+				ExpiresAt:  now.Add(m.zoneExpiryDuration),
+			}
+		}
+
+		// Update state registry
+		m.stateRegistry.UpdateAgentState(exec.AgentID, robot.CurrentStateCode, robot.SemanticTags, exec.GraphID, robot.IsOnline, true)
+	}
+
+	return MultiExecutionResult{
+		Success:       true,
+		FailedAgentID: "",
+		ErrorMessage:  "",
+	}
+}
+
+// isAgentInBatch checks if an agent is part of the multi-execution batch
+func (m *GlobalStateManager) isAgentInBatch(agentID string, executions []MultiExecutionRequest) bool {
+	for _, exec := range executions {
+		if exec.AgentID == agentID {
+			return true
+		}
+	}
+	return false
+}
+
+// evaluateZoneConditionForMulti checks zone conditions considering the multi-agent batch
+func (m *GlobalStateManager) evaluateZoneConditionForMulti(agentID, zoneID string, executions []MultiExecutionRequest) bool {
+	existing, exists := m.zones[zoneID]
+	if !exists {
+		return true // Zone is free
+	}
+
+	// Check if expired
+	if time.Now().After(existing.ExpiresAt) {
+		return true
+	}
+
+	// Zone is reserved - is it by this agent or another agent in the batch?
+	if existing.AgentID == agentID {
+		return true
+	}
+
+	// Check if holder is in the batch (will be releasing their old reservation)
+	return m.isAgentInBatch(existing.AgentID, executions)
+}
+
+// CompleteMultiExecution marks execution as complete for multiple agents
+func (m *GlobalStateManager) CompleteMultiExecution(executions []MultiExecutionRequest) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now()
+	for _, exec := range executions {
+		robot, exists := m.robots[exec.AgentID]
+		if !exists {
+			continue
+		}
+
+		robot.IsExecuting = false
+		robot.CurrentTaskID = ""
+		robot.CurrentStepID = ""
+		robot.CurrentGraphID = ""
+		robot.LastSeen = now
+
+		// Release zones
+		for _, zoneID := range exec.RequiredZones {
+			if existing, exists := m.zones[zoneID]; exists {
+				if existing.AgentID == exec.AgentID {
+					delete(m.zones, zoneID)
+				}
+			}
+		}
+
+		// Update state registry
+		m.stateRegistry.UpdateAgentState(exec.AgentID, robot.CurrentStateCode, robot.SemanticTags, "", robot.IsOnline, false)
+	}
 }

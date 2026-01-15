@@ -2,10 +2,10 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"central_server_go/internal/db"
-	"central_server_go/internal/executor"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -96,29 +96,72 @@ func (s *Server) ResumeTask(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ConfirmTask handles manual confirmation for a task
-func (s *Server) ConfirmTask(w http.ResponseWriter, r *http.Request) {
+
+// GetTaskLogs returns execution logs for a specific task
+func (s *Server) GetTaskLogs(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskID")
-
-	// Get the task from scheduler
-	task, exists := s.scheduler.GetTask(taskID)
-	if !exists {
-		writeError(w, http.StatusNotFound, "Task not found or not active")
+	if taskID == "" {
+		writeError(w, http.StatusBadRequest, "Task ID is required")
 		return
 	}
 
-	// Check if task is waiting for confirmation
-	if task.Status != executor.TaskRunning {
-		writeError(w, http.StatusBadRequest, "Task is not running")
+	// Parse limit from query params
+	limit := 100
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if parsed, err := parseInt(limitStr); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	logs := s.stateManager.TaskLogManager().GetTaskLogs(taskID, limit)
+	writeJSON(w, http.StatusOK, logs)
+}
+
+// GetAgentLogs returns execution logs for a specific agent
+func (s *Server) GetAgentLogs(w http.ResponseWriter, r *http.Request) {
+	agentID := chi.URLParam(r, "agentID")
+	if agentID == "" {
+		writeError(w, http.StatusBadRequest, "Agent ID is required")
 		return
 	}
 
-	// TODO: Implement confirmation signaling to the running task
-	// For now, this would need to integrate with the scheduler's step execution
+	// Parse limit from query params
+	limit := 100
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if parsed, err := parseInt(limitStr); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
 
-	writeJSON(w, http.StatusOK, map[string]string{
-		"message": "Confirmation received",
-	})
+	logs := s.stateManager.TaskLogManager().GetAgentLogs(agentID, limit)
+	writeJSON(w, http.StatusOK, logs)
+}
+
+// GetRecentLogs returns recent logs across all agents
+func (s *Server) GetRecentLogs(w http.ResponseWriter, r *http.Request) {
+	// Parse limit from query params
+	limit := 100
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if parsed, err := parseInt(limitStr); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	logs := s.stateManager.TaskLogManager().GetRecentLogs(limit)
+	writeJSON(w, http.StatusOK, logs)
+}
+
+// GetLogStats returns task log manager statistics
+func (s *Server) GetLogStats(w http.ResponseWriter, r *http.Request) {
+	stats := s.stateManager.TaskLogManager().GetStats()
+	writeJSON(w, http.StatusOK, stats)
+}
+
+// parseInt helper for parsing query parameters
+func parseInt(s string) (int, error) {
+	var n int
+	_, err := fmt.Sscanf(s, "%d", &n)
+	return n, err
 }
 
 // Helper function to convert db.Task to TaskResponse

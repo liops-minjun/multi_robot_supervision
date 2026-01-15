@@ -67,15 +67,42 @@ func (s *Server) CreateActionGraph(w http.ResponseWriter, r *http.Request) {
 	normalizedSteps := normalizeActionGraphSteps(req.Steps)
 	stepsJSON, _ := json.Marshal(normalizedSteps)
 
+	// Handle auto_generate_states (default: true if not specified)
+	autoGenerateStates := true
+	if req.AutoGenerateStates != nil {
+		autoGenerateStates = *req.AutoGenerateStates
+	}
+
+	// Convert states from request to DB format
+	var statesJSON []byte
+	if len(req.States) > 0 {
+		dbStates := make([]db.GraphState, len(req.States))
+		for i, s := range req.States {
+			dbStates[i] = db.GraphState{
+				Code:         s.Code,
+				Name:         s.Name,
+				Type:         s.Type,
+				StepID:       s.StepID,
+				Phase:        s.Phase,
+				Color:        s.Color,
+				Description:  s.Description,
+				SemanticTags: s.SemanticTags,
+			}
+		}
+		statesJSON, _ = json.Marshal(dbStates)
+	}
+
 	graph := &db.ActionGraph{
-		ID:            req.ID,
-		Name:          req.Name,
-		Preconditions: datatypes.JSON(preconditionsJSON),
-		Steps:         datatypes.JSON(stepsJSON),
-		Version:       1,
-		IsTemplate:    req.AgentID == "",
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
+		ID:                 req.ID,
+		Name:               req.Name,
+		Preconditions:      datatypes.JSON(preconditionsJSON),
+		Steps:              datatypes.JSON(stepsJSON),
+		States:             datatypes.JSON(statesJSON),
+		AutoGenerateStates: autoGenerateStates,
+		Version:            1,
+		IsTemplate:         req.AgentID == "",
+		CreatedAt:          time.Now(),
+		UpdatedAt:          time.Now(),
 	}
 
 	if req.Description != "" {
@@ -83,9 +110,6 @@ func (s *Server) CreateActionGraph(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.AgentID != "" {
 		graph.AgentID = sql.NullString{String: req.AgentID, Valid: true}
-	}
-	if req.EntryPoint != "" {
-		graph.EntryPoint = sql.NullString{String: req.EntryPoint, Valid: true}
 	}
 	if req.EntryPoint != "" {
 		graph.EntryPoint = sql.NullString{String: req.EntryPoint, Valid: true}
@@ -176,13 +200,34 @@ func (s *Server) UpdateActionGraph(w http.ResponseWriter, r *http.Request) {
 	if req.EntryPoint != "" {
 		graph.EntryPoint = sql.NullString{String: req.EntryPoint, Valid: true}
 	}
-	if req.EntryPoint != "" {
-		graph.EntryPoint = sql.NullString{String: req.EntryPoint, Valid: true}
-	}
 	if req.Steps != nil {
 		normalizedSteps := normalizeActionGraphSteps(req.Steps)
 		stepsJSON, _ := json.Marshal(normalizedSteps)
 		graph.Steps = datatypes.JSON(stepsJSON)
+	}
+
+	// Handle auto_generate_states
+	if req.AutoGenerateStates != nil {
+		graph.AutoGenerateStates = *req.AutoGenerateStates
+	}
+
+	// Handle states
+	if req.States != nil {
+		dbStates := make([]db.GraphState, len(req.States))
+		for i, s := range req.States {
+			dbStates[i] = db.GraphState{
+				Code:         s.Code,
+				Name:         s.Name,
+				Type:         s.Type,
+				StepID:       s.StepID,
+				Phase:        s.Phase,
+				Color:        s.Color,
+				Description:  s.Description,
+				SemanticTags: s.SemanticTags,
+			}
+		}
+		statesJSON, _ := json.Marshal(dbStates)
+		graph.States = datatypes.JSON(statesJSON)
 	}
 
 	graph.Version++
@@ -251,13 +296,16 @@ func (s *Server) ExecuteActionGraph(w http.ResponseWriter, r *http.Request) {
 	graphID := chi.URLParam(r, "graphID")
 
 	var req ActionGraphExecuteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid request body")
-		return
+	// Decode body if present (ignore error if body is empty/null)
+	json.NewDecoder(r.Body).Decode(&req)
+
+	// Also check query parameter for agent_id
+	if req.AgentID == "" {
+		req.AgentID = r.URL.Query().Get("agent_id")
 	}
 
 	if req.AgentID == "" {
-		writeError(w, http.StatusBadRequest, "agent_id is required")
+		writeError(w, http.StatusBadRequest, "agent_id is required (in body or query param)")
 		return
 	}
 
@@ -273,6 +321,90 @@ func (s *Server) ExecuteActionGraph(w http.ResponseWriter, r *http.Request) {
 		"agent_id":        req.AgentID,
 		"status":          "running",
 		"message":         "Action Graph execution started",
+	})
+}
+
+// ExecuteMultiActionGraph starts executing an action graph on multiple agents simultaneously
+func (s *Server) ExecuteMultiActionGraph(w http.ResponseWriter, r *http.Request) {
+	graphID := chi.URLParam(r, "graphID")
+
+	var req MultiAgentExecuteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if len(req.AgentIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "agent_ids is required and must not be empty")
+		return
+	}
+
+	if len(req.AgentIDs) < 2 {
+		writeError(w, http.StatusBadRequest, "Multi-agent execution requires at least 2 agents; use /execute for single agent")
+		return
+	}
+
+	// Default sync mode to barrier
+	if req.SyncMode == "" {
+		req.SyncMode = "barrier"
+	}
+
+	// Validate sync mode
+	if req.SyncMode != "barrier" && req.SyncMode != "best_effort" {
+		writeError(w, http.StatusBadRequest, "sync_mode must be 'barrier' or 'best_effort'")
+		return
+	}
+
+	// Call scheduler to start multi-agent task
+	result, err := s.scheduler.StartMultiAgentTask(
+		r.Context(),
+		graphID,
+		req.AgentIDs,
+		req.Params,
+		req.AgentParams,
+		req.SyncMode,
+	)
+
+	if err != nil {
+		// Check if it's a validation error with details
+		if result != nil && result.FailedAgentID != "" {
+			writeJSON(w, http.StatusBadRequest, MultiAgentExecuteErrorResponse{
+				Error:   "validation_failed",
+				Message: err.Error(),
+				FailedAgents: []MultiAgentFailedAgent{
+					{
+						AgentID: result.FailedAgentID,
+						Reason:  result.ErrorMessage,
+					},
+				},
+			})
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Build success response
+	tasks := make([]MultiAgentTaskInfo, 0, len(result.Tasks))
+	for _, taskInfo := range result.Tasks {
+		agentName := ""
+		if agent, _ := s.repo.GetAgent(taskInfo.AgentID); agent != nil {
+			agentName = agent.Name
+		}
+		tasks = append(tasks, MultiAgentTaskInfo{
+			AgentID:   taskInfo.AgentID,
+			AgentName: agentName,
+			TaskID:    taskInfo.TaskID,
+			Status:    taskInfo.Status,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, MultiAgentExecuteResponse{
+		ExecutionGroupID: result.ExecutionGroupID,
+		Tasks:            tasks,
+		StartedAt:        time.Now(),
+		SyncMode:         req.SyncMode,
+		Message:          "Multi-agent execution started",
 	})
 }
 
@@ -381,6 +513,13 @@ func actionGraphToListResponse(graph *db.ActionGraph, repo *db.Repository) Actio
 	json.Unmarshal(graph.Steps, &steps)
 	response.StepCount = len(steps)
 
+	// Count states
+	if graph.States != nil && len(graph.States) > 0 {
+		var states []interface{}
+		json.Unmarshal(graph.States, &states)
+		response.StateCount = len(states)
+	}
+
 	// Get deployment status
 	if graph.AgentID.Valid {
 		aag, _ := repo.GetAgentActionGraph(graph.AgentID.String, graph.ID)
@@ -394,12 +533,13 @@ func actionGraphToListResponse(graph *db.ActionGraph, repo *db.Repository) Actio
 
 func actionGraphToResponse(graph *db.ActionGraph, repo *db.Repository) ActionGraphResponse {
 	response := ActionGraphResponse{
-		ID:         graph.ID,
-		Name:       graph.Name,
-		Version:    graph.Version,
-		IsTemplate: graph.IsTemplate,
-		CreatedAt:  graph.CreatedAt,
-		UpdatedAt:  graph.UpdatedAt,
+		ID:                 graph.ID,
+		Name:               graph.Name,
+		Version:            graph.Version,
+		IsTemplate:         graph.IsTemplate,
+		AutoGenerateStates: graph.AutoGenerateStates,
+		CreatedAt:          graph.CreatedAt,
+		UpdatedAt:          graph.UpdatedAt,
 	}
 
 	if graph.Description.Valid {
@@ -422,6 +562,26 @@ func actionGraphToResponse(graph *db.ActionGraph, repo *db.Repository) ActionGra
 	}
 	if graph.Steps != nil {
 		json.Unmarshal(graph.Steps, &response.Steps)
+	}
+
+	// Parse states
+	if graph.States != nil && len(graph.States) > 0 {
+		var dbStates []db.GraphState
+		if err := json.Unmarshal(graph.States, &dbStates); err == nil {
+			response.States = make([]GraphStateResponse, len(dbStates))
+			for i, s := range dbStates {
+				response.States[i] = GraphStateResponse{
+					Code:         s.Code,
+					Name:         s.Name,
+					Type:         s.Type,
+					StepID:       s.StepID,
+					Phase:        s.Phase,
+					Color:        s.Color,
+					Description:  s.Description,
+					SemanticTags: s.SemanticTags,
+				}
+			}
+		}
 	}
 
 	// Get deployment status

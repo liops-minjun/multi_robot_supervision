@@ -109,6 +109,7 @@ func (s *Server) setupRouter() {
 			r.Put("/{graphID}", s.UpdateActionGraph)
 			r.Delete("/{graphID}", s.DeleteActionGraph)
 			r.Post("/{graphID}/execute", s.ExecuteActionGraph)
+			r.Post("/{graphID}/execute-multi", s.ExecuteMultiActionGraph) // Multi-agent simultaneous execution
 			r.Post("/{graphID}/validate", s.ValidateActionGraph)
 
 			// Canonical Graph endpoints (new graph-optimized format)
@@ -126,6 +127,8 @@ func (s *Server) setupRouter() {
 			r.Delete("/{agentID}", s.DeleteAgent)
 			r.Get("/{agentID}/capabilities", s.GetAgentCapabilities)
 			r.Get("/{agentID}/connection-status", s.GetSingleAgentConnectionStatus) // Heartbeat monitoring for single agent
+			r.Get("/{agentID}/logs", s.GetAgentLogs)                                // Execution logs for agent
+			r.Post("/{agentID}/reset-state", s.ResetAgentState)                     // Reset agent state to idle
 
 			r.Route("/{agentID}/action-graphs", func(r chi.Router) {
 				r.Get("/", s.ListAgentActionGraphs)
@@ -144,7 +147,13 @@ func (s *Server) setupRouter() {
 			r.Post("/{taskID}/cancel", s.CancelTask)
 			r.Post("/{taskID}/pause", s.PauseTask)
 			r.Post("/{taskID}/resume", s.ResumeTask)
-			r.Post("/{taskID}/confirm", s.ConfirmTask)
+			r.Get("/{taskID}/logs", s.GetTaskLogs)
+		})
+
+		// Task Logs (execution streaming logs)
+		r.Route("/logs", func(r chi.Router) {
+			r.Get("/", s.GetRecentLogs)
+			r.Get("/stats", s.GetLogStats)
 		})
 
 		// Waypoints
@@ -212,6 +221,7 @@ func (s *Server) setupRouter() {
 		r.Route("/system", func(r chi.Router) {
 			r.Get("/cache/stats", s.GetCacheStats)
 			r.Post("/cache/evict", s.EvictStaleCache)
+			r.Get("/states", s.GetSystemStates) // Get predefined system states
 		})
 	})
 

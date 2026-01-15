@@ -1,9 +1,9 @@
-import { Trash2, ChevronDown, Activity, Users } from 'lucide-react'
+import { Trash2, ChevronDown, Activity, Users, Tag, Search } from 'lucide-react'
 
 // Condition Types
 export interface Condition {
   id: string
-  type: 'self_state' | 'agent_state' | 'group'
+  type: 'self_state' | 'agent_state' | 'semantic_tag' | 'any_agent_state' | 'group'
   operator?: 'AND' | 'OR'
   // For self_state
   state?: string
@@ -12,6 +12,14 @@ export interface Condition {
   agentId?: string  // specific agent or optional scope for all/any
   agentQuantifier?: 'all' | 'any' | 'specific'
   agentState?: string
+  // For semantic_tag
+  semanticTag?: string
+  tagQuantifier?: 'any' | 'all' | 'none'  // any agent with tag, all agents with tag, no agents with tag
+  tagState?: string  // state to check for agents matching the tag
+  // For any_agent_state
+  filterOnline?: boolean
+  filterExecuting?: boolean
+  filterGraphId?: string
   // For group (compound conditions)
   children?: Condition[]
 }
@@ -21,6 +29,7 @@ export interface ConditionBuilderProps {
   onChange: (conditions: Condition[]) => void
   availableStates: string[]
   availableAgents?: Array<{ id: string; name: string }>
+  availableSemanticTags?: string[]
   compact?: boolean
 }
 
@@ -32,6 +41,7 @@ export default function ConditionBuilder({
   onChange,
   availableStates,
   availableAgents = [],
+  availableSemanticTags = [],
   compact = false,
 }: ConditionBuilderProps) {
   const addCondition = (type: Condition['type']) => {
@@ -48,6 +58,14 @@ export default function ConditionBuilder({
       newCondition.agentId = availableAgents[0]?.id || ''
       newCondition.agentQuantifier = 'all'
       newCondition.agentState = availableStates[0] || 'idle'
+    } else if (type === 'semantic_tag') {
+      newCondition.semanticTag = availableSemanticTags[0] || 'ready'
+      newCondition.tagQuantifier = 'any'
+      newCondition.tagState = availableStates[0] || 'idle'
+    } else if (type === 'any_agent_state') {
+      newCondition.agentState = availableStates[0] || 'idle'
+      newCondition.filterOnline = true
+      newCondition.filterExecuting = false
     } else if (type === 'group') {
       newCondition.children = []
     }
@@ -97,11 +115,15 @@ export default function ConditionBuilder({
             <div className={`p-1.5 rounded ${
               condition.type === 'self_state' ? 'bg-blue-500/20' :
               condition.type === 'agent_state' ? 'bg-green-500/20' :
-              'bg-purple-500/20'
+              condition.type === 'semantic_tag' ? 'bg-purple-500/20' :
+              condition.type === 'any_agent_state' ? 'bg-cyan-500/20' :
+              'bg-gray-500/20'
             }`}>
               {condition.type === 'self_state' && <Activity className="w-3.5 h-3.5 text-blue-400" />}
               {condition.type === 'agent_state' && <Users className="w-3.5 h-3.5 text-green-400" />}
-              {condition.type === 'group' && <ChevronDown className="w-3.5 h-3.5 text-purple-400" />}
+              {condition.type === 'semantic_tag' && <Tag className="w-3.5 h-3.5 text-purple-400" />}
+              {condition.type === 'any_agent_state' && <Search className="w-3.5 h-3.5 text-cyan-400" />}
+              {condition.type === 'group' && <ChevronDown className="w-3.5 h-3.5 text-gray-400" />}
             </div>
 
             {/* Condition Content */}
@@ -121,6 +143,25 @@ export default function ConditionBuilder({
                   onChange={(updates) => updateCondition(condition.id, updates)}
                   availableStates={availableStates}
                   availableAgents={availableAgents}
+                  compact={compact}
+                />
+              )}
+
+              {condition.type === 'semantic_tag' && (
+                <SemanticTagCondition
+                  condition={condition}
+                  onChange={(updates) => updateCondition(condition.id, updates)}
+                  availableStates={availableStates}
+                  availableSemanticTags={availableSemanticTags}
+                  compact={compact}
+                />
+              )}
+
+              {condition.type === 'any_agent_state' && (
+                <AnyAgentStateCondition
+                  condition={condition}
+                  onChange={(updates) => updateCondition(condition.id, updates)}
+                  availableStates={availableStates}
                   compact={compact}
                 />
               )}
@@ -166,7 +207,21 @@ export default function ConditionBuilder({
           className="flex items-center gap-1.5 px-2.5 py-1.5 bg-green-500/10 text-green-400 rounded-lg text-xs hover:bg-green-500/20 transition-colors border border-green-500/20"
         >
           <Users className="w-3 h-3" />
-          Other Agents
+          Specific Agent
+        </button>
+        <button
+          onClick={() => addCondition('semantic_tag')}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 bg-purple-500/10 text-purple-400 rounded-lg text-xs hover:bg-purple-500/20 transition-colors border border-purple-500/20"
+        >
+          <Tag className="w-3 h-3" />
+          By Tag
+        </button>
+        <button
+          onClick={() => addCondition('any_agent_state')}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 bg-cyan-500/10 text-cyan-400 rounded-lg text-xs hover:bg-cyan-500/20 transition-colors border border-cyan-500/20"
+        >
+          <Search className="w-3 h-3" />
+          Any Agent
         </button>
       </div>
     </div>
@@ -300,6 +355,125 @@ function AgentStateCondition({
   )
 }
 
+// Semantic Tag Condition - Check agents with a specific semantic tag
+function SemanticTagCondition({
+  condition,
+  onChange,
+  availableStates,
+  availableSemanticTags,
+  compact,
+}: {
+  condition: Condition
+  onChange: (updates: Partial<Condition>) => void
+  availableStates: string[]
+  availableSemanticTags: string[]
+  compact: boolean
+}) {
+  return (
+    <div className="space-y-2">
+      <div className={`flex items-center gap-2 ${compact ? 'flex-wrap' : ''}`}>
+        <select
+          value={condition.tagQuantifier || 'any'}
+          onChange={(e) => onChange({ tagQuantifier: e.target.value as 'any' | 'all' | 'none' })}
+          className="px-2 py-1 bg-[#1a1a2e] border border-[#2a2a4a] rounded text-xs text-white focus:outline-none focus:border-purple-500"
+        >
+          <option value="any">Any agent</option>
+          <option value="all">All agents</option>
+          <option value="none">No agents</option>
+        </select>
+        <span className="text-xs text-gray-400">with tag</span>
+        <div className="flex-1">
+          <input
+            type="text"
+            list={`tag-options-${condition.id}`}
+            value={condition.semanticTag || ''}
+            onChange={(e) => onChange({ semanticTag: e.target.value })}
+            placeholder="Select or enter tag"
+            className="w-full px-2 py-1 bg-[#1a1a2e] border border-purple-500/30 rounded text-xs text-purple-400 focus:outline-none focus:border-purple-500"
+          />
+          <datalist id={`tag-options-${condition.id}`}>
+            {availableSemanticTags.map(tag => (
+              <option key={tag} value={tag} />
+            ))}
+          </datalist>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-gray-400">should be in state</span>
+        <select
+          value={condition.tagState || ''}
+          onChange={(e) => onChange({ tagState: e.target.value })}
+          className="flex-1 px-2 py-1 bg-[#1a1a2e] border border-purple-500/30 rounded text-xs text-purple-400 focus:outline-none focus:border-purple-500"
+        >
+          {availableStates.map(state => (
+            <option key={state} value={state}>{state}</option>
+          ))}
+        </select>
+      </div>
+    </div>
+  )
+}
+
+// Any Agent State Condition - Check any agent matching filters
+function AnyAgentStateCondition({
+  condition,
+  onChange,
+  availableStates,
+  compact,
+}: {
+  condition: Condition
+  onChange: (updates: Partial<Condition>) => void
+  availableStates: string[]
+  compact: boolean
+}) {
+  return (
+    <div className="space-y-2">
+      <div className={`flex items-center gap-2 ${compact ? 'flex-wrap' : ''}`}>
+        <span className="text-xs text-gray-400">Any agent in state</span>
+        <select
+          value={condition.agentState || ''}
+          onChange={(e) => onChange({ agentState: e.target.value })}
+          className="flex-1 px-2 py-1 bg-[#1a1a2e] border border-cyan-500/30 rounded text-xs text-cyan-400 focus:outline-none focus:border-cyan-500"
+        >
+          {availableStates.map(state => (
+            <option key={state} value={state}>{state}</option>
+          ))}
+        </select>
+      </div>
+      <div className="flex flex-wrap gap-3 text-xs">
+        <label className="flex items-center gap-1.5 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={condition.filterOnline ?? true}
+            onChange={(e) => onChange({ filterOnline: e.target.checked })}
+            className="w-3.5 h-3.5 rounded border-gray-500 bg-[#1a1a2e] text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0"
+          />
+          <span className="text-gray-400">Online only</span>
+        </label>
+        <label className="flex items-center gap-1.5 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={condition.filterExecuting ?? false}
+            onChange={(e) => onChange({ filterExecuting: e.target.checked })}
+            className="w-3.5 h-3.5 rounded border-gray-500 bg-[#1a1a2e] text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0"
+          />
+          <span className="text-gray-400">Executing only</span>
+        </label>
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-gray-400">Graph filter:</span>
+        <input
+          type="text"
+          value={condition.filterGraphId || ''}
+          onChange={(e) => onChange({ filterGraphId: e.target.value })}
+          placeholder="(optional) graph_id"
+          className="flex-1 px-2 py-1 bg-[#1a1a2e] border border-[#2a2a4a] rounded text-xs text-gray-400 focus:outline-none focus:border-cyan-500"
+        />
+      </div>
+    </div>
+  )
+}
+
 // Helper function to convert conditions to expression string
 export function conditionsToExpression(conditions: Condition[]): string {
   if (conditions.length === 0) return ''
@@ -317,6 +491,16 @@ export function conditionsToExpression(conditions: Condition[]): string {
       } else {
         expr = `${quantifier}_agents().state == "${c.agentState}"`
       }
+    } else if (c.type === 'semantic_tag') {
+      const quantifier = c.tagQuantifier || 'any'
+      expr = `${quantifier}_with_tag("${c.semanticTag}").state == "${c.tagState}"`
+    } else if (c.type === 'any_agent_state') {
+      const filters: string[] = []
+      if (c.filterOnline) filters.push('online')
+      if (c.filterExecuting) filters.push('executing')
+      if (c.filterGraphId) filters.push(`graph="${c.filterGraphId}"`)
+      const filterStr = filters.length > 0 ? `{${filters.join(',')}}` : ''
+      expr = `any_agent${filterStr}.state == "${c.agentState}"`
     }
 
     if (i > 0 && c.operator) {
@@ -342,10 +526,14 @@ export function ConditionPreview({ conditions }: { conditions: Condition[] }) {
           <span className={`px-1.5 py-0.5 rounded text-[9px] ${
             c.type === 'self_state' ? 'bg-blue-500/20 text-blue-400' :
             c.type === 'agent_state' ? 'bg-green-500/20 text-green-400' :
-            'bg-purple-500/20 text-purple-400'
+            c.type === 'semantic_tag' ? 'bg-purple-500/20 text-purple-400' :
+            c.type === 'any_agent_state' ? 'bg-cyan-500/20 text-cyan-400' :
+            'bg-gray-500/20 text-gray-400'
           }`}>
             {c.type === 'self_state' && `state ${c.stateOperator} ${c.state}`}
             {c.type === 'agent_state' && `${c.agentQuantifier} ${c.agentId || 'agents'} = ${c.agentState}`}
+            {c.type === 'semantic_tag' && `#${c.semanticTag}: ${c.tagQuantifier} = ${c.tagState}`}
+            {c.type === 'any_agent_state' && `any${c.filterOnline ? '(online)' : ''} = ${c.agentState}`}
           </span>
         </span>
       ))}

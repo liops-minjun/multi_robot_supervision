@@ -12,6 +12,7 @@
 #include "fleet_agent/transport/quic_outbound_sender.hpp"
 #include "fleet_agent/state/state_definition.hpp"
 #include "fleet_agent/state/state_tracker.hpp"
+#include "fleet_agent/state/graph_state.hpp"
 #include "fleet_agent/protocol/message_handler.hpp"
 
 #include "fleet/v1/service.pb.h"
@@ -475,8 +476,15 @@ bool Agent::init_components() {
         state_tracker_mgr_.get());
 
     // Add robots to command processor
-    for (const auto& robot : config_.robots) {
-        command_processor_->add_robot(robot.id, robot.ros_namespace);
+    // In 1:1 model, agent is the robot - use agent_id as robot_id
+    if (config_.robots.empty()) {
+        // 1:1 model: agent_id is the robot_id
+        command_processor_->add_robot(config_.agent_id, "");
+        log.info("1:1 model: registered agent {} as robot", config_.agent_id);
+    } else {
+        for (const auto& robot : config_.robots) {
+            command_processor_->add_robot(robot.id, robot.ros_namespace);
+        }
     }
 
     log.info("Components initialized");
@@ -518,6 +526,8 @@ void Agent::start_heartbeat_thread() {
             // Get execution state for this agent (1:1 model: agent_id = robot_id)
             bool is_executing = false;
             std::string current_action;
+            std::string current_task_id;
+            std::string current_step_id;
 
             if (execution_contexts_) {
                 ExecutionContextMap::const_accessor acc;
@@ -526,6 +536,8 @@ void Agent::start_heartbeat_thread() {
                     is_executing = (exec_state == RobotExecutionState::EXECUTING_ACTION ||
                                     exec_state == RobotExecutionState::WAITING_RESULT);
                     current_action = acc->second.current_action_type;
+                    current_task_id = acc->second.current_task_id;
+                    current_step_id = acc->second.current_step_id;
                 }
             }
 
@@ -545,6 +557,12 @@ void Agent::start_heartbeat_thread() {
             heartbeat->set_is_executing(is_executing);
             if (!current_action.empty()) {
                 heartbeat->set_current_action(current_action);
+            }
+            if (!current_task_id.empty()) {
+                heartbeat->set_current_task_id(current_task_id);
+            }
+            if (!current_step_id.empty()) {
+                heartbeat->set_current_step_id(current_step_id);
             }
 
             OutboundMessage out;
@@ -883,6 +901,10 @@ bool Agent::init_state_management() {
                   config_.agent_id);
     }
 
+    // Create fleet state cache for cross-agent coordination
+    fleet_state_cache_ = std::make_unique<state::FleetStateCache>();
+    log.debug("Fleet state cache initialized for cross-agent coordination");
+
     log.info("State management initialized");
     return true;
 }
@@ -895,6 +917,7 @@ bool Agent::init_protocol() {
     deps.quic_client = quic_client_.get();
     deps.state_storage = state_storage_.get();
     deps.state_tracker_mgr = state_tracker_mgr_.get();
+    deps.fleet_state_cache = fleet_state_cache_.get();
     deps.graph_storage = graph_storage_.get();
     deps.command_processor = command_processor_.get();
     deps.command_queue = command_queue_.get();

@@ -37,6 +37,26 @@ message AgentMessage {
     AgentHeartbeat heartbeat = 10;
     ActionResult action_result = 11;
     AgentStatusUpdate status_update = 12;
+    AgentStateUpdate state_update = 13; // Enhanced state update
+    TaskLog task_log = 14;              // Task execution logs
+  }
+}
+
+// Enhanced state update message for cross-agent state tracking
+message AgentStateUpdate {
+  string agent_id = 1;
+  string state_code = 2;           // Current state code (e.g., "pick:executing")
+  repeated string semantic_tags = 3; // Current semantic tags
+  string current_graph_id = 4;     // Currently executing action graph ID
+  string current_step_id = 5;      // Current step being executed
+  StatePhase phase = 6;            // Current phase
+
+  enum StatePhase {
+    PHASE_UNKNOWN = 0;
+    PHASE_IDLE = 1;
+    PHASE_EXECUTING = 2;
+    PHASE_SUCCESS = 3;
+    PHASE_FAILED = 4;
   }
 }
 
@@ -45,7 +65,15 @@ message AgentHeartbeat {
   string state = 2;
   bool is_executing = 3;
   string current_action = 4;
-  reserved 5, 6;
+  uint32 network_latency_ms = 5;
+  uint32 network_latency_us = 6;
+
+  // Enhanced state information
+  string state_code = 7;           // Current state code (e.g., "pick:executing")
+  repeated string semantic_tags = 8; // Current semantic tags
+  string current_graph_id = 9;     // Currently executing action graph ID
+  string current_task_id = 10;
+  string current_step_id = 11;
 }
 
 message AgentStatusUpdate {
@@ -75,7 +103,49 @@ message ServerMessage {
     CancelCommand cancel = 11;
     ServerAck ack = 12;
     ConfigUpdate config_update = 13;
+    FleetStateUpdate fleet_state_update = 14; // Broadcast fleet state changes
+    DeployGraphCommand deploy_graph = 15;     // Deploy action graph with states
   }
+}
+
+// Fleet state update broadcast to agents for cross-agent precondition evaluation
+message FleetStateUpdate {
+  int64 timestamp_ms = 1;
+  repeated AgentStateEntry agents = 2;
+}
+
+message AgentStateEntry {
+  string agent_id = 1;
+  string state_code = 2;
+  repeated string semantic_tags = 3;
+  string current_graph_id = 4;
+  bool is_online = 5;
+  bool is_executing = 6;
+  float staleness_sec = 7;           // Staleness in seconds since last update
+  string state = 8;                  // Current state name (e.g., "idle", "executing")
+}
+
+// Deploy action graph command with states
+message DeployGraphCommand {
+  string command_id = 1;
+  string agent_id = 2;
+  string action_graph_id = 3;
+  int32 version = 4;
+  bytes graph_json = 5;            // Complete canonical graph JSON
+  repeated GraphState states = 6;   // Graph states for state management
+  string checksum = 7;
+}
+
+// Graph state definition
+message GraphState {
+  string code = 1;                 // State code (e.g., "pick:executing")
+  string name = 2;                 // Human-readable name
+  string type = 3;                 // "system" or "graph"
+  string step_id = 4;              // Associated step ID (for graph states)
+  string phase = 5;                // Phase: "idle", "executing", "success", "failed"
+  string color = 6;                // UI color
+  string description = 7;          // Description
+  repeated string semantic_tags = 8; // Semantic tags for cross-agent queries
 }
 
 message ExecuteCommand {
@@ -213,6 +283,11 @@ message AgentStateSnapshot {
   optional string current_task_id = 11;
   optional string current_step_id = 12;
   string namespace = 13;
+
+  // Enhanced state information
+  string state_code = 14;            // Current state code (e.g., "pick:executing")
+  repeated string semantic_tags = 15; // Current semantic tags
+  string current_graph_id = 16;      // Currently executing action graph ID
 }
 
 message ZoneReservation {
@@ -230,4 +305,71 @@ message Ack {
   bool success = 1;
   string message_id = 2;
   string error = 3;
+}
+
+// ============================================================
+// Enhanced Preconditions for Cross-Agent State Checking
+// ============================================================
+
+message EnhancedPrecondition {
+  PreconditionType type = 1;
+  string target_agent_id = 2;      // For agent_state type
+  string expected_state = 3;       // Expected state code
+  PreconditionFilter filter = 4;   // For semantic_tag and any_agent_state types
+  PreconditionOperator operator = 5;
+
+  enum PreconditionType {
+    PRECONDITION_UNKNOWN = 0;
+    SELF_STATE = 1;         // Check own agent's state
+    AGENT_STATE = 2;        // Check specific agent's state
+    SEMANTIC_TAG = 3;       // Check agents with semantic tag
+    ANY_AGENT_STATE = 4;    // Check any agent matching filter
+  }
+
+  enum PreconditionOperator {
+    OP_EQUALS = 0;
+    OP_NOT_EQUALS = 1;
+    OP_IN = 2;
+    OP_NOT_IN = 3;
+    OP_HAS_TAG = 4;
+    OP_NOT_HAS_TAG = 5;
+  }
+}
+
+message PreconditionFilter {
+  string graph_id = 1;             // Filter by action graph ID
+  string capability = 2;           // Filter by capability
+  repeated string tags = 3;        // Filter by semantic tags
+  bool online_only = 4;            // Only check online agents
+  bool executing_only = 5;         // Only check executing agents
+  bool include_self = 6;           // Include self in query
+}
+
+message PreconditionResult {
+  bool satisfied = 1;
+  string reason = 2;               // Reason if not satisfied
+  repeated string matched_agents = 3; // Agents that matched the filter
+}
+
+// ============================================================
+// Task Execution Logs
+// ============================================================
+
+enum TaskLogLevel {
+  TASK_LOG_DEBUG = 0;
+  TASK_LOG_INFO = 1;
+  TASK_LOG_WARN = 2;
+  TASK_LOG_ERROR = 3;
+}
+
+message TaskLog {
+  string agent_id = 1;
+  string task_id = 2;
+  string step_id = 3;
+  string command_id = 4;
+  TaskLogLevel level = 5;
+  string message = 6;
+  int64 timestamp_ms = 7;
+  string component = 8;            // e.g., "CommandProcessor", "ActionExecutor"
+  map<string, string> metadata = 9; // Additional context
 }

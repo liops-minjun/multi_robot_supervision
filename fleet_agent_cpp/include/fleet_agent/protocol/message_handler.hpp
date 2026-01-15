@@ -6,6 +6,7 @@
 #include "fleet_agent/core/types.hpp"
 #include "fleet_agent/state/state_definition.hpp"
 #include "fleet_agent/state/state_tracker.hpp"
+#include "fleet_agent/state/graph_state.hpp"
 #include "fleet_agent/graph/storage.hpp"
 
 #include <functional>
@@ -22,6 +23,7 @@ class CancelCommand;
 class ConfigUpdate;
 class PingRequest;
 class DeployGraphRequest;
+class FleetStateBroadcast;
 }
 }
 
@@ -49,6 +51,7 @@ public:
         transport::QUICClient* quic_client{nullptr};
         state::StateDefinitionStorage* state_storage{nullptr};
         state::StateTrackerManager* state_tracker_mgr{nullptr};
+        state::FleetStateCache* fleet_state_cache{nullptr};
         graph::GraphStorage* graph_storage{nullptr};
         executor::CommandProcessor* command_processor{nullptr};
         CommandQueue* command_queue{nullptr};
@@ -120,6 +123,13 @@ public:
      * Stores action graph and sends confirmation.
      */
     HandleResult handle_deploy_graph(const fleet::v1::DeployGraphRequest& deploy);
+
+    /**
+     * Handle FleetStateBroadcast message.
+     *
+     * Updates local fleet state cache for cross-agent coordination.
+     */
+    HandleResult handle_fleet_state(const fleet::v1::FleetStateBroadcast& fleet_state);
 
     // ============================================================
     // Response Builders

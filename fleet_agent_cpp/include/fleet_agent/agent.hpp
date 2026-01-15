@@ -25,7 +25,7 @@ namespace capability { class CapabilityScanner; }
 namespace executor { class CommandProcessor; }
 namespace graph { class GraphStorage; }
 namespace transport { class QUICClient; class TlsCredentials; class QUICOutboundSender; }
-namespace state { class StateDefinitionStorage; class StateTrackerManager; }
+namespace state { class StateDefinitionStorage; class StateTrackerManager; class FleetStateCache; }
 namespace protocol { class MessageHandler; class CapabilityRegistrar; }
 
 /**
@@ -162,6 +162,7 @@ private:
     // State Management (NEW)
     std::unique_ptr<state::StateDefinitionStorage> state_storage_;
     std::unique_ptr<state::StateTrackerManager> state_tracker_mgr_;
+    std::unique_ptr<state::FleetStateCache> fleet_state_cache_;
 
     // Protocol Handling (NEW)
     std::unique_ptr<protocol::MessageHandler> message_handler_;

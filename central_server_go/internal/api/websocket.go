@@ -238,12 +238,29 @@ func (s *Server) buildFleetStateJSON() []byte {
 	// Pre-allocate with expected capacity
 	robots := make([]RobotStateWS, 0, len(snapshot.Robots))
 	for _, robot := range snapshot.Robots {
+		// Determine execution phase
+		executionPhase := "idle"
+		if !robot.IsOnline {
+			executionPhase = "offline"
+		} else if robot.IsExecuting {
+			if robot.CurrentStepID == "" {
+				executionPhase = "starting"
+			} else {
+				executionPhase = "executing"
+			}
+		}
+
 		r := RobotStateWS{
-			ID:           robot.ID,
-			Name:         robot.Name,
-			State:        robot.CurrentState,
-			IsOnline:     robot.IsOnline,
-			StalenessSec: now.Sub(robot.LastSeen).Seconds(),
+			ID:             robot.ID,
+			Name:           robot.Name,
+			State:          robot.CurrentState,
+			StateCode:      robot.CurrentStateCode,
+			CurrentGraphID: robot.CurrentGraphID,
+			ExecutionPhase: executionPhase,
+			SemanticTags:   robot.SemanticTags,
+			IsOnline:       robot.IsOnline,
+			IsExecuting:    robot.IsExecuting,
+			StalenessSec:   now.Sub(robot.LastSeen).Seconds(),
 		}
 		if robot.IsExecuting && robot.CurrentTaskID != "" {
 			r.CurrentTask = &TaskInfoWS{
@@ -307,12 +324,17 @@ type FleetStateWS struct {
 }
 
 type RobotStateWS struct {
-	ID           string       `json:"id"`
-	Name         string       `json:"name"`
-	State        string       `json:"state"`
-	IsOnline     bool         `json:"is_online"`
-	StalenessSec float64      `json:"staleness_sec"`
-	CurrentTask  *TaskInfoWS  `json:"current_task,omitempty"`
+	ID             string       `json:"id"`
+	Name           string       `json:"name"`
+	State          string       `json:"state"`
+	StateCode      string       `json:"state_code,omitempty"`       // Enhanced state code (e.g., "pick:executing")
+	CurrentGraphID string       `json:"current_graph_id,omitempty"` // Currently executing graph ID
+	ExecutionPhase string       `json:"execution_phase"`            // Explicit phase: idle, starting, executing, completing
+	SemanticTags   []string     `json:"semantic_tags,omitempty"`    // State semantic tags
+	IsOnline       bool         `json:"is_online"`
+	IsExecuting    bool         `json:"is_executing"`               // Explicit execution flag
+	StalenessSec   float64      `json:"staleness_sec"`
+	CurrentTask    *TaskInfoWS  `json:"current_task,omitempty"`
 }
 
 type TaskInfoWS struct {

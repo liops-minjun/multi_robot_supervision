@@ -66,6 +66,8 @@ public:
         // This is populated from server state updates
         std::unordered_map<std::string, int> other_robot_states;
         std::unordered_map<std::string, bool> other_robot_executing;
+        std::unordered_map<std::string, float> other_robot_staleness;  // staleness in seconds
+        std::unordered_map<std::string, bool> other_robot_online;
     };
 
     struct StartConditionSpec {

@@ -241,6 +241,7 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 		agentID,
 		taskID,
 		entryStepID,
+		actionGraphID,
 		requiredZones,
 		preconditions,
 	)
@@ -329,14 +330,18 @@ func (s *Scheduler) runTask(ctx context.Context, task *RunningTask) {
 
 		if nextStep == "" {
 			// Task completed or failed
+			log.Printf("[DEBUG] handleStepResult returned empty string, task status=%s", task.Status)
 			return
 		}
 
+		log.Printf("[DEBUG] Next step: %s, looking up in StepIndex (len=%d)", nextStep, len(task.StepIndex))
+
 		// Find next step using O(1) index lookup
 		if idx, found := task.StepIndex[nextStep]; found {
+			log.Printf("[DEBUG] Found step index: %d, advancing to step %s", idx, task.Steps[idx].ID)
 			task.CurrentStep = idx
 		} else {
-			log.Printf("Next step %s not found in task %s", nextStep, task.ID)
+			log.Printf("Next step %s not found in task %s (available: %v)", nextStep, task.ID, task.StepIndex)
 			task.Status = TaskFailed
 			return
 		}
@@ -508,23 +513,39 @@ func (s *Scheduler) executeAction(ctx context.Context, task *RunningTask, step *
 
 	cmdDuringStates := s.selectSelfDuringState(task.AgentID, step.DuringStateTargets, step.DuringStates)
 
-	cmd := &fleetgrpc.ExecuteCommand{
-		CommandID:    commandID,
-		AgentID:      task.AgentID,
-		TaskID:       task.ID,
-		StepID:       step.ID,
-		ActionType:   action.Type,
-		ActionServer: action.Server,
-		Params:       params,
-		TimeoutSec:   float32(timeout),
-		DeadlineMs:   time.Now().Add(time.Duration(timeout) * time.Second).UnixMilli(),
+	// Marshal params to JSON for QUIC handler
+	paramsJSON, err := json.Marshal(params)
+	if err != nil {
+		return &StepResult{
+			StepID: step.ID,
+			Status: fleetgrpc.ActionStatusFailed,
+			Error:  fmt.Sprintf("failed to marshal params: %v", err),
+		}
+	}
+
+	cmdReq := &fleetgrpc.ExecuteCommandReq{
+		CommandID:     commandID,
+		AgentID:       task.AgentID,
+		TaskID:        task.ID,
+		StepID:        step.ID,
+		ActionType:    action.Type,
+		ActionServer:  action.Server,
+		Params:        paramsJSON,
+		TimeoutSec:    float32(timeout),
+		DeadlineMs:    time.Now().Add(time.Duration(timeout) * time.Second).UnixMilli(),
 		DuringStates:  cmdDuringStates,
 		SuccessStates: step.SuccessStates,
 		FailureStates: step.FailureStates,
 	}
 
-	// Send command and wait for result
-	result, err := s.handler.SendCommandAndWait(ctx, cmd)
+	// Calculate timeout duration
+	timeoutDuration := time.Duration(timeout) * time.Second
+	if timeoutDuration == 0 {
+		timeoutDuration = 30 * time.Second
+	}
+
+	// Send command via QUIC and wait for result
+	result, err := s.quicHandler.SendCommandAndWait(ctx, task.AgentID, cmdReq, timeoutDuration)
 	if err != nil {
 		return &StepResult{
 			StepID: step.ID,
@@ -543,44 +564,21 @@ func (s *Scheduler) executeAction(ctx context.Context, task *RunningTask, step *
 
 // executeWaitFor executes a wait_for step
 func (s *Scheduler) executeWaitFor(ctx context.Context, task *RunningTask, step *db.ActionGraphStep) *StepResult {
-	waitFor := step.WaitFor
-
-	switch waitFor.Type {
-	case "manual_confirm":
-		// For now, auto-confirm after a short delay
-		// In production, this would wait for user input via websocket
-		log.Printf("Waiting for manual confirmation: %s", waitFor.Message)
-
-		timeout := waitFor.TimeoutSec
-		if timeout == 0 {
-			timeout = 300 // 5 minutes default
-		}
-
-		select {
-		case <-time.After(time.Duration(timeout) * time.Second):
-			return &StepResult{
-				StepID: step.ID,
-				Status: fleetgrpc.ActionStatusTimeout,
-				Error:  "manual confirmation timeout",
-			}
-		case <-ctx.Done():
-			return &StepResult{
-				StepID: step.ID,
-				Status: fleetgrpc.ActionStatusCancelled,
-			}
-		}
-
-	default:
-		return &StepResult{
-			StepID: step.ID,
-			Status: fleetgrpc.ActionStatusSucceeded,
-		}
+	// Currently no wait_for types implemented
+	// Can be extended for future wait types (e.g., wait_for_state, wait_for_event)
+	return &StepResult{
+		StepID: step.ID,
+		Status: fleetgrpc.ActionStatusSucceeded,
 	}
 }
 
 // handleStepResult processes step result and determines next step
 func (s *Scheduler) handleStepResult(task *RunningTask, step *db.ActionGraphStep, result *StepResult) string {
+	log.Printf("[DEBUG] handleStepResult: task=%s step=%s stepType=%s result.Status=%v",
+		task.ID, step.ID, step.Type, result.Status)
+
 	if step.Type == "terminal" {
+		log.Printf("[DEBUG] Step is terminal: terminalType=%s", step.TerminalType)
 		if step.TerminalType == "success" {
 			task.Status = TaskCompleted
 		} else {
@@ -591,6 +589,7 @@ func (s *Scheduler) handleStepResult(task *RunningTask, step *db.ActionGraphStep
 
 	transition := step.Transition
 	if transition == nil {
+		log.Printf("[DEBUG] No transition defined for step %s", step.ID)
 		// No transition defined - move to next step
 		if task.CurrentStep+1 < len(task.Steps) {
 			return task.Steps[task.CurrentStep+1].ID
@@ -599,17 +598,24 @@ func (s *Scheduler) handleStepResult(task *RunningTask, step *db.ActionGraphStep
 		return ""
 	}
 
+	log.Printf("[DEBUG] Transition: OnSuccess=%v OnFailure=%v OnOutcomes=%d",
+		transition.OnSuccess, transition.OnFailure, len(transition.OnOutcomes))
+
 	if len(transition.OnOutcomes) > 0 {
 		outcome := actionStatusToOutcome(result.Status)
 		vars := buildOutcomeVariables(result, outcome)
 		if next := s.resolveOutcomeTransition(transition.OnOutcomes, outcome, vars); next != "" {
+			log.Printf("[DEBUG] OnOutcomes resolved to: %s", next)
 			return next
 		}
+		log.Printf("[DEBUG] OnOutcomes did not match, falling through to status switch")
 	}
 
 	switch result.Status {
 	case fleetgrpc.ActionStatusSucceeded:
-		return s.resolveTransition(transition.OnSuccess)
+		nextStep := s.resolveTransition(transition.OnSuccess)
+		log.Printf("[DEBUG] Succeeded: resolveTransition returned '%s'", nextStep)
+		return nextStep
 
 	case fleetgrpc.ActionStatusFailed:
 		// Handle retry logic
@@ -1062,10 +1068,10 @@ func (s *Scheduler) CancelTask(taskID, reason string) error {
 	// Cancel context
 	task.CancelFunc()
 
-	// Send cancel to robot
+	// Send cancel to robot via QUIC
 	step := task.Steps[task.CurrentStep]
 	if step.Action != nil {
-		s.handler.CancelCommand(context.Background(), "", task.AgentID, taskID, reason)
+		s.quicHandler.SendCancelCommand(task.AgentID, "", task.AgentID, taskID, reason)
 	}
 
 	return nil
@@ -1357,4 +1363,241 @@ func (s *Scheduler) canonicalToPreconditions(g *graph.CanonicalGraph) []state.Pr
 	// Preconditions are per-step in canonical format
 	// This returns empty - preconditions would come from the entry vertex
 	return nil
+}
+
+// ============================================================
+// Multi-Agent Simultaneous Execution
+// ============================================================
+
+// ExecutionGroup represents a coordinated multi-agent execution
+type ExecutionGroup struct {
+	ID        string
+	GraphID   string
+	Tasks     map[string]*RunningTask // agentID -> task
+	SyncMode  string                  // "barrier" or "best_effort"
+	StartedAt time.Time
+	Status    string // pending, running, completed, failed, partial
+}
+
+// MultiAgentTaskResult contains the result of starting multi-agent execution
+type MultiAgentTaskResult struct {
+	ExecutionGroupID string
+	Tasks            []MultiAgentTaskInfo
+	Success          bool
+	FailedAgentID    string
+	ErrorMessage     string
+}
+
+// MultiAgentTaskInfo contains info about a single task in the execution group
+type MultiAgentTaskInfo struct {
+	AgentID string
+	TaskID  string
+	Status  string
+}
+
+// StartMultiAgentTask starts synchronized execution for multiple agents
+// All agents must pass validation before any start (atomic all-or-nothing)
+// In barrier mode, all agents start execution at the same time
+func (s *Scheduler) StartMultiAgentTask(
+	ctx context.Context,
+	actionGraphID string,
+	agentIDs []string,
+	commonParams map[string]interface{},
+	agentParams map[string]map[string]interface{},
+	syncMode string,
+) (*MultiAgentTaskResult, error) {
+	if len(agentIDs) == 0 {
+		return nil, fmt.Errorf("at least one agent_id is required")
+	}
+
+	if syncMode == "" {
+		syncMode = "barrier"
+	}
+
+	// Generate execution group ID
+	executionGroupID := uuid.New().String()
+
+	// Load and validate graph (same for all agents)
+	var steps []db.ActionGraphStep
+	var preconditions []state.Precondition
+	var graphVersion int
+	var entryPoint string
+
+	// Try cache first with first agent ID
+	cached, cacheHit := s.stateManager.GraphCache().Get(agentIDs[0], actionGraphID)
+	if cacheHit {
+		graphVersion = cached.Version
+		steps = s.canonicalToDBSteps(cached.Graph)
+		preconditions = s.canonicalToPreconditions(cached.Graph)
+		entryPoint = cached.Graph.EntryPoint
+	} else {
+		dbGraph, err := s.repo.GetActionGraph(actionGraphID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get action graph: %w", err)
+		}
+		if dbGraph == nil {
+			return nil, fmt.Errorf("action graph %s not found", actionGraphID)
+		}
+
+		graphVersion = dbGraph.Version
+		if dbGraph.EntryPoint.Valid {
+			entryPoint = dbGraph.EntryPoint.String
+		}
+
+		if err := json.Unmarshal(dbGraph.Steps, &steps); err != nil {
+			return nil, fmt.Errorf("failed to parse steps: %w", err)
+		}
+
+		if dbGraph.Preconditions != nil {
+			var dbPrecons []db.Precondition
+			if err := json.Unmarshal(dbGraph.Preconditions, &dbPrecons); err != nil {
+				return nil, fmt.Errorf("failed to parse preconditions: %w", err)
+			}
+			for _, p := range dbPrecons {
+				preconditions = append(preconditions, state.Precondition{
+					Type:      p.Type,
+					Condition: p.Condition,
+					Message:   p.Message,
+				})
+			}
+		}
+
+		// Convert to canonical and cache
+		canonicalGraph, err := graph.FromDBModel(dbGraph)
+		if err == nil {
+			for _, agentID := range agentIDs {
+				s.stateManager.GraphCache().Set(agentID, actionGraphID, canonicalGraph)
+			}
+			if entryPoint == "" && canonicalGraph.EntryPoint != "" {
+				entryPoint = canonicalGraph.EntryPoint
+			}
+		}
+	}
+
+	if len(steps) == 0 {
+		return nil, fmt.Errorf("action graph has no steps")
+	}
+
+	// Build step index
+	stepIndex := make(map[string]int, len(steps))
+	for i, step := range steps {
+		stepIndex[step.ID] = i
+	}
+
+	entryIndex := 0
+	entryStepID := steps[0].ID
+	if entryPoint != "" {
+		if idx, found := stepIndex[entryPoint]; found {
+			entryIndex = idx
+			entryStepID = steps[idx].ID
+		}
+	}
+
+	// Prepare execution requests for all agents
+	executions := make([]state.MultiExecutionRequest, len(agentIDs))
+	taskIDs := make([]string, len(agentIDs))
+	for i, agentID := range agentIDs {
+		taskID := uuid.New().String()
+		taskIDs[i] = taskID
+		requiredZones := s.extractRequiredZones(steps[entryIndex])
+		executions[i] = state.MultiExecutionRequest{
+			AgentID:       agentID,
+			TaskID:        taskID,
+			StepID:        entryStepID,
+			GraphID:       actionGraphID,
+			RequiredZones: requiredZones,
+		}
+	}
+
+	// Atomic: Validate all agents and reserve resources
+	result := s.stateManager.TryStartMultiExecution(executions, preconditions)
+	if !result.Success {
+		return &MultiAgentTaskResult{
+			Success:       false,
+			FailedAgentID: result.FailedAgentID,
+			ErrorMessage:  result.ErrorMessage,
+		}, nil
+	}
+
+	// All validations passed - create tasks and start execution
+	tasks := make(map[string]*RunningTask)
+	taskInfos := make([]MultiAgentTaskInfo, len(agentIDs))
+	var startBarrier sync.WaitGroup
+
+	if syncMode == "barrier" {
+		startBarrier.Add(len(agentIDs))
+	}
+
+	for i, agentID := range agentIDs {
+		taskID := taskIDs[i]
+
+		// Save to database
+		dbTask := &db.Task{
+			ID:               taskID,
+			ActionGraphID:    sql.NullString{String: actionGraphID, Valid: true},
+			AgentID:          sql.NullString{String: agentID, Valid: true},
+			Status:           string(TaskRunning),
+			CurrentStepID:    sql.NullString{String: entryStepID, Valid: true},
+			CurrentStepIndex: entryIndex,
+			StartedAt:        sql.NullTime{Time: time.Now(), Valid: true},
+		}
+		if err := s.repo.CreateTask(dbTask); err != nil {
+			log.Printf("Failed to save task to database: %v", err)
+		}
+
+		// Create task context
+		taskCtx, taskCancel := context.WithCancel(s.ctx)
+
+		// Create running task
+		task := &RunningTask{
+			ID:            taskID,
+			ActionGraphID: actionGraphID,
+			AgentID:       agentID,
+			Steps:         steps,
+			StepIndex:     stepIndex,
+			CurrentStep:   entryIndex,
+			Status:        TaskRunning,
+			RetryCount:    make(map[string]int),
+			ReservedZones: executions[i].RequiredZones,
+			StartedAt:     time.Now(),
+			ResultChan:    make(chan *StepResult, 1),
+			CancelFunc:    taskCancel,
+		}
+
+		tasks[agentID] = task
+		taskInfos[i] = MultiAgentTaskInfo{
+			AgentID: agentID,
+			TaskID:  taskID,
+			Status:  "running",
+		}
+
+		// Store task
+		s.tasksMu.Lock()
+		s.tasks[taskID] = task
+		s.tasksMu.Unlock()
+
+		// Start execution with optional barrier synchronization
+		go s.runMultiAgentTask(taskCtx, task, syncMode, &startBarrier)
+	}
+
+	log.Printf("Multi-agent task started: group=%s graph=%s agents=%v (version=%d)",
+		executionGroupID, actionGraphID, agentIDs, graphVersion)
+
+	return &MultiAgentTaskResult{
+		ExecutionGroupID: executionGroupID,
+		Tasks:            taskInfos,
+		Success:          true,
+	}, nil
+}
+
+// runMultiAgentTask executes a task with optional barrier synchronization
+func (s *Scheduler) runMultiAgentTask(ctx context.Context, task *RunningTask, syncMode string, barrier *sync.WaitGroup) {
+	// If barrier mode, wait for all agents to be ready
+	if syncMode == "barrier" {
+		barrier.Done()  // Signal this agent is ready
+		barrier.Wait()  // Wait for all agents to be ready
+	}
+
+	// Run the task (reuse existing runTask logic)
+	s.runTask(ctx, task)
 }

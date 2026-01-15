@@ -125,6 +125,33 @@ export interface StateDefinition {
   updated_at: string
 }
 
+// ============================================
+// Graph State Types (Auto-generated and custom states)
+// ============================================
+
+export type StateType = 'system' | 'graph' | 'custom'
+export type StatePhase = 'idle' | 'executing' | 'success' | 'failed'
+
+// Graph state definition (auto-generated or custom)
+export interface GraphState {
+  code: string               // State code (e.g., "pick:executing")
+  name: string               // Human-readable name
+  type: StateType            // system, graph, or custom
+  step_id?: string           // Associated step ID (for graph states)
+  phase?: StatePhase         // Phase: idle, executing, success, failed
+  color?: string             // UI color
+  description?: string       // Description
+  semantic_tags?: string[]   // Semantic tags for cross-agent queries
+}
+
+// System states (predefined)
+export const SystemStates: GraphState[] = [
+  { code: 'idle', name: 'Idle', type: 'system', phase: 'idle', color: '#6B7280', description: 'Agent is idle and ready', semantic_tags: ['ready', 'available'] },
+  { code: 'executing', name: 'Executing', type: 'system', phase: 'executing', color: '#3B82F6', description: 'Agent is executing an action', semantic_tags: ['busy', 'working'] },
+  { code: 'error', name: 'Error', type: 'system', phase: 'failed', color: '#EF4444', description: 'Agent encountered an error', semantic_tags: ['error', 'fault'] },
+  { code: 'offline', name: 'Offline', type: 'system', phase: 'idle', color: '#9CA3AF', description: 'Agent is offline', semantic_tags: ['unavailable'] },
+]
+
 // ActionGraph Types
 export interface GraphStep {
   id: string
@@ -211,6 +238,8 @@ export interface ActionGraph {
   entry_point?: string | null
   preconditions: Precondition[] | null
   steps: GraphStep[]
+  states?: GraphState[]         // Auto-generated and custom states
+  auto_generate_states?: boolean // Whether to auto-generate states from steps
   version: number
   is_template: boolean          // true if agent_id is null
   deployment_status: string | null  // From AgentActionGraph if exists
@@ -226,6 +255,7 @@ export interface GraphListItem {
   agent_name: string | null
   entry_point?: string | null
   step_count: number
+  state_count?: number          // Number of states in the graph
   version: number
   is_template: boolean
   deployment_status: string | null
@@ -241,6 +271,8 @@ export interface GraphCreateRequest {
   entry_point?: string
   preconditions?: Precondition[]
   steps: GraphStep[]
+  states?: GraphState[]         // Custom states (optional)
+  auto_generate_states?: boolean // Whether to auto-generate states (default: true)
 }
 
 // Task Types
@@ -366,11 +398,17 @@ export interface AgentOverviewInfo {
 export type StateQuantifier = 'self' | 'all' | 'any' | 'none' | 'specific'
 export type StateOperatorType = '==' | '!=' | 'in' | 'not_in'
 
+export type ExecutionPhase = 'idle' | 'offline' | 'starting' | 'executing' | 'completing'
+
 export interface RobotStateSnapshot {
   id?: string
   name?: string
   agent_id?: string | null
   current_state?: string
+  state_code?: string               // Enhanced state code (e.g., "pick:executing")
+  current_graph_id?: string         // Currently executing graph ID
+  execution_phase?: ExecutionPhase  // Explicit phase: idle, offline, starting, executing
+  semantic_tags?: string[]          // State semantic tags
   is_online?: boolean
   is_executing?: boolean
   current_task_id?: string
@@ -561,4 +599,129 @@ export interface AgentConnectionStatus {
   last_ping?: string
   ping_latency_ms?: number
   ping_latency_us?: number
+}
+
+// ============================================
+// Enhanced Precondition Types (Cross-Agent State Checking)
+// ============================================
+
+export type EnhancedPreconditionType = 'self_state' | 'agent_state' | 'semantic_tag' | 'any_agent_state'
+export type PreconditionOperator = 'equals' | 'not_equals' | 'in' | 'not_in' | 'has_tag' | 'not_has_tag'
+
+// Filter for matching agents in precondition queries
+export interface PreconditionFilter {
+  graph_id?: string           // Filter by action graph ID
+  capability?: string         // Filter by capability
+  tags?: string[]             // Filter by semantic tags
+  online_only?: boolean       // Only check online agents
+  executing_only?: boolean    // Only check executing agents
+  include_self?: boolean      // Include self in query
+}
+
+// Enhanced precondition for cross-agent state checking
+export interface EnhancedPrecondition {
+  id: string
+  type: EnhancedPreconditionType
+  target_agent_id?: string    // For agent_state type
+  expected_state?: string     // Expected state code
+  expected_states?: string[]  // Multiple expected states (for 'in' operator)
+  operator?: PreconditionOperator
+  filter?: PreconditionFilter // For semantic_tag and any_agent_state types
+  message?: string            // Error message if not satisfied
+}
+
+// Result of precondition evaluation
+export interface PreconditionResult {
+  satisfied: boolean
+  reason?: string             // Reason if not satisfied
+  matched_agents?: string[]   // Agents that matched the filter
+}
+
+// Agent state entry for cross-agent state tracking
+export interface AgentStateEntry {
+  agent_id: string
+  state_code: string
+  semantic_tags: string[]
+  current_graph_id?: string
+  is_online: boolean
+  is_executing: boolean
+  updated_at: string
+}
+
+// System states response from GET /api/system/states
+export interface SystemStatesResponse {
+  system_states: GraphState[]
+  count: number
+}
+
+// ============================================
+// Task Execution Log Types
+// ============================================
+
+export type TaskLogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'UNKNOWN'
+
+export interface TaskLogEntry {
+  agent_id: string
+  task_id: string
+  step_id: string
+  command_id: string
+  level: number
+  level_str: TaskLogLevel
+  message: string
+  component: string
+  timestamp_ms: number
+  timestamp: string
+  metadata?: Record<string, string>
+}
+
+export interface TaskLogStats {
+  total_logs: number
+  buffer_size: number
+  max_logs: number
+  tasks_tracked: number
+  subscriber_count: number
+}
+
+// ============================================
+// Multi-Agent Execution Types
+// ============================================
+
+// Request for multi-agent simultaneous execution
+export interface MultiAgentExecuteRequest {
+  agent_ids: string[]
+  params?: Record<string, unknown>
+  agent_params?: Record<string, Record<string, unknown>>
+  sync_mode?: 'barrier' | 'best_effort'
+  timeout_sec?: number
+}
+
+// Task info in multi-agent response
+export interface MultiAgentTaskInfo {
+  agent_id: string
+  agent_name?: string
+  task_id: string
+  status: string
+}
+
+// Successful multi-agent execution response
+export interface MultiAgentExecuteResponse {
+  execution_group_id: string
+  tasks: MultiAgentTaskInfo[]
+  started_at: string
+  sync_mode: string
+  message: string
+}
+
+// Failed agent in multi-agent execution
+export interface MultiAgentFailedAgent {
+  agent_id: string
+  reason: string
+}
+
+// Error response for multi-agent execution
+export interface MultiAgentExecuteErrorResponse {
+  error: string
+  message: string
+  failed_agents: MultiAgentFailedAgent[]
+  passed_agents?: string[]
 }

@@ -29,6 +29,8 @@ find_package(nav2_msgs REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(rosidl_runtime_cpp REQUIRED)
 find_package(rosidl_typesupport_cpp REQUIRED)
+find_package(rosidl_typesupport_introspection_cpp REQUIRED)
+find_package(action_msgs REQUIRED)
 
 # Find external dependencies
 find_package(Protobuf REQUIRED)
@@ -142,7 +144,9 @@ set(FLEET_AGENT_SOURCES
   # Executor
   src/executor/precondition.cpp
   src/executor/action_executor.cpp
+  src/executor/dynamic_action_client.cpp
   src/executor/command_processor.cpp
+  src/executor/task_log_sender.cpp
 
   # Graph
   src/graph/storage.cpp
@@ -151,6 +155,7 @@ set(FLEET_AGENT_SOURCES
   # State Management
   src/state/state_definition.cpp
   src/state/state_tracker.cpp
+  src/state/graph_state.cpp
 
   # Protocol
   src/protocol/message_handler.cpp
@@ -197,6 +202,8 @@ ament_target_dependencies(fleet_agent_lib PUBLIC
   rcl_interfaces
   rosidl_runtime_cpp
   rosidl_typesupport_cpp
+  rosidl_typesupport_introspection_cpp
+  action_msgs
 )
 
 # ==============================================================================
@@ -214,6 +221,20 @@ target_link_libraries(fleet_agent_node PRIVATE
 # ==============================================================================
 
 install(TARGETS fleet_agent_node
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# ==============================================================================
+# Test Dynamic Action Client
+# ==============================================================================
+
+add_executable(test_dynamic_action src/test_dynamic_action.cpp)
+
+target_link_libraries(test_dynamic_action PRIVATE
+  fleet_agent_lib
+)
+
+install(TARGETS test_dynamic_action
   DESTINATION lib/${PROJECT_NAME}
 )
 

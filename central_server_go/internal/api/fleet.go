@@ -25,16 +25,32 @@ func (s *Server) GetFleetState(w http.ResponseWriter, r *http.Request) {
 
 	// Convert robots
 	for id, robot := range snapshot.Robots {
+		// Determine execution phase
+		executionPhase := "idle"
+		if !robot.IsOnline {
+			executionPhase = "offline"
+		} else if robot.IsExecuting {
+			if robot.CurrentStepID == "" {
+				executionPhase = "starting"
+			} else {
+				executionPhase = "executing"
+			}
+		}
+
 		response.Robots[id] = &RobotStateSnapshot{
-			ID:            robot.ID,
-			Name:          robot.Name,
-			AgentID:       robot.AgentID,
-			CurrentState:  robot.CurrentState,
-			IsOnline:      robot.IsOnline,
-			IsExecuting:   robot.IsExecuting,
-			CurrentTaskID: robot.CurrentTaskID,
-			CurrentStepID: robot.CurrentStepID,
-			StalenessSec:  now.Sub(robot.LastSeen).Seconds(),
+			ID:             robot.ID,
+			Name:           robot.Name,
+			AgentID:        robot.AgentID,
+			CurrentState:   robot.CurrentState,
+			StateCode:      robot.CurrentStateCode,
+			CurrentGraphID: robot.CurrentGraphID,
+			ExecutionPhase: executionPhase,
+			SemanticTags:   robot.SemanticTags,
+			IsOnline:       robot.IsOnline,
+			IsExecuting:    robot.IsExecuting,
+			CurrentTaskID:  robot.CurrentTaskID,
+			CurrentStepID:  robot.CurrentStepID,
+			StalenessSec:   now.Sub(robot.LastSeen).Seconds(),
 		}
 	}
 
@@ -182,6 +198,38 @@ func (s *Server) GetAgentRobotsState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, response)
+}
+
+// ResetAgentState resets an agent's state to the initial "idle" state
+// This is useful for recovering from stuck states or starting fresh
+func (s *Server) ResetAgentState(w http.ResponseWriter, r *http.Request) {
+	agentID := chi.URLParam(r, "agentID")
+	if agentID == "" {
+		writeError(w, http.StatusBadRequest, "agent_id is required")
+		return
+	}
+
+	// Reset state in memory
+	err := s.stateManager.ResetAgentState(agentID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	// Update DB if agent exists there
+	if s.repo != nil {
+		// Reset enhanced state in DB (state_code, semantic_tags, graph_id)
+		s.repo.UpdateAgentEnhancedState(agentID, "idle", []string{}, "")
+		// Also update status to idle
+		s.repo.UpdateAgentStatus(agentID, "idle", "")
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success":  true,
+		"agent_id": agentID,
+		"state":    "idle",
+		"message":  "Agent state reset to idle",
+	})
 }
 
 // GetFleetSummary returns fleet summary statistics

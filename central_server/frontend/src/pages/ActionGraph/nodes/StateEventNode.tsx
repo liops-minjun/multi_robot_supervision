@@ -66,7 +66,7 @@ const StateEventNode = memo(({ data, selected }: NodeProps<StateEventNodeData>) 
               type="source"
               position={Position.Right}
               id="state-out"
-              className="!w-3 !h-3 !bg-green-500 !border-2 !border-green-300 !rounded-full !-right-1.5"
+              className="!w-4 !h-4 !bg-green-500 !border-2 !border-green-300 !rounded-full !-right-2 hover:!w-5 hover:!h-5 hover:!bg-green-400 transition-all cursor-crosshair"
             />
           </div>
         ) : (
@@ -75,10 +75,10 @@ const StateEventNode = memo(({ data, selected }: NodeProps<StateEventNodeData>) 
               type="target"
               position={Position.Left}
               id="state-in"
-              className={`!w-3 !h-3 !border-2 !rounded-full !-left-1.5 ${
+              className={`!w-4 !h-4 !border-2 !rounded-full !-left-2 hover:!w-5 hover:!h-5 transition-all cursor-crosshair ${
                 isError
-                  ? '!bg-red-500 !border-red-300'
-                  : '!bg-blue-500 !border-blue-300'
+                  ? '!bg-red-500 !border-red-300 hover:!bg-red-400'
+                  : '!bg-blue-500 !border-blue-300 hover:!bg-blue-400'
               }`}
             />
             <div className="ml-3 flex-1">

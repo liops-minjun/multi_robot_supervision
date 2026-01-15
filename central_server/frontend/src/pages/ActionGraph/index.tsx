@@ -318,6 +318,9 @@ function ActionGraphEditor() {
   const [searchTerm, setSearchTerm] = useState('')
   const [expandedCategories, setExpandedCategories] = useState<string[]>(['Discovered Actions', 'Configured Actions', 'States'])
 
+  // Validation state
+  const [validationErrors, setValidationErrors] = useState<Array<{ nodeId: string; nodeName: string; errors: string[] }>>([])
+
   // ReactFlow
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition } = useReactFlow()
@@ -411,14 +414,19 @@ function ActionGraphEditor() {
       templateId,
       steps,
       entryPoint,
+      states,
     }: {
       templateId: string
       steps: ActionGraph['steps']
       entryPoint?: string
+      states?: ActionGraph['states']
     }) => {
       const payload: Partial<ActionGraph> = { steps }
       if (entryPoint) {
         payload.entry_point = entryPoint
+      }
+      if (states && states.length > 0) {
+        payload.states = states
       }
       return templateApi.update(templateId, payload)
     },
@@ -542,6 +550,11 @@ function ActionGraphEditor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateId]) // Only depend on template ID change
 
+  // Clear validation errors when template changes
+  useEffect(() => {
+    setValidationErrors([])
+  }, [templateId])
+
   // Track last applied states to prevent infinite loops
   const lastAppliedStatesRef = useRef<string[]>([])
   const lastAppliedAgentsRef = useRef<Array<{ id: string; name: string }>>([])
@@ -578,10 +591,16 @@ function ActionGraphEditor() {
   const convertGraphToSteps = useCallback((): {
     steps: ActionGraph['steps']
     entryPoint?: string
+    generatedStates?: ActionGraph['states']
   } => {
     const steps: ActionGraph['steps'] = []
+    const allGeneratedStates: NonNullable<ActionGraph['states']> = []
 
     nodes.forEach((node) => {
+      // Collect auto-generated states from nodes
+      if (node.data.autoGenerateStates && node.data.generatedStates?.length > 0) {
+        allGeneratedStates.push(...node.data.generatedStates)
+      }
       if (node.type === 'event') {
         // Event nodes (Start/End) are terminal steps
         if (node.data.subtype === 'End' || node.data.subtype === 'Error') {
@@ -678,28 +697,128 @@ function ActionGraphEditor() {
       entryPoint = steps[0].id
     }
 
-    return { steps, entryPoint }
+    return {
+      steps,
+      entryPoint,
+      generatedStates: allGeneratedStates.length > 0 ? allGeneratedStates : undefined,
+    }
   }, [nodes, edges])
 
-  // Handle save
+  // Validate graph before saving
+  const validateGraph = useCallback((): Array<{ nodeId: string; nodeName: string; errors: string[] }> => {
+    const errors: Array<{ nodeId: string; nodeName: string; errors: string[] }> = []
+
+    // Find action nodes (not event nodes like Start/End)
+    const actionNodes = nodes.filter(node => node.type === 'action')
+
+    // Check if there's a start node connection
+    const startEdge = edges.find(e => e.source === START_NODE_ID)
+    if (!startEdge) {
+      errors.push({
+        nodeId: START_NODE_ID,
+        nodeName: 'Start',
+        errors: ['시작 노드가 다른 노드에 연결되어 있지 않습니다']
+      })
+    }
+
+    // Check if there are any action nodes
+    if (actionNodes.length === 0) {
+      errors.push({
+        nodeId: '__graph__',
+        nodeName: 'Graph',
+        errors: ['그래프에 Action 노드가 없습니다']
+      })
+    }
+
+    // Validate each action node
+    actionNodes.forEach(node => {
+      const nodeErrors: string[] = []
+
+      // Check for action type (required)
+      if (!node.data.actionType && !node.data.subtype) {
+        nodeErrors.push('Action Type이 설정되지 않았습니다')
+      }
+
+      // Check for action server (required)
+      if (!node.data.server) {
+        nodeErrors.push('Action Server가 설정되지 않았습니다')
+      }
+
+      // Check for outgoing edges (at least one connection)
+      const outgoingEdges = edges.filter(e => e.source === node.id)
+      if (outgoingEdges.length === 0) {
+        nodeErrors.push('다음 노드로의 연결(Edge)이 없습니다')
+      }
+
+      if (nodeErrors.length > 0) {
+        errors.push({
+          nodeId: node.id,
+          nodeName: node.data.label || node.id,
+          errors: nodeErrors
+        })
+      }
+    })
+
+    return errors
+  }, [nodes, edges])
+
+  // Handle save with validation
   const handleSave = useCallback(() => {
     if (!selectedTemplateId) return
-    const { steps, entryPoint } = convertGraphToSteps()
-    saveTemplate.mutate({ templateId: selectedTemplateId, steps, entryPoint })
-  }, [selectedTemplateId, convertGraphToSteps, saveTemplate])
+
+    // Validate graph
+    const errors = validateGraph()
+    setValidationErrors(errors)
+
+    if (errors.length > 0) {
+      // Show warning but allow save
+      const hasBlockingErrors = errors.some(e =>
+        e.errors.some(err =>
+          err.includes('Action Type') || err.includes('Action Server')
+        )
+      )
+
+      if (hasBlockingErrors) {
+        // Block save for missing required fields
+        alert(`저장 불가: 필수 필드가 누락되었습니다.\n\n${errors.map(e => `• ${e.nodeName}: ${e.errors.join(', ')}`).join('\n')}`)
+        return
+      }
+
+      // Warn but allow for non-blocking errors (like missing edges)
+      const proceed = window.confirm(
+        `경고: 일부 문제가 발견되었습니다.\n\n${errors.map(e => `• ${e.nodeName}: ${e.errors.join(', ')}`).join('\n')}\n\n그래도 저장하시겠습니까?`
+      )
+      if (!proceed) return
+    }
+
+    const { steps, entryPoint, generatedStates } = convertGraphToSteps()
+    saveTemplate.mutate({ templateId: selectedTemplateId, steps, entryPoint, states: generatedStates })
+  }, [selectedTemplateId, convertGraphToSteps, saveTemplate, validateGraph])
 
   const onConnect = useCallback(
     (params: Connection) => {
-      if (!params.source || !params.target) return
-      if (params.target === START_NODE_ID) return
+      console.log('[onConnect] params:', params)
+      if (!params.source || !params.target) {
+        console.log('[onConnect] Missing source or target, ignoring')
+        return
+      }
+      if (params.target === START_NODE_ID) {
+        console.log('[onConnect] Cannot connect TO start node')
+        return
+      }
+
+      // Get target node to determine correct target handle
+      const targetNode = nodes.find(node => node.id === params.target)
+      const targetHandleId = params.targetHandle || (targetNode?.type === 'action' ? 'in' : 'state-in')
+
       if (params.source === START_NODE_ID) {
         const color = START_NODE_COLOR
         setEdges((eds) => {
           const withoutStart = eds.filter(edge => edge.source !== START_NODE_ID)
-          return addEdge({
+          const newEdge = {
             ...params,
             sourceHandle: params.sourceHandle || 'state-out',
-            targetHandle: params.targetHandle || 'state-in',
+            targetHandle: targetHandleId,
             type: 'smoothstep',
             animated: false,
             markerEnd: { type: MarkerType.ArrowClosed, color },
@@ -707,14 +826,25 @@ function ActionGraphEditor() {
               stroke: color,
               strokeWidth: 2,
             },
-          }, withoutStart)
+          }
+          console.log('[onConnect] Creating START edge:', newEdge)
+          return addEdge(newEdge, withoutStart)
         })
         return
       }
 
       const sourceNode = nodes.find(node => node.id === params.source)
       const endStates = sourceNode?.data?.endStates as EndStateConfig[] | undefined
-      const matchedEndState = endStates?.find(es => es.id === params.sourceHandle)
+
+      // If no sourceHandle specified, try to find a default (first success outcome)
+      let sourceHandleId = params.sourceHandle
+      if (!sourceHandleId && endStates && endStates.length > 0) {
+        // Default to first end state (usually success)
+        sourceHandleId = endStates[0].id
+        console.log('[onConnect] No sourceHandle, defaulting to:', sourceHandleId)
+      }
+
+      const matchedEndState = endStates?.find(es => es.id === sourceHandleId)
       const outcome = matchedEndState
         ? normalizeOutcome(matchedEndState.outcome) || inferOutcome(matchedEndState, 0)
         : undefined
@@ -722,8 +852,10 @@ function ActionGraphEditor() {
       const isSuccess = outcome === 'success'
       const color = outcome ? OUTCOME_EDGE_COLORS[outcome] : '#22c55e'
 
-      setEdges((eds) => addEdge({
+      const newEdge = {
         ...params,
+        sourceHandle: sourceHandleId,
+        targetHandle: targetHandleId,
         type: 'smoothstep',
         animated: false,
         data: {
@@ -735,7 +867,9 @@ function ActionGraphEditor() {
           strokeWidth: 2,
           strokeDasharray: isSuccess ? undefined : '5,5',
         },
-      }, eds))
+      }
+      console.log('[onConnect] Creating edge:', newEdge)
+      setEdges((eds) => addEdge(newEdge, eds))
     },
     [nodes, setEdges]
   )
@@ -804,6 +938,9 @@ function ActionGraphEditor() {
           availableAgents,
           preconditions: [],
           params: {},
+          // Auto-generate states feature (enabled by default)
+          autoGenerateStates: true,
+          generatedStates: [],
         },
       }
 
@@ -1109,6 +1246,26 @@ function ActionGraphEditor() {
                 </div>
               </div>
             )}
+
+            {/* Validation Errors Panel */}
+            {validationErrors.length > 0 && (
+              <div className="mt-2 pt-2 border-t border-[#2a2a4a]/50">
+                <div className="flex items-center gap-1 text-xs text-yellow-400 mb-1">
+                  <AlertCircle size={12} />
+                  <span className="font-semibold">Validation Issues</span>
+                </div>
+                <div className="space-y-1 max-h-32 overflow-y-auto">
+                  {validationErrors.map((error, idx) => (
+                    <div key={idx} className="text-[10px] p-1.5 bg-yellow-500/10 rounded border border-yellow-500/20">
+                      <div className="font-medium text-yellow-300">{error.nodeName}</div>
+                      {error.errors.map((e, i) => (
+                        <div key={i} className="text-yellow-400/80 ml-2">• {e}</div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1281,6 +1438,13 @@ function ActionGraphEditor() {
           </div>
           {selectedTemplate && (
             <div className="flex items-center gap-2">
+              {/* Validation Errors Indicator */}
+              {validationErrors.length > 0 && (
+                <div className="flex items-center gap-1.5 px-2 py-1 bg-yellow-600/20 text-yellow-400 rounded-lg text-xs">
+                  <AlertCircle size={12} />
+                  <span>{validationErrors.length}개 문제 발견</span>
+                </div>
+              )}
               <button
                 onClick={handleSave}
                 disabled={saveTemplate.isPending}
@@ -1913,7 +2077,7 @@ function AssignTemplateModal({
               sortedAgents.map(agent => {
                 const isAssigned = assignedAgentIds.includes(agent.agent_id)
                 const isCompatible = agent.has_all_capabilities
-                const matchedCount = requiredActionTypes.length - agent.missing_capabilities.length
+                const matchedCount = requiredActionTypes.length - (agent.missing_capabilities?.length || 0)
 
                 return (
                   <div
@@ -1982,9 +2146,9 @@ function AssignTemplateModal({
                     )}
 
                     {/* Missing capabilities */}
-                    {!isCompatible && agent.missing_capabilities.length > 0 && (
+                    {!isCompatible && (agent.missing_capabilities?.length || 0) > 0 && (
                       <div className="flex flex-wrap gap-1 mt-2">
-                        {agent.missing_capabilities.map(c => (
+                        {(agent.missing_capabilities || []).map(c => (
                           <span key={c} className="text-[9px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded">
                             ✗ {c.split('/').pop()}
                           </span>

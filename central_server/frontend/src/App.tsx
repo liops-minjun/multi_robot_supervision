@@ -1,10 +1,9 @@
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom'
-import { Workflow, History, Globe, Bot, Server } from 'lucide-react'
+import { Workflow, History, Globe, Server } from 'lucide-react'
 
 import { useTranslation } from './i18n'
 import ActionGraph from './pages/ActionGraph'
 import TaskHistory from './pages/TaskHistory'
-import Monitoring from './pages/Monitoring'
 import AgentDashboard from './pages/AgentDashboard'
 
 function App() {
@@ -27,7 +26,6 @@ function App() {
           <ul className="mt-4 flex-1">
             <NavItem to="/flows" icon={<Workflow size={20} />} label={t('nav.actionGraph')} />
             <NavItem to="/agents" icon={<Server size={20} />} label={t('nav.agents')} />
-            <NavItem to="/monitoring" icon={<Bot size={20} />} label={t('nav.monitoring')} />
             <NavItem to="/tasks" icon={<History size={20} />} label={t('nav.taskHistory')} />
           </ul>
 
@@ -49,7 +47,6 @@ function App() {
             <Route path="/" element={<Navigate to="/flows" replace />} />
             <Route path="/flows" element={<ActionGraph />} />
             <Route path="/agents" element={<AgentDashboard />} />
-            <Route path="/monitoring" element={<Monitoring />} />
             <Route path="/tasks" element={<TaskHistory />} />
           </Routes>
         </main>

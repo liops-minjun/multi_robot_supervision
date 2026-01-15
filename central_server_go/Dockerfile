@@ -1,10 +1,10 @@
 # Build stage
-FROM golang:1.23-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 # Install build dependencies including protobuf
 RUN apk add --no-cache git ca-certificates tzdata protobuf protobuf-dev
 
-# Install Go protobuf plugins (specific versions compatible with Go 1.23)
+# Install Go protobuf plugins
 RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.34.2 && \
     go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
 

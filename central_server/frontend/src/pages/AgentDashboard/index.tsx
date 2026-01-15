@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Server,
   Wifi,
@@ -12,9 +12,20 @@ import {
   Layout,
   Heart,
   HeartPulse,
+  Play,
+  Pause,
+  Square,
+  Loader2,
+  CheckCircle,
+  XCircle,
+  Circle,
+  Terminal,
+  ChevronDown,
+  ChevronUp,
+  RotateCcw,
 } from 'lucide-react'
-import { agentApi, actionGraphApi, fleetApi, stateDefinitionApi } from '../../api/client'
-import type { AgentCapabilityInfo, AgentConnectionStatus, ActionGraph, RobotStateSnapshot, StateDefinition } from '../../types'
+import { agentApi, actionGraphApi, fleetApi, stateDefinitionApi, taskApi, logsApi } from '../../api/client'
+import type { AgentCapabilityInfo, AgentConnectionStatus, ActionGraph, RobotStateSnapshot, StateDefinition, ExecutionPhase, TaskLogEntry, TaskLogLevel } from '../../types'
 import ActionGraphViewer from '../../components/ActionGraphViewer'
 import { useTranslation } from '../../i18n'
 
@@ -72,16 +83,79 @@ function HeartbeatBadge({
   )
 }
 
+// Execution Phase badge component - shows explicit task execution state
+function ExecutionPhaseBadge({
+  phase,
+  currentStepName,
+  graphName,
+}: {
+  phase: ExecutionPhase | string | undefined
+  currentStepName?: string | null
+  graphName?: string | null
+}) {
+  const config: Record<string, { bg: string; text: string; icon: React.ReactNode; label: string }> = {
+    idle: {
+      bg: 'bg-gray-500/20',
+      text: 'text-gray-400',
+      icon: <Circle className="w-3 h-3" />,
+      label: 'Idle'
+    },
+    offline: {
+      bg: 'bg-gray-600/20',
+      text: 'text-gray-500',
+      icon: <XCircle className="w-3 h-3" />,
+      label: 'Offline'
+    },
+    starting: {
+      bg: 'bg-yellow-500/20',
+      text: 'text-yellow-400',
+      icon: <Loader2 className="w-3 h-3 animate-spin" />,
+      label: 'Starting...'
+    },
+    executing: {
+      bg: 'bg-blue-500/20',
+      text: 'text-blue-400',
+      icon: <Play className="w-3 h-3" />,
+      label: 'Executing'
+    },
+    completing: {
+      bg: 'bg-green-500/20',
+      text: 'text-green-400',
+      icon: <CheckCircle className="w-3 h-3" />,
+      label: 'Completing'
+    },
+  }
+
+  const c = config[phase || 'idle'] || config.idle
+
+  return (
+    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg ${c.bg}`}>
+      <div className={`flex items-center gap-1.5 ${c.text}`}>
+        {c.icon}
+        <span className="font-medium">{c.label}</span>
+      </div>
+      {(phase === 'executing' || phase === 'starting') && graphName && (
+        <span className="text-xs text-gray-500">
+          {graphName}
+          {currentStepName && <span className="text-gray-400"> / {currentStepName}</span>}
+        </span>
+      )}
+    </div>
+  )
+}
+
 // Capability card component
 function CapabilityCard({
   capability,
   expanded,
   onToggle,
+  inUseByStep,
   t,
 }: {
   capability: AgentCapabilityInfo
   expanded: boolean
   onToggle: () => void
+  inUseByStep?: { id: string; name: string } | null
   t: (key: 'agent.available' | 'agent.unavailable' | 'agent.actionServer' | 'common.status' | 'common.type') => string
 }) {
   // action_server를 주요 이름으로 사용 (앞의 / 제거)
@@ -101,7 +175,12 @@ function CapabilityCard({
             <span className="text-white font-medium font-mono">{serverName}</span>
             <span className="text-[10px] text-gray-500">{typeName}</span>
           </div>
-          {capability.is_available ? (
+          {inUseByStep ? (
+            <span className="text-xs px-2 py-0.5 bg-cyan-500/20 text-cyan-400 rounded flex items-center gap-1">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              사용 중 - {inUseByStep.name}
+            </span>
+          ) : capability.is_available ? (
             <span className="text-xs px-2 py-0.5 bg-green-500/20 text-green-400 rounded">
               {t('agent.available')}
             </span>
@@ -142,6 +221,120 @@ function CapabilityCard({
               </div>
             )}
           </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Execution Logs Panel component
+function ExecutionLogsPanel({
+  logs,
+  isLoading,
+  isExpanded,
+  onToggleExpand,
+}: {
+  logs: TaskLogEntry[]
+  isLoading: boolean
+  isExpanded: boolean
+  onToggleExpand: () => void
+}) {
+  const logLevelColors: Record<TaskLogLevel, { bg: string; text: string; border: string }> = {
+    DEBUG: { bg: 'bg-gray-500/10', text: 'text-gray-400', border: 'border-gray-600' },
+    INFO: { bg: 'bg-blue-500/10', text: 'text-blue-400', border: 'border-blue-600' },
+    WARN: { bg: 'bg-yellow-500/10', text: 'text-yellow-400', border: 'border-yellow-600' },
+    ERROR: { bg: 'bg-red-500/10', text: 'text-red-400', border: 'border-red-600' },
+    UNKNOWN: { bg: 'bg-gray-500/10', text: 'text-gray-400', border: 'border-gray-600' },
+  }
+
+  const formatTime = (timestamp: string | number) => {
+    const date = typeof timestamp === 'number'
+      ? new Date(timestamp)
+      : new Date(timestamp)
+    const time = date.toLocaleTimeString('en-US', {
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+    const ms = date.getMilliseconds().toString().padStart(3, '0')
+    return `${time}.${ms}`
+  }
+
+  return (
+    <div className="bg-[#0d0d1a] rounded-lg border border-[#2a2a4a] overflow-hidden">
+      {/* Header */}
+      <button
+        onClick={onToggleExpand}
+        className="w-full flex items-center justify-between px-4 py-3 bg-[#16162a] hover:bg-[#1a1a2e] transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <Terminal className="w-4 h-4 text-green-400" />
+          <span className="text-sm font-medium text-white">Execution Logs</span>
+          <span className="text-xs text-gray-500">({logs.length})</span>
+        </div>
+        {isExpanded ? (
+          <ChevronUp className="w-4 h-4 text-gray-500" />
+        ) : (
+          <ChevronDown className="w-4 h-4 text-gray-500" />
+        )}
+      </button>
+
+      {/* Log content */}
+      {isExpanded && (
+        <div className="max-h-[300px] overflow-y-auto font-mono text-xs">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-8 text-gray-500">
+              <Loader2 className="w-4 h-4 animate-spin mr-2" />
+              Loading logs...
+            </div>
+          ) : logs.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-8 text-gray-500">
+              <Terminal className="w-8 h-8 mb-2 opacity-50" />
+              <p>No execution logs yet</p>
+              <p className="text-[10px] mt-1">Logs will appear here during task execution</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-[#1a1a2e]">
+              {logs.map((log, index) => {
+                const colors = logLevelColors[log.level_str] || logLevelColors.UNKNOWN
+                return (
+                  <div
+                    key={`${log.timestamp_ms}-${index}`}
+                    className={`px-3 py-2 ${colors.bg} hover:bg-[#1a1a2e]/50 transition-colors`}
+                  >
+                    <div className="flex items-start gap-2">
+                      {/* Timestamp */}
+                      <span className="text-gray-500 flex-shrink-0">
+                        {formatTime(log.timestamp_ms || log.timestamp)}
+                      </span>
+                      {/* Level badge */}
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${colors.text} ${colors.bg} border ${colors.border} flex-shrink-0`}>
+                        {log.level_str}
+                      </span>
+                      {/* Component */}
+                      {log.component && (
+                        <span className="text-purple-400 flex-shrink-0">
+                          [{log.component}]
+                        </span>
+                      )}
+                      {/* Message */}
+                      <span className={`${colors.text} break-all`}>
+                        {log.message}
+                      </span>
+                    </div>
+                    {/* Step/Task info */}
+                    {(log.step_id || log.task_id) && (
+                      <div className="mt-1 ml-[72px] text-[10px] text-gray-600">
+                        {log.task_id && <span>task:{log.task_id.slice(0, 8)}</span>}
+                        {log.step_id && <span className="ml-2">step:{log.step_id}</span>}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -198,9 +391,11 @@ const resolveActiveStepId = (graph: ActionGraph | null, robot?: RobotStateSnapsh
 
 export default function AgentDashboard() {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [expandedCapabilities, setExpandedCapabilities] = useState<string[]>([])
   const [selectedRobotId, setSelectedRobotId] = useState<string | null>(null)
+  const [logsExpanded, setLogsExpanded] = useState(true)
 
   // Fetch all agents
   const {
@@ -273,6 +468,15 @@ export default function AgentDashboard() {
     refetchIntervalInBackground: true,
   })
 
+  // Fetch execution logs for selected agent
+  const { data: agentLogs = [], isLoading: logsLoading } = useQuery({
+    queryKey: ['agent-logs', selectedAgentId],
+    queryFn: () => logsApi.getAgentLogs(selectedAgentId!, 50),
+    enabled: !!selectedAgentId,
+    refetchInterval: 2000, // Refresh every 2s for real-time feel
+    refetchIntervalInBackground: true,
+  })
+
   const selectedAgent = agents.find((a) => a.id === selectedAgentId)
   const selectedAgentConnection = selectedAgentId ? connectionStatusMap[selectedAgentId] : undefined
   const pingLatencyText = (() => {
@@ -322,6 +526,58 @@ export default function AgentDashboard() {
 
   const selectedRobotCurrentState = selectedRobotState ? resolveRobotState(selectedRobotState) : ''
   const selectedRobotExecuting = selectedRobotState ? resolveRobotExecuting(selectedRobotState) : false
+  const currentTaskId = selectedRobotState?.current_task_id
+
+  // Task execution control mutations
+  const executeGraphMutation = useMutation({
+    mutationFn: ({ graphId, agentId }: { graphId: string; agentId: string }) =>
+      actionGraphApi.execute(graphId, agentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agent-state'] })
+      queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    },
+  })
+
+  const pauseTaskMutation = useMutation({
+    mutationFn: (taskId: string) => taskApi.pause(taskId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agent-state'] })
+      queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    },
+  })
+
+  const resumeTaskMutation = useMutation({
+    mutationFn: (taskId: string) => taskApi.resume(taskId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agent-state'] })
+      queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    },
+  })
+
+  const cancelTaskMutation = useMutation({
+    mutationFn: ({ taskId, reason }: { taskId: string; reason?: string }) =>
+      taskApi.cancel(taskId, reason),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agent-state'] })
+      queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    },
+  })
+
+  const resetStateMutation = useMutation({
+    mutationFn: (agentId: string) => agentApi.resetState(agentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agent-state'] })
+      queryClient.invalidateQueries({ queryKey: ['tasks'] })
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
+    },
+  })
+
+  const isExecutionLoading =
+    executeGraphMutation.isPending ||
+    pauseTaskMutation.isPending ||
+    resumeTaskMutation.isPending ||
+    cancelTaskMutation.isPending ||
+    resetStateMutation.isPending
 
   // Summary stats
   const onlineCount = agents.filter((a) => a.status === 'online').length
@@ -552,15 +808,30 @@ export default function AgentDashboard() {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {agentCapabilities.capabilities.map((capability) => (
-                      <CapabilityCard
-                        key={capability.action_server}
-                        capability={capability}
-                        expanded={expandedCapabilities.includes(capability.action_server)}
-                        onToggle={() => toggleCapability(capability.action_server)}
-                        t={t}
-                      />
-                    ))}
+                    {agentCapabilities.capabilities.map((capability) => {
+                      // Find if this capability is currently in use by a step
+                      let inUseByStep: { id: string; name: string } | null = null
+                      if (selectedRobotExecuting && currentStepId && fleetGraph) {
+                        const currentStep = fleetGraph.steps.find(s => s.id === currentStepId)
+                        if (currentStep?.action?.server === capability.action_server ||
+                            currentStep?.action?.type === capability.action_type) {
+                          inUseByStep = {
+                            id: currentStep.id,
+                            name: currentStep.name || currentStep.id,
+                          }
+                        }
+                      }
+                      return (
+                        <CapabilityCard
+                          key={capability.action_server}
+                          capability={capability}
+                          expanded={expandedCapabilities.includes(capability.action_server)}
+                          onToggle={() => toggleCapability(capability.action_server)}
+                          inUseByStep={inUseByStep}
+                          t={t}
+                        />
+                      )
+                    })}
                   </div>
                 )}
               </div>
@@ -613,21 +884,157 @@ export default function AgentDashboard() {
                           )
                         })}
                       </select>
-
-                      {selectedRobotState && (
-                        <div className="flex items-center gap-2 text-xs text-gray-400">
-                          <span>State:</span>
-                          <span className="text-gray-200 font-medium">
-                            {selectedRobotCurrentState || 'unknown'}
-                          </span>
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                            selectedRobotExecuting ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'
-                          }`}>
-                            {selectedRobotExecuting ? 'executing' : 'idle'}
-                          </span>
-                        </div>
-                      )}
                     </div>
+
+                    {/* Execution Status Panel */}
+                    {selectedRobotState && (
+                      <div className="bg-[#16162a] rounded-lg border border-[#2a2a4a] p-4 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-gray-500 uppercase tracking-wider">Execution Status</span>
+                          <ExecutionPhaseBadge
+                            phase={selectedRobotState.execution_phase}
+                            currentStepName={currentStepId ? fleetGraph?.steps.find(s => s.id === currentStepId)?.name : null}
+                            graphName={fleetGraph?.name}
+                          />
+                        </div>
+
+                        {/* Execution Control Buttons */}
+                        <div className="flex items-center gap-2 pt-2 border-t border-[#2a2a4a]">
+                          {!selectedRobotExecuting ? (
+                            // Start button - when not executing
+                            <button
+                              onClick={() => {
+                                if (fleetGraph && selectedRobotId) {
+                                  executeGraphMutation.mutate({
+                                    graphId: fleetGraph.id,
+                                    agentId: selectedRobotId,
+                                  })
+                                }
+                              }}
+                              disabled={!fleetGraph || isExecutionLoading || !selectedRobotState.is_online}
+                              className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors"
+                              title={!selectedRobotState.is_online ? 'Agent is offline' : !fleetGraph ? 'No graph available' : 'Start execution'}
+                            >
+                              {isExecutionLoading ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Play className="w-3.5 h-3.5" />
+                              )}
+                              Start
+                            </button>
+                          ) : (
+                            // Pause/Resume and Stop buttons - when executing
+                            <>
+                              <button
+                                onClick={() => {
+                                  if (currentTaskId) {
+                                    pauseTaskMutation.mutate(currentTaskId)
+                                  }
+                                }}
+                                disabled={!currentTaskId || isExecutionLoading}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors"
+                                title="Pause execution"
+                              >
+                                {pauseTaskMutation.isPending ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <Pause className="w-3.5 h-3.5" />
+                                )}
+                                Pause
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (currentTaskId) {
+                                    cancelTaskMutation.mutate({
+                                      taskId: currentTaskId,
+                                      reason: 'User cancelled from Agent Dashboard',
+                                    })
+                                  }
+                                }}
+                                disabled={!currentTaskId || isExecutionLoading}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors"
+                                title="Stop execution"
+                              >
+                                {cancelTaskMutation.isPending ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <Square className="w-3.5 h-3.5" />
+                                )}
+                                Stop
+                              </button>
+                            </>
+                          )}
+                          {/* Reset State button - only available when NOT executing */}
+                          <button
+                            onClick={() => {
+                              if (selectedRobotId && window.confirm('Reset agent state to idle? This will clear all execution state.')) {
+                                resetStateMutation.mutate(selectedRobotId)
+                              }
+                            }}
+                            disabled={isExecutionLoading || selectedRobotExecuting}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-600 hover:bg-gray-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors ml-auto"
+                            title={selectedRobotExecuting ? 'Cannot reset while executing' : 'Reset agent state to idle'}
+                          >
+                            {resetStateMutation.isPending ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <RotateCcw className="w-3.5 h-3.5" />
+                            )}
+                            Reset State
+                          </button>
+                          {/* Show task ID if executing */}
+                          {currentTaskId && (
+                            <span className="text-[10px] text-gray-500 font-mono">
+                              Task: {currentTaskId.slice(0, 8)}...
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4 text-xs">
+                          {/* Current State */}
+                          <div>
+                            <span className="text-gray-500">State:</span>
+                            <div className="text-gray-200 font-medium mt-0.5">
+                              {selectedRobotState.state_code || selectedRobotCurrentState || 'idle'}
+                            </div>
+                          </div>
+
+                          {/* Graph Info */}
+                          <div>
+                            <span className="text-gray-500">Graph:</span>
+                            <div className="text-gray-200 font-medium mt-0.5">
+                              {selectedRobotState.current_graph_id
+                                ? fleetGraph?.name || selectedRobotState.current_graph_id.slice(0, 8)
+                                : 'None assigned'}
+                            </div>
+                          </div>
+
+                          {/* Current Step */}
+                          {selectedRobotExecuting && currentStepId && (
+                            <div>
+                              <span className="text-gray-500">Current Step:</span>
+                              <div className="text-blue-400 font-medium mt-0.5">
+                                {fleetGraph?.steps.find(s => s.id === currentStepId)?.name || currentStepId}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Semantic Tags */}
+                          {selectedRobotState.semantic_tags && selectedRobotState.semantic_tags.length > 0 && (
+                            <div className="col-span-2">
+                              <span className="text-gray-500">Tags:</span>
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {selectedRobotState.semantic_tags.map((tag) => (
+                                  <span key={tag} className="px-1.5 py-0.5 bg-purple-500/20 text-purple-400 rounded text-[10px]">
+                                    {tag}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
                     <div className="h-[380px] rounded-lg border border-[#2a2a4a] overflow-hidden bg-[#0f0f1a]">
                       <ActionGraphViewer
@@ -641,6 +1048,16 @@ export default function AgentDashboard() {
                     </div>
                   </div>
                 )}
+              </div>
+
+              {/* Execution Logs */}
+              <div>
+                <ExecutionLogsPanel
+                  logs={agentLogs}
+                  isLoading={logsLoading}
+                  isExpanded={logsExpanded}
+                  onToggleExpand={() => setLogsExpanded(!logsExpanded)}
+                />
               </div>
             </div>
           </>

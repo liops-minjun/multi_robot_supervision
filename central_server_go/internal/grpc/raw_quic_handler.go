@@ -313,13 +313,27 @@ type AgentMsg struct {
 	Pong                   *PongResponseMsg           // field 16
 	ConfigAck              *ConfigUpdateAckMsg        // field 17
 	CapabilityRegistration *CapabilityRegistrationMsg // field 18
+	TaskLog                *TaskLogMsg                // field 19
+}
+
+// TaskLogMsg represents task execution log from agent
+type TaskLogMsg struct {
+	AgentID     string
+	TaskID      string
+	StepID      string
+	CommandID   string
+	Level       int32 // TaskLogLevel enum
+	Message     string
+	TimestampMs int64
+	Component   string
+	Metadata    map[string]string
 }
 
 // AgentHeartbeatMsg represents heartbeat from agent (1:1 model)
 type AgentHeartbeatMsg struct {
 	AgentID             string
 	TimestampMs         int64
-	State               int32 // AgentState enum
+	State               string // State name string (e.g., "idle", "navigate_during")
 	IsExecuting         bool
 	CurrentAction       string
 	CurrentTaskID       string
@@ -647,6 +661,18 @@ func parseAgentMessage(data []byte) (*AgentMsg, error) {
 				}
 				data = data[n:]
 			}
+		case 19: // task_log (TaskLog)
+			if wireType == protowire.BytesType {
+				logData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid task_log")
+				}
+				taskLog, err := parseTaskLog(logData)
+				if err == nil {
+					msg.TaskLog = taskLog
+				}
+				data = data[n:]
+			}
 		default:
 			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
 			if n < 0 {
@@ -733,6 +759,144 @@ func parseCapabilityRegistration(data []byte) (*CapabilityRegistrationMsg, error
 	log.Printf("[DEBUG] parseCapabilityRegistration complete: agent_id=%s, capabilities=%d",
 		reg.AgentID, len(reg.Capabilities))
 	return reg, nil
+}
+
+// parseTaskLog parses TaskLog protobuf
+// TaskLog: agent_id=1, task_id=2, step_id=3, command_id=4, level=5, message=6, timestamp_ms=7, component=8, metadata=9
+func parseTaskLog(data []byte) (*TaskLogMsg, error) {
+	taskLog := &TaskLogMsg{
+		Metadata: make(map[string]string),
+	}
+
+	for len(data) > 0 {
+		fieldNum, wireType, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, fmt.Errorf("invalid tag")
+		}
+		data = data[n:]
+
+		switch fieldNum {
+		case 1: // agent_id (string)
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid agent_id")
+				}
+				taskLog.AgentID = v
+				data = data[n:]
+			}
+		case 2: // task_id (string)
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid task_id")
+				}
+				taskLog.TaskID = v
+				data = data[n:]
+			}
+		case 3: // step_id (string)
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid step_id")
+				}
+				taskLog.StepID = v
+				data = data[n:]
+			}
+		case 4: // command_id (string)
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid command_id")
+				}
+				taskLog.CommandID = v
+				data = data[n:]
+			}
+		case 5: // level (TaskLogLevel enum - varint)
+			if wireType == protowire.VarintType {
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid level")
+				}
+				taskLog.Level = int32(v)
+				data = data[n:]
+			}
+		case 6: // message (string)
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid message")
+				}
+				taskLog.Message = v
+				data = data[n:]
+			}
+		case 7: // timestamp_ms (int64)
+			if wireType == protowire.VarintType {
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid timestamp_ms")
+				}
+				taskLog.TimestampMs = int64(v)
+				data = data[n:]
+			}
+		case 8: // component (string)
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid component")
+				}
+				taskLog.Component = v
+				data = data[n:]
+			}
+		case 9: // metadata (map<string, string>)
+			if wireType == protowire.BytesType {
+				mapData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid metadata")
+				}
+				// Parse map entry: key=1, value=2
+				var key, value string
+				for len(mapData) > 0 {
+					fn, wt, m := protowire.ConsumeTag(mapData)
+					if m < 0 {
+						break
+					}
+					mapData = mapData[m:]
+					if fn == 1 && wt == protowire.BytesType {
+						k, m := protowire.ConsumeString(mapData)
+						if m >= 0 {
+							key = k
+							mapData = mapData[m:]
+						}
+					} else if fn == 2 && wt == protowire.BytesType {
+						v, m := protowire.ConsumeString(mapData)
+						if m >= 0 {
+							value = v
+							mapData = mapData[m:]
+						}
+					} else {
+						m := protowire.ConsumeFieldValue(fn, wt, mapData)
+						if m < 0 {
+							break
+						}
+						mapData = mapData[m:]
+					}
+				}
+				if key != "" {
+					taskLog.Metadata[key] = value
+				}
+				data = data[n:]
+			}
+		default:
+			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
+			if n < 0 {
+				return nil, fmt.Errorf("invalid field %d", fieldNum)
+			}
+			data = data[n:]
+		}
+	}
+
+	return taskLog, nil
 }
 
 // parseActionCapability parses ActionCapability protobuf
@@ -1012,6 +1176,11 @@ func (h *RawQUICHandler) handleStream(agentConn *agentConnection, stream quic.St
 			if agentMsg.CapabilityRegistration != nil {
 				log.Printf("[RawQUIC] Found CapabilityRegistration, handling...")
 				h.handleCapabilityRegistration(agentConn, agentMsg.AgentID, agentMsg.CapabilityRegistration)
+				handled = true
+			}
+
+			if agentMsg.TaskLog != nil {
+				h.handleTaskLog(agentConn, agentMsg.TaskLog)
 				handled = true
 			}
 
@@ -1651,15 +1820,15 @@ func parseAgentHeartbeat(data []byte) (*AgentHeartbeatMsg, error) {
 				if n < 0 {
 					return nil, fmt.Errorf("invalid state")
 				}
-				// Convert state string to int if needed, or store as int directly
-				_ = v // State is stored as int32 in the struct
+				hb.State = v
 				data = data[n:]
 			} else if wireType == protowire.VarintType {
+				// Legacy: convert int to string for backwards compatibility
 				v, n := protowire.ConsumeVarint(data)
 				if n < 0 {
 					return nil, fmt.Errorf("invalid state")
 				}
-				hb.State = int32(v)
+				hb.State = robotStateToString(int32(v))
 				data = data[n:]
 			}
 		case 3: // is_executing (bool)
@@ -1690,7 +1859,7 @@ func parseAgentHeartbeat(data []byte) (*AgentHeartbeatMsg, error) {
 				hb.HasNetworkLatency = true
 				data = data[n:]
 			}
-		case 6: // network_latency_us (reserved in proto, but may be used)
+		case 6: // network_latency_us
 			if wireType == protowire.VarintType {
 				v, n := protowire.ConsumeVarint(data)
 				if n < 0 {
@@ -1698,6 +1867,24 @@ func parseAgentHeartbeat(data []byte) (*AgentHeartbeatMsg, error) {
 				}
 				hb.NetworkLatencyUs = uint32(v)
 				hb.HasNetworkLatencyUs = true
+				data = data[n:]
+			}
+		case 10: // current_task_id
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid current_task_id")
+				}
+				hb.CurrentTaskID = v
+				data = data[n:]
+			}
+		case 11: // current_step_id
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid current_step_id")
+				}
+				hb.CurrentStepID = v
 				data = data[n:]
 			}
 		default:
@@ -2332,8 +2519,11 @@ func (h *RawQUICHandler) handleHeartbeat(agentConn *agentConnection, hb *AgentHe
 	}
 
 	// Update agent state (1:1 model: agent_id = robot_id)
-	// Convert state enum to string
-	stateName := robotStateToString(hb.State)
+	// State is now sent as a string directly from the agent
+	stateName := hb.State
+	if stateName == "" {
+		stateName = "idle" // Default if empty
+	}
 
 	// Update state (in 1:1 model, agent_id is used as robot_id)
 	if err := h.stateManager.UpdateRobotState(agentConn.agentID, stateName); err != nil {
@@ -2423,6 +2613,46 @@ func (h *RawQUICHandler) handleActionFeedback(agentConn *agentConnection, fb *Ac
 
 	// Update progress in state if needed
 	// h.stateManager.UpdateActionProgress(fb.AgentID, fb.Progress)
+}
+
+// handleTaskLog processes task execution log from agent
+func (h *RawQUICHandler) handleTaskLog(agentConn *agentConnection, taskLog *TaskLogMsg) {
+	if taskLog == nil {
+		return
+	}
+
+	// Create log entry for TaskLogManager
+	entry := state.TaskLogEntry{
+		AgentID:     taskLog.AgentID,
+		TaskID:      taskLog.TaskID,
+		StepID:      taskLog.StepID,
+		CommandID:   taskLog.CommandID,
+		Level:       state.TaskLogLevel(taskLog.Level),
+		Message:     taskLog.Message,
+		TimestampMs: taskLog.TimestampMs,
+		Component:   taskLog.Component,
+		Metadata:    taskLog.Metadata,
+	}
+
+	// Add to task log manager
+	h.stateManager.TaskLogManager().AddLog(entry)
+
+	// Log at appropriate level for debugging
+	levelStr := "INFO"
+	switch state.TaskLogLevel(taskLog.Level) {
+	case state.TaskLogDebug:
+		levelStr = "DEBUG"
+	case state.TaskLogInfo:
+		levelStr = "INFO"
+	case state.TaskLogWarn:
+		levelStr = "WARN"
+	case state.TaskLogError:
+		levelStr = "ERROR"
+	}
+
+	log.Printf("[TaskLog] [%s] [%s] [%s/%s] %s: %s",
+		levelStr, taskLog.AgentID, taskLog.TaskID, taskLog.StepID,
+		taskLog.Component, taskLog.Message)
 }
 
 // handleStatusUpdate processes agent status update
@@ -3128,4 +3358,118 @@ func (h *RawQUICHandler) GetAgentForRobot(agentID string) (string, bool) {
 		return agentID, true
 	}
 	return "", false
+}
+
+// ============================================================
+// Fleet State Broadcasting (for cross-agent coordination)
+// ============================================================
+
+// StartFleetStateBroadcast starts periodic fleet state broadcasts to all agents
+func (h *RawQUICHandler) StartFleetStateBroadcast(interval time.Duration) {
+	log.Printf("[RawQUIC] Starting fleet state broadcast (interval: %v)", interval)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-h.ctx.Done():
+			log.Println("[RawQUIC] Fleet state broadcast stopped")
+			return
+		case <-ticker.C:
+			h.broadcastFleetState()
+		}
+	}
+}
+
+// broadcastFleetState sends fleet state to all connected agents
+func (h *RawQUICHandler) broadcastFleetState() {
+	snapshot := h.stateManager.GetSnapshot()
+	now := time.Now()
+
+	// Build FleetStateBroadcast message
+	// message FleetStateBroadcast {
+	//   int64 timestamp_ms = 1;
+	//   repeated AgentStateSnapshot agents = 2;
+	// }
+	var fleetState []byte
+
+	// Field 1: timestamp_ms
+	fleetState = protowire.AppendTag(fleetState, 1, protowire.VarintType)
+	fleetState = protowire.AppendVarint(fleetState, uint64(now.UnixMilli()))
+
+	// Field 2: agents (repeated)
+	for _, robot := range snapshot.Robots {
+		agentEntry := h.buildAgentStateSnapshot(robot, now)
+		fleetState = protowire.AppendTag(fleetState, 2, protowire.BytesType)
+		fleetState = protowire.AppendBytes(fleetState, agentEntry)
+	}
+
+	// Wrap in ServerMessage with fleet_state = 17
+	msgID := fmt.Sprintf("fleet-state-%d", now.UnixNano())
+	serverMsg := h.buildServerMessage(msgID, 17, fleetState) // fleet_state field = 17
+
+	// Broadcast to all connected agents
+	h.connMu.RLock()
+	conns := make([]*agentConnection, 0, len(h.connections))
+	for _, conn := range h.connections {
+		if conn.registered {
+			conns = append(conns, conn)
+		}
+	}
+	h.connMu.RUnlock()
+
+	for _, conn := range conns {
+		if err := h.sendToAgent(conn, serverMsg); err != nil {
+			log.Printf("[RawQUIC] Failed to broadcast fleet state to %s: %v", conn.agentID, err)
+		}
+	}
+}
+
+// buildAgentStateSnapshot builds protobuf for AgentStateSnapshot
+func (h *RawQUICHandler) buildAgentStateSnapshot(robot *state.RobotState, now time.Time) []byte {
+	// message AgentStateSnapshot {
+	//   string agent_id = 1;
+	//   string agent_name = 2;
+	//   string state = 5;
+	//   bool is_online = 6;
+	//   bool is_executing = 7;
+	//   float staleness_sec = 8;
+	// }
+	var msg []byte
+
+	// Field 1: agent_id
+	msg = protowire.AppendTag(msg, 1, protowire.BytesType)
+	msg = protowire.AppendString(msg, robot.ID)
+
+	// Field 2: agent_name
+	msg = protowire.AppendTag(msg, 2, protowire.BytesType)
+	msg = protowire.AppendString(msg, robot.Name)
+
+	// Field 5: state
+	msg = protowire.AppendTag(msg, 5, protowire.BytesType)
+	msg = protowire.AppendString(msg, robot.CurrentState)
+
+	// Field 6: is_online
+	msg = protowire.AppendTag(msg, 6, protowire.VarintType)
+	if robot.IsOnline {
+		msg = protowire.AppendVarint(msg, 1)
+	} else {
+		msg = protowire.AppendVarint(msg, 0)
+	}
+
+	// Field 7: is_executing
+	msg = protowire.AppendTag(msg, 7, protowire.VarintType)
+	if robot.IsExecuting {
+		msg = protowire.AppendVarint(msg, 1)
+	} else {
+		msg = protowire.AppendVarint(msg, 0)
+	}
+
+	// Field 8: staleness_sec (float)
+	stalenessSec := float32(now.Sub(robot.LastSeen).Seconds())
+	msg = protowire.AppendTag(msg, 8, protowire.Fixed32Type)
+	msg = protowire.AppendFixed32(msg, float32ToBits(stalenessSec))
+
+	return msg
 }

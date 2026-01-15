@@ -45,19 +45,121 @@ int parse_state(const std::string& state_str) {
 
 bool is_self_condition(const PreconditionEvaluator::StartConditionSpec& cond,
                        const std::string& agent_id) {
-    if (!cond.quantifier.empty() && to_lower(cond.quantifier) != "self") {
+    std::string quantifier = to_lower(cond.quantifier);
+    std::string target_type = to_lower(cond.target_type);
+
+    // Explicitly self quantifier or target
+    if (quantifier == "self" || target_type == "self") {
+        return true;
+    }
+
+    // Has quantifier for multiple agents
+    if (!quantifier.empty() && quantifier != "self") {
         return false;
     }
-    if (!cond.target_type.empty() && to_lower(cond.target_type) != "self") {
-        return false;
-    }
+
+    // Specific agent that is not self
     if (!cond.agent_id.empty() && cond.agent_id != agent_id) {
         return false;
     }
-    if (!cond.agent_id.empty()) {
-        return false;
+
+    // No agent specified and no quantifier = self
+    return cond.agent_id.empty() || cond.agent_id == agent_id;
+}
+
+// Evaluate state condition for a specific agent using cache
+bool evaluate_cached_state_condition(
+    const PreconditionEvaluator::StartConditionSpec& cond,
+    const std::string& target_agent_id,
+    const PreconditionEvaluator::Context& ctx,
+    bool& found_in_cache) {
+
+    found_in_cache = false;
+
+    // Look up state in cache
+    auto state_it = ctx.other_robot_states.find(target_agent_id);
+    if (state_it == ctx.other_robot_states.end()) {
+        return false;  // Not in cache
     }
-    return true;
+    found_in_cache = true;
+
+    // Check require_online constraint
+    if (cond.require_online) {
+        auto online_it = ctx.other_robot_online.find(target_agent_id);
+        if (online_it != ctx.other_robot_online.end() && !online_it->second) {
+            log.debug("Agent {} is offline, condition not satisfied", target_agent_id);
+            return false;
+        }
+    }
+
+    // Check max_staleness_sec constraint
+    if (cond.max_staleness_sec > 0.0) {
+        auto staleness_it = ctx.other_robot_staleness.find(target_agent_id);
+        if (staleness_it != ctx.other_robot_staleness.end()) {
+            if (staleness_it->second > cond.max_staleness_sec) {
+                log.debug("Agent {} staleness ({:.1f}s) exceeds max ({:.1f}s)",
+                          target_agent_id, staleness_it->second, cond.max_staleness_sec);
+                return false;
+            }
+        }
+    }
+
+    int actual_state = state_it->second;
+
+    // Check allowed_states if specified
+    if (!cond.allowed_states.empty()) {
+        bool found = false;
+        for (const auto& state : cond.allowed_states) {
+            int expected = parse_state(state);
+            if (actual_state == expected) {
+                found = true;
+                break;
+            }
+        }
+        std::string op = to_lower(cond.state_operator);
+        if (op == "not_in") {
+            return !found;
+        }
+        return found;
+    }
+
+    // Check single state
+    if (!cond.state.empty()) {
+        int expected = parse_state(cond.state);
+        std::string op = to_lower(cond.state_operator);
+        if (op.empty() || op == "==" || op == "eq") {
+            return actual_state == expected;
+        }
+        if (op == "!=" || op == "ne") {
+            return actual_state != expected;
+        }
+        return actual_state == expected;
+    }
+
+    return true;  // No state requirement
+}
+
+// Get all agent IDs that match the quantifier/target criteria
+std::vector<std::string> get_target_agents(
+    const PreconditionEvaluator::StartConditionSpec& cond,
+    const PreconditionEvaluator::Context& ctx) {
+
+    std::vector<std::string> targets;
+    std::string quantifier = to_lower(cond.quantifier);
+
+    if (quantifier == "specific" && !cond.agent_id.empty()) {
+        // Specific agent
+        targets.push_back(cond.agent_id);
+    } else if (quantifier == "all" || quantifier == "any" || quantifier == "none") {
+        // All agents in cache (except self)
+        for (const auto& [agent_id, _] : ctx.other_robot_states) {
+            if (agent_id != ctx.agent_id) {
+                targets.push_back(agent_id);
+            }
+        }
+    }
+
+    return targets;
 }
 
 bool evaluate_state_condition(const PreconditionEvaluator::StartConditionSpec& cond,
@@ -243,14 +345,84 @@ PreconditionEvaluator::Result PreconditionEvaluator::check_start_conditions(
             op = "and";
         }
 
-        if (!is_self_condition(cond, ctx.agent_id)) {
-            return Result::NEED_SERVER;
-        }
-
         bool passed = true;
-        if (!cond.state.empty() || !cond.allowed_states.empty() ||
-            cond.max_staleness_sec > 0.0 || cond.require_online) {
-            passed = evaluate_state_condition(cond, ctx);
+
+        if (is_self_condition(cond, ctx.agent_id)) {
+            // Self condition - evaluate locally
+            if (!cond.state.empty() || !cond.allowed_states.empty() ||
+                cond.max_staleness_sec > 0.0 || cond.require_online) {
+                passed = evaluate_state_condition(cond, ctx);
+            }
+        } else {
+            // Cross-agent condition - try to evaluate using cache
+            std::string quantifier = to_lower(cond.quantifier);
+
+            if (quantifier == "specific" || (!cond.agent_id.empty() && quantifier.empty())) {
+                // Specific agent condition
+                std::string target_id = cond.agent_id;
+                bool found_in_cache = false;
+                passed = evaluate_cached_state_condition(cond, target_id, ctx, found_in_cache);
+
+                if (!found_in_cache) {
+                    log.debug("Cross-agent condition for {} not in cache, need server", target_id);
+                    return Result::NEED_SERVER;
+                }
+
+                log.debug("Cross-agent condition for {}: {}", target_id, passed ? "passed" : "failed");
+
+            } else if (quantifier == "all" || quantifier == "any" || quantifier == "none") {
+                // Quantifier-based condition (all, any, none)
+                auto targets = get_target_agents(cond, ctx);
+
+                if (targets.empty()) {
+                    // No agents in cache to evaluate
+                    log.debug("No agents in cache for quantifier '{}', need server", quantifier);
+                    return Result::NEED_SERVER;
+                }
+
+                int passed_count = 0;
+                int total_count = 0;
+                bool all_found = true;
+
+                for (const auto& target_id : targets) {
+                    bool found_in_cache = false;
+                    bool target_passed = evaluate_cached_state_condition(cond, target_id, ctx, found_in_cache);
+
+                    if (!found_in_cache) {
+                        all_found = false;
+                        continue;
+                    }
+
+                    total_count++;
+                    if (target_passed) {
+                        passed_count++;
+                    }
+                }
+
+                if (total_count == 0) {
+                    // No agents found in cache
+                    log.debug("No matching agents in cache for quantifier '{}'", quantifier);
+                    return Result::NEED_SERVER;
+                }
+
+                // Evaluate quantifier
+                if (quantifier == "all") {
+                    passed = (passed_count == total_count);
+                } else if (quantifier == "any") {
+                    passed = (passed_count > 0);
+                } else if (quantifier == "none") {
+                    passed = (passed_count == 0);
+                }
+
+                log.debug("Quantifier '{}' result: {} ({}/{} passed)",
+                          quantifier, passed ? "satisfied" : "not satisfied",
+                          passed_count, total_count);
+
+            } else {
+                // Unknown quantifier - need server
+                log.warn("Unknown quantifier '{}', delegating to server", quantifier);
+                return Result::NEED_SERVER;
+            }
         }
 
         if (i == 0) {

@@ -4,6 +4,7 @@
 #pragma once
 
 #include "fleet_agent/core/types.hpp"
+#include "fleet_agent/executor/typed_action_client.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -17,9 +18,6 @@
 
 namespace fleet_agent {
 namespace executor {
-
-// Forward declaration
-class GenericActionClient;
 
 /**
  * ActionExecutor - Executes ROS2 actions for a single robot.
@@ -131,7 +129,10 @@ private:
     mutable std::mutex request_mutex_;
 
     // Action client (created per action type)
-    std::unique_ptr<GenericActionClient> action_client_;
+    std::unique_ptr<ITypedActionClient> action_client_;
+
+    // Current goal handle (for cancellation)
+    std::shared_ptr<ActionGoalHandle> current_goal_handle_;
 
     // Timeout timer
     rclcpp::TimerBase::SharedPtr timeout_timer_;
@@ -178,92 +179,6 @@ private:
      * Parse feedback JSON to extract progress.
      */
     float extract_progress(const std::string& feedback_json);
-};
-
-/**
- * GenericActionClient - Type-agnostic action client.
- *
- * Uses ROS2 generic service clients to call actions without
- * compile-time knowledge of the action type.
- *
- * Internal implementation detail of ActionExecutor.
- */
-class GenericActionClient {
-public:
-    struct GoalHandle {
-        std::string goal_id;  // UUID
-        std::atomic<bool> active{true};
-        std::atomic<int8_t> status{0};  // GoalStatus
-
-        std::function<void(bool success, const std::string& result_json)> result_callback;
-        std::function<void(const std::string& feedback_json)> feedback_callback;
-    };
-
-    GenericActionClient(
-        rclcpp::Node::SharedPtr node,
-        const std::string& action_name,
-        const std::string& action_type
-    );
-
-    ~GenericActionClient();
-
-    /**
-     * Send goal with JSON parameters.
-     *
-     * @param goal_json JSON-encoded goal parameters
-     * @param result_callback Called on completion
-     * @param feedback_callback Called on feedback (optional)
-     * @return GoalHandle for tracking
-     */
-    std::shared_ptr<GoalHandle> send_goal(
-        const std::string& goal_json,
-        std::function<void(bool, const std::string&)> result_callback,
-        std::function<void(const std::string&)> feedback_callback = nullptr
-    );
-
-    /**
-     * Cancel goal.
-     */
-    void cancel_goal(std::shared_ptr<GoalHandle> handle);
-
-    /**
-     * Check if server is ready.
-     */
-    bool is_server_ready() const;
-
-    /**
-     * Wait for server to be ready.
-     */
-    bool wait_for_server(std::chrono::milliseconds timeout);
-
-private:
-    rclcpp::Node::SharedPtr node_;
-    std::string action_name_;
-    std::string action_type_;
-
-    // Note: rclcpp::GenericClient doesn't exist in ROS2 Humble
-    // For generic action support in Humble, we would need to implement
-    // using raw publishers/subscribers or use typed action clients.
-    // This is stubbed out for compilation - real implementation requires
-    // either ROS2 Iron+ or compile-time action type knowledge.
-    bool server_ready_{false};  // Stub
-
-    // Subscriptions for feedback and status (GenericSubscription works in Humble)
-    rclcpp::GenericSubscription::SharedPtr feedback_sub_;
-    rclcpp::GenericSubscription::SharedPtr status_sub_;
-
-    // Active goals
-    std::unordered_map<std::string, std::shared_ptr<GoalHandle>> active_goals_;
-    std::mutex goals_mutex_;
-
-    // Internal methods
-    std::vector<uint8_t> serialize_goal(const std::string& goal_json);
-    std::string deserialize_result(const std::vector<uint8_t>& data);
-    std::string deserialize_feedback(const std::vector<uint8_t>& data);
-
-    void on_feedback_received(std::shared_ptr<rclcpp::SerializedMessage> msg);
-    void on_status_received(std::shared_ptr<rclcpp::SerializedMessage> msg);
-    void poll_result(std::shared_ptr<GoalHandle> handle);
 };
 
 }  // namespace executor

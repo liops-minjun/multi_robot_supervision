@@ -585,26 +585,71 @@ type AgentOverviewInfo struct {
 }
 
 // GetAgentsOverview returns all agents with their capabilities and assigned templates
+// Optimized: Uses batch queries to avoid N+1 query problem
 func (s *Server) GetAgentsOverview(w http.ResponseWriter, r *http.Request) {
+	// Step 1: Batch load all data in 4 queries instead of N+1
 	agents, err := s.repo.GetAllAgents()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
+	// Get all capabilities in one query
+	allCapabilities, err := s.repo.GetAllAgentCapabilities()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Get all agent action graph assignments in one query
+	allAssignments, err := s.repo.GetAllAgentActionGraphs()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Collect all action graph IDs we need to fetch
+	graphIDSet := make(map[string]bool)
+	for _, a := range allAssignments {
+		graphIDSet[a.ActionGraphID] = true
+	}
+	graphIDs := make([]string, 0, len(graphIDSet))
+	for id := range graphIDSet {
+		graphIDs = append(graphIDs, id)
+	}
+
+	// Get all action graphs by IDs in one query
+	graphsMap, err := s.repo.GetActionGraphsByIDs(graphIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Step 2: Build lookup maps for O(1) access
+	// Capabilities by agent ID
+	capsByAgent := make(map[string][]db.AgentCapability)
+	for _, cap := range allCapabilities {
+		capsByAgent[cap.AgentID] = append(capsByAgent[cap.AgentID], cap)
+	}
+
+	// Assignments by agent ID
+	assignmentsByAgent := make(map[string][]db.AgentActionGraph)
+	for _, a := range allAssignments {
+		assignmentsByAgent[a.AgentID] = append(assignmentsByAgent[a.AgentID], a)
+	}
+
+	// Step 3: Build result using lookup maps (no more DB queries in loop)
 	result := make([]AgentOverviewInfo, 0, len(agents))
 
 	for _, agent := range agents {
-		// Get agent's action types (capabilities)
-		actionTypes, _ := s.repo.GetAgentActionTypes(agent.ID)
-		if actionTypes == nil {
-			actionTypes = []string{}
-		}
+		// Get capabilities from map
+		agentCaps := capsByAgent[agent.ID]
 
-		// Get agent's individual action servers (capabilities)
-		agentCaps, _ := s.repo.GetAgentCapabilities(agent.ID)
+		// Build action types (deduplicated) and action servers
+		typeSet := make(map[string]bool)
 		actionServers := make([]AgentOverviewActionServer, 0, len(agentCaps))
 		for _, cap := range agentCaps {
+			typeSet[cap.ActionType] = true
 			actionServers = append(actionServers, AgentOverviewActionServer{
 				ActionServer: cap.ActionServer,
 				ActionType:   cap.ActionType,
@@ -612,13 +657,17 @@ func (s *Server) GetAgentsOverview(w http.ResponseWriter, r *http.Request) {
 				Status:       cap.Status,
 			})
 		}
+		actionTypes := make([]string, 0, len(typeSet))
+		for t := range typeSet {
+			actionTypes = append(actionTypes, t)
+		}
 
-		// Get assigned templates for this agent
-		assignments, _ := s.repo.GetAgentActionGraphs(agent.ID)
+		// Get assignments from map
+		assignments := assignmentsByAgent[agent.ID]
 
-		assignedTemplates := make([]map[string]interface{}, 0)
+		assignedTemplates := make([]map[string]interface{}, 0, len(assignments))
 		for _, a := range assignments {
-			graph, _ := s.repo.GetActionGraph(a.ActionGraphID)
+			graph := graphsMap[a.ActionGraphID]
 			if graph != nil {
 				var deployedVersion interface{}
 				if a.DeployedVersion > 0 {

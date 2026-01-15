@@ -67,11 +67,12 @@ void QUICOutboundSender::stop() {
     stop_requested_.store(true);
     running_.store(false);
 
-    // Wake up the sender thread if waiting
+    // Wake up the sender thread if waiting on connection or queue
     {
         std::lock_guard<std::mutex> lock(connect_mutex_);
         connect_cv_.notify_all();
     }
+    outbound_queue_.notify_all();
 
     if (sender_thread_.joinable()) {
         sender_thread_.join();
@@ -142,9 +143,10 @@ void QUICOutboundSender::sender_loop() {
             }
         }
 
-        // Try to get message from queue
+        // Wait for message with condition variable notification
+        // Uses NotifiableQueue::wait_pop() for low-latency (<1ms) wake-up
         OutboundMessage msg;
-        if (outbound_queue_.try_pop(msg)) {
+        if (outbound_queue_.wait_pop(msg, std::chrono::milliseconds(100), running_)) {
             // Update queue depth stat
             stats_.queue_depth.store(static_cast<uint32_t>(outbound_queue_.unsafe_size()));
 
@@ -166,10 +168,8 @@ void QUICOutboundSender::sender_loop() {
                 log.error("Message dropped after {} retries", config_.max_retries);
                 stats_.messages_failed.fetch_add(1);
             }
-        } else {
-            // Queue empty, sleep briefly
-            std::this_thread::sleep_for(config_.poll_interval);
         }
+        // No sleep needed - wait_pop handles efficient waiting
     }
 
     log.info("Sender loop exited");
