@@ -398,7 +398,7 @@ export interface AgentOverviewInfo {
 export type StateQuantifier = 'self' | 'all' | 'any' | 'none' | 'specific'
 export type StateOperatorType = '==' | '!=' | 'in' | 'not_in'
 
-export type ExecutionPhase = 'idle' | 'offline' | 'starting' | 'executing' | 'completing'
+export type ExecutionPhase = 'idle' | 'offline' | 'starting' | 'executing' | 'completing' | 'waiting_for_precondition'
 
 export interface RobotStateSnapshot {
   id?: string
@@ -407,17 +407,33 @@ export interface RobotStateSnapshot {
   current_state?: string
   state_code?: string               // Enhanced state code (e.g., "pick:executing")
   current_graph_id?: string         // Currently executing graph ID
-  execution_phase?: ExecutionPhase  // Explicit phase: idle, offline, starting, executing
+  execution_phase?: ExecutionPhase  // Explicit phase: idle, offline, starting, executing, waiting_for_precondition
   semantic_tags?: string[]          // State semantic tags
   is_online?: boolean
   is_executing?: boolean
   current_task_id?: string
   current_step_id?: string
   staleness_sec?: number
+  // Precondition waiting status
+  is_waiting_for_precondition?: boolean
+  waiting_for_precondition_since?: string  // ISO timestamp
+  blocking_conditions?: BlockingConditionInfo[]
+  precondition_timeout_sec?: number
   // Legacy fields (for backward compatibility)
   agent_name?: string | null
   state?: string
   state_updated_at?: string  // ISO timestamp
+}
+
+// Blocking condition information for UI display
+export interface BlockingConditionInfo {
+  condition_id: string
+  description: string              // Human-readable description
+  target_agent_id?: string         // Target agent (if cross-agent condition)
+  target_agent_name?: string       // Target agent name
+  required_state: string           // Required state
+  current_state?: string           // Current state of target
+  reason: string                   // Why it's blocking (e.g., "state mismatch", "agent offline", "state too old")
 }
 
 export interface FleetStateSnapshot {

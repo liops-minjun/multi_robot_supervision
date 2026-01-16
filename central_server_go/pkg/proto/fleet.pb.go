@@ -131,6 +131,58 @@ func (ActionStatus) EnumDescriptor() ([]byte, []int) {
 	return file_fleet_proto_rawDescGZIP(), []int{1}
 }
 
+type TaskLogLevel int32
+
+const (
+	TaskLogLevel_TASK_LOG_DEBUG TaskLogLevel = 0
+	TaskLogLevel_TASK_LOG_INFO  TaskLogLevel = 1
+	TaskLogLevel_TASK_LOG_WARN  TaskLogLevel = 2
+	TaskLogLevel_TASK_LOG_ERROR TaskLogLevel = 3
+)
+
+// Enum value maps for TaskLogLevel.
+var (
+	TaskLogLevel_name = map[int32]string{
+		0: "TASK_LOG_DEBUG",
+		1: "TASK_LOG_INFO",
+		2: "TASK_LOG_WARN",
+		3: "TASK_LOG_ERROR",
+	}
+	TaskLogLevel_value = map[string]int32{
+		"TASK_LOG_DEBUG": 0,
+		"TASK_LOG_INFO":  1,
+		"TASK_LOG_WARN":  2,
+		"TASK_LOG_ERROR": 3,
+	}
+)
+
+func (x TaskLogLevel) Enum() *TaskLogLevel {
+	p := new(TaskLogLevel)
+	*p = x
+	return p
+}
+
+func (x TaskLogLevel) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TaskLogLevel) Descriptor() protoreflect.EnumDescriptor {
+	return file_fleet_proto_enumTypes[2].Descriptor()
+}
+
+func (TaskLogLevel) Type() protoreflect.EnumType {
+	return &file_fleet_proto_enumTypes[2]
+}
+
+func (x TaskLogLevel) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TaskLogLevel.Descriptor instead.
+func (TaskLogLevel) EnumDescriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{2}
+}
+
 type AgentStateUpdate_StatePhase int32
 
 const (
@@ -170,11 +222,11 @@ func (x AgentStateUpdate_StatePhase) String() string {
 }
 
 func (AgentStateUpdate_StatePhase) Descriptor() protoreflect.EnumDescriptor {
-	return file_fleet_proto_enumTypes[2].Descriptor()
+	return file_fleet_proto_enumTypes[3].Descriptor()
 }
 
 func (AgentStateUpdate_StatePhase) Type() protoreflect.EnumType {
-	return &file_fleet_proto_enumTypes[2]
+	return &file_fleet_proto_enumTypes[3]
 }
 
 func (x AgentStateUpdate_StatePhase) Number() protoreflect.EnumNumber {
@@ -225,11 +277,11 @@ func (x EnhancedPrecondition_PreconditionType) String() string {
 }
 
 func (EnhancedPrecondition_PreconditionType) Descriptor() protoreflect.EnumDescriptor {
-	return file_fleet_proto_enumTypes[3].Descriptor()
+	return file_fleet_proto_enumTypes[4].Descriptor()
 }
 
 func (EnhancedPrecondition_PreconditionType) Type() protoreflect.EnumType {
-	return &file_fleet_proto_enumTypes[3]
+	return &file_fleet_proto_enumTypes[4]
 }
 
 func (x EnhancedPrecondition_PreconditionType) Number() protoreflect.EnumNumber {
@@ -283,11 +335,11 @@ func (x EnhancedPrecondition_PreconditionOperator) String() string {
 }
 
 func (EnhancedPrecondition_PreconditionOperator) Descriptor() protoreflect.EnumDescriptor {
-	return file_fleet_proto_enumTypes[4].Descriptor()
+	return file_fleet_proto_enumTypes[5].Descriptor()
 }
 
 func (EnhancedPrecondition_PreconditionOperator) Type() protoreflect.EnumType {
-	return &file_fleet_proto_enumTypes[4]
+	return &file_fleet_proto_enumTypes[5]
 }
 
 func (x EnhancedPrecondition_PreconditionOperator) Number() protoreflect.EnumNumber {
@@ -309,6 +361,7 @@ type AgentMessage struct {
 	//	*AgentMessage_ActionResult
 	//	*AgentMessage_StatusUpdate
 	//	*AgentMessage_StateUpdate
+	//	*AgentMessage_TaskLog
 	Payload       isAgentMessage_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -401,6 +454,15 @@ func (x *AgentMessage) GetStateUpdate() *AgentStateUpdate {
 	return nil
 }
 
+func (x *AgentMessage) GetTaskLog() *TaskLog {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentMessage_TaskLog); ok {
+			return x.TaskLog
+		}
+	}
+	return nil
+}
+
 type isAgentMessage_Payload interface {
 	isAgentMessage_Payload()
 }
@@ -421,6 +483,10 @@ type AgentMessage_StateUpdate struct {
 	StateUpdate *AgentStateUpdate `protobuf:"bytes,13,opt,name=state_update,json=stateUpdate,proto3,oneof"` // Enhanced state update
 }
 
+type AgentMessage_TaskLog struct {
+	TaskLog *TaskLog `protobuf:"bytes,14,opt,name=task_log,json=taskLog,proto3,oneof"` // Task execution logs
+}
+
 func (*AgentMessage_Heartbeat) isAgentMessage_Payload() {}
 
 func (*AgentMessage_ActionResult) isAgentMessage_Payload() {}
@@ -428,6 +494,8 @@ func (*AgentMessage_ActionResult) isAgentMessage_Payload() {}
 func (*AgentMessage_StatusUpdate) isAgentMessage_Payload() {}
 
 func (*AgentMessage_StateUpdate) isAgentMessage_Payload() {}
+
+func (*AgentMessage_TaskLog) isAgentMessage_Payload() {}
 
 // Enhanced state update message for cross-agent state tracking
 type AgentStateUpdate struct {
@@ -515,15 +583,19 @@ func (x *AgentStateUpdate) GetPhase() AgentStateUpdate_StatePhase {
 }
 
 type AgentHeartbeat struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AgentId       string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
-	State         string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
-	IsExecuting   bool                   `protobuf:"varint,3,opt,name=is_executing,json=isExecuting,proto3" json:"is_executing,omitempty"`
-	CurrentAction string                 `protobuf:"bytes,4,opt,name=current_action,json=currentAction,proto3" json:"current_action,omitempty"`
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	AgentId          string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	State            string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
+	IsExecuting      bool                   `protobuf:"varint,3,opt,name=is_executing,json=isExecuting,proto3" json:"is_executing,omitempty"`
+	CurrentAction    string                 `protobuf:"bytes,4,opt,name=current_action,json=currentAction,proto3" json:"current_action,omitempty"`
+	NetworkLatencyMs uint32                 `protobuf:"varint,5,opt,name=network_latency_ms,json=networkLatencyMs,proto3" json:"network_latency_ms,omitempty"`
+	NetworkLatencyUs uint32                 `protobuf:"varint,6,opt,name=network_latency_us,json=networkLatencyUs,proto3" json:"network_latency_us,omitempty"`
 	// Enhanced state information
 	StateCode      string   `protobuf:"bytes,7,opt,name=state_code,json=stateCode,proto3" json:"state_code,omitempty"`                  // Current state code (e.g., "pick:executing")
 	SemanticTags   []string `protobuf:"bytes,8,rep,name=semantic_tags,json=semanticTags,proto3" json:"semantic_tags,omitempty"`         // Current semantic tags
 	CurrentGraphId string   `protobuf:"bytes,9,opt,name=current_graph_id,json=currentGraphId,proto3" json:"current_graph_id,omitempty"` // Currently executing action graph ID
+	CurrentTaskId  string   `protobuf:"bytes,10,opt,name=current_task_id,json=currentTaskId,proto3" json:"current_task_id,omitempty"`
+	CurrentStepId  string   `protobuf:"bytes,11,opt,name=current_step_id,json=currentStepId,proto3" json:"current_step_id,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -586,6 +658,20 @@ func (x *AgentHeartbeat) GetCurrentAction() string {
 	return ""
 }
 
+func (x *AgentHeartbeat) GetNetworkLatencyMs() uint32 {
+	if x != nil {
+		return x.NetworkLatencyMs
+	}
+	return 0
+}
+
+func (x *AgentHeartbeat) GetNetworkLatencyUs() uint32 {
+	if x != nil {
+		return x.NetworkLatencyUs
+	}
+	return 0
+}
+
 func (x *AgentHeartbeat) GetStateCode() string {
 	if x != nil {
 		return x.StateCode
@@ -603,6 +689,20 @@ func (x *AgentHeartbeat) GetSemanticTags() []string {
 func (x *AgentHeartbeat) GetCurrentGraphId() string {
 	if x != nil {
 		return x.CurrentGraphId
+	}
+	return ""
+}
+
+func (x *AgentHeartbeat) GetCurrentTaskId() string {
+	if x != nil {
+		return x.CurrentTaskId
+	}
+	return ""
+}
+
+func (x *AgentHeartbeat) GetCurrentStepId() string {
+	if x != nil {
+		return x.CurrentStepId
 	}
 	return ""
 }
@@ -898,6 +998,8 @@ type AgentStateEntry struct {
 	CurrentGraphId string                 `protobuf:"bytes,4,opt,name=current_graph_id,json=currentGraphId,proto3" json:"current_graph_id,omitempty"`
 	IsOnline       bool                   `protobuf:"varint,5,opt,name=is_online,json=isOnline,proto3" json:"is_online,omitempty"`
 	IsExecuting    bool                   `protobuf:"varint,6,opt,name=is_executing,json=isExecuting,proto3" json:"is_executing,omitempty"`
+	StalenessSec   float32                `protobuf:"fixed32,7,opt,name=staleness_sec,json=stalenessSec,proto3" json:"staleness_sec,omitempty"` // Staleness in seconds since last update
+	State          string                 `protobuf:"bytes,8,opt,name=state,proto3" json:"state,omitempty"`                                     // Current state name (e.g., "idle", "executing")
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -972,6 +1074,20 @@ func (x *AgentStateEntry) GetIsExecuting() bool {
 		return x.IsExecuting
 	}
 	return false
+}
+
+func (x *AgentStateEntry) GetStalenessSec() float32 {
+	if x != nil {
+		return x.StalenessSec
+	}
+	return 0
+}
+
+func (x *AgentStateEntry) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
 }
 
 // Deploy action graph command with states
@@ -1573,13 +1689,14 @@ func (x *ActionResult) GetCompletedAtMs() int64 {
 }
 
 type RegisterAgentRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AgentId       string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Namespace     string                 `protobuf:"bytes,3,opt,name=namespace,proto3" json:"namespace,omitempty"` // ROS namespace
-	ClientVersion string                 `protobuf:"bytes,4,opt,name=client_version,json=clientVersion,proto3" json:"client_version,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	AgentId             string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"` // Empty = request server assignment
+	Name                string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Namespace           string                 `protobuf:"bytes,3,opt,name=namespace,proto3" json:"namespace,omitempty"` // ROS namespace
+	ClientVersion       string                 `protobuf:"bytes,4,opt,name=client_version,json=clientVersion,proto3" json:"client_version,omitempty"`
+	HardwareFingerprint string                 `protobuf:"bytes,5,opt,name=hardware_fingerprint,json=hardwareFingerprint,proto3" json:"hardware_fingerprint,omitempty"` // For ID recovery on reconnection
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *RegisterAgentRequest) Reset() {
@@ -1640,14 +1757,23 @@ func (x *RegisterAgentRequest) GetClientVersion() string {
 	return ""
 }
 
+func (x *RegisterAgentRequest) GetHardwareFingerprint() string {
+	if x != nil {
+		return x.HardwareFingerprint
+	}
+	return ""
+}
+
 type RegisterAgentResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
-	Config        *AgentConfig           `protobuf:"bytes,3,opt,name=config,proto3" json:"config,omitempty"`
-	ServerTimeMs  int64                  `protobuf:"varint,4,opt,name=server_time_ms,json=serverTimeMs,proto3" json:"server_time_ms,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Success         bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error           string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	Config          *AgentConfig           `protobuf:"bytes,3,opt,name=config,proto3" json:"config,omitempty"`
+	ServerTimeMs    int64                  `protobuf:"varint,4,opt,name=server_time_ms,json=serverTimeMs,proto3" json:"server_time_ms,omitempty"`
+	AssignedAgentId string                 `protobuf:"bytes,5,opt,name=assigned_agent_id,json=assignedAgentId,proto3" json:"assigned_agent_id,omitempty"` // Server-assigned ID (if id_was_assigned)
+	IdWasAssigned   bool                   `protobuf:"varint,6,opt,name=id_was_assigned,json=idWasAssigned,proto3" json:"id_was_assigned,omitempty"`      // True if server assigned the ID
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RegisterAgentResponse) Reset() {
@@ -1706,6 +1832,20 @@ func (x *RegisterAgentResponse) GetServerTimeMs() int64 {
 		return x.ServerTimeMs
 	}
 	return 0
+}
+
+func (x *RegisterAgentResponse) GetAssignedAgentId() string {
+	if x != nil {
+		return x.AssignedAgentId
+	}
+	return ""
+}
+
+func (x *RegisterAgentResponse) GetIdWasAssigned() bool {
+	if x != nil {
+		return x.IdWasAssigned
+	}
+	return false
 }
 
 type AgentConfig struct {
@@ -2593,11 +2733,119 @@ func (x *PreconditionResult) GetMatchedAgents() []string {
 	return nil
 }
 
+type TaskLog struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AgentId       string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	TaskId        string                 `protobuf:"bytes,2,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	StepId        string                 `protobuf:"bytes,3,opt,name=step_id,json=stepId,proto3" json:"step_id,omitempty"`
+	CommandId     string                 `protobuf:"bytes,4,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	Level         TaskLogLevel           `protobuf:"varint,5,opt,name=level,proto3,enum=fleet.TaskLogLevel" json:"level,omitempty"`
+	Message       string                 `protobuf:"bytes,6,opt,name=message,proto3" json:"message,omitempty"`
+	TimestampMs   int64                  `protobuf:"varint,7,opt,name=timestamp_ms,json=timestampMs,proto3" json:"timestamp_ms,omitempty"`
+	Component     string                 `protobuf:"bytes,8,opt,name=component,proto3" json:"component,omitempty"`                                                                         // e.g., "CommandProcessor", "ActionExecutor"
+	Metadata      map[string]string      `protobuf:"bytes,9,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // Additional context
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TaskLog) Reset() {
+	*x = TaskLog{}
+	mi := &file_fleet_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskLog) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskLog) ProtoMessage() {}
+
+func (x *TaskLog) ProtoReflect() protoreflect.Message {
+	mi := &file_fleet_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskLog.ProtoReflect.Descriptor instead.
+func (*TaskLog) Descriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *TaskLog) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *TaskLog) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *TaskLog) GetStepId() string {
+	if x != nil {
+		return x.StepId
+	}
+	return ""
+}
+
+func (x *TaskLog) GetCommandId() string {
+	if x != nil {
+		return x.CommandId
+	}
+	return ""
+}
+
+func (x *TaskLog) GetLevel() TaskLogLevel {
+	if x != nil {
+		return x.Level
+	}
+	return TaskLogLevel_TASK_LOG_DEBUG
+}
+
+func (x *TaskLog) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *TaskLog) GetTimestampMs() int64 {
+	if x != nil {
+		return x.TimestampMs
+	}
+	return 0
+}
+
+func (x *TaskLog) GetComponent() string {
+	if x != nil {
+		return x.Component
+	}
+	return ""
+}
+
+func (x *TaskLog) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
 var File_fleet_proto protoreflect.FileDescriptor
 
 const file_fleet_proto_rawDesc = "" +
 	"\n" +
-	"\vfleet.proto\x12\x05fleet\"\xc9\x02\n" +
+	"\vfleet.proto\x12\x05fleet\"\xf6\x02\n" +
 	"\fAgentMessage\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12!\n" +
 	"\ftimestamp_ms\x18\x02 \x01(\x03R\vtimestampMs\x125\n" +
@@ -2605,7 +2853,8 @@ const file_fleet_proto_rawDesc = "" +
 	" \x01(\v2\x15.fleet.AgentHeartbeatH\x00R\theartbeat\x12:\n" +
 	"\raction_result\x18\v \x01(\v2\x13.fleet.ActionResultH\x00R\factionResult\x12?\n" +
 	"\rstatus_update\x18\f \x01(\v2\x18.fleet.AgentStatusUpdateH\x00R\fstatusUpdate\x12<\n" +
-	"\fstate_update\x18\r \x01(\v2\x17.fleet.AgentStateUpdateH\x00R\vstateUpdateB\t\n" +
+	"\fstate_update\x18\r \x01(\v2\x17.fleet.AgentStateUpdateH\x00R\vstateUpdate\x12+\n" +
+	"\btask_log\x18\x0e \x01(\v2\x0e.fleet.TaskLogH\x00R\ataskLogB\t\n" +
 	"\apayload\"\xe8\x02\n" +
 	"\x10AgentStateUpdate\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1d\n" +
@@ -2622,16 +2871,21 @@ const file_fleet_proto_rawDesc = "" +
 	"PHASE_IDLE\x10\x01\x12\x13\n" +
 	"\x0fPHASE_EXECUTING\x10\x02\x12\x11\n" +
 	"\rPHASE_SUCCESS\x10\x03\x12\x10\n" +
-	"\fPHASE_FAILED\x10\x04\"\x85\x02\n" +
+	"\fPHASE_FAILED\x10\x04\"\xa5\x03\n" +
 	"\x0eAgentHeartbeat\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\tR\x05state\x12!\n" +
 	"\fis_executing\x18\x03 \x01(\bR\visExecuting\x12%\n" +
-	"\x0ecurrent_action\x18\x04 \x01(\tR\rcurrentAction\x12\x1d\n" +
+	"\x0ecurrent_action\x18\x04 \x01(\tR\rcurrentAction\x12,\n" +
+	"\x12network_latency_ms\x18\x05 \x01(\rR\x10networkLatencyMs\x12,\n" +
+	"\x12network_latency_us\x18\x06 \x01(\rR\x10networkLatencyUs\x12\x1d\n" +
 	"\n" +
 	"state_code\x18\a \x01(\tR\tstateCode\x12#\n" +
 	"\rsemantic_tags\x18\b \x03(\tR\fsemanticTags\x12(\n" +
-	"\x10current_graph_id\x18\t \x01(\tR\x0ecurrentGraphIdJ\x04\b\x05\x10\x06J\x04\b\x06\x10\a\"s\n" +
+	"\x10current_graph_id\x18\t \x01(\tR\x0ecurrentGraphId\x12&\n" +
+	"\x0fcurrent_task_id\x18\n" +
+	" \x01(\tR\rcurrentTaskId\x12&\n" +
+	"\x0fcurrent_step_id\x18\v \x01(\tR\rcurrentStepId\"s\n" +
 	"\x11AgentStatusUpdate\x12'\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x11.fleet.AgentStateR\x05state\x12\x1b\n" +
 	"\tis_online\x18\x02 \x01(\bR\bisOnline\x12\x18\n" +
@@ -2651,7 +2905,7 @@ const file_fleet_proto_rawDesc = "" +
 	"\apayload\"e\n" +
 	"\x10FleetStateUpdate\x12!\n" +
 	"\ftimestamp_ms\x18\x01 \x01(\x03R\vtimestampMs\x12.\n" +
-	"\x06agents\x18\x02 \x03(\v2\x16.fleet.AgentStateEntryR\x06agents\"\xda\x01\n" +
+	"\x06agents\x18\x02 \x03(\v2\x16.fleet.AgentStateEntryR\x06agents\"\x95\x02\n" +
 	"\x0fAgentStateEntry\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1d\n" +
 	"\n" +
@@ -2659,7 +2913,9 @@ const file_fleet_proto_rawDesc = "" +
 	"\rsemantic_tags\x18\x03 \x03(\tR\fsemanticTags\x12(\n" +
 	"\x10current_graph_id\x18\x04 \x01(\tR\x0ecurrentGraphId\x12\x1b\n" +
 	"\tis_online\x18\x05 \x01(\bR\bisOnline\x12!\n" +
-	"\fis_executing\x18\x06 \x01(\bR\visExecuting\"\xf6\x01\n" +
+	"\fis_executing\x18\x06 \x01(\bR\visExecuting\x12#\n" +
+	"\rstaleness_sec\x18\a \x01(\x02R\fstalenessSec\x12\x14\n" +
+	"\x05state\x18\b \x01(\tR\x05state\"\xf6\x01\n" +
 	"\x12DeployGraphCommand\x12\x1d\n" +
 	"\n" +
 	"command_id\x18\x01 \x01(\tR\tcommandId\x12\x19\n" +
@@ -2718,17 +2974,20 @@ const file_fleet_proto_rawDesc = "" +
 	"\x06result\x18\x06 \x01(\fR\x06result\x12\x14\n" +
 	"\x05error\x18\a \x01(\tR\x05error\x12\"\n" +
 	"\rstarted_at_ms\x18\b \x01(\x03R\vstartedAtMs\x12&\n" +
-	"\x0fcompleted_at_ms\x18\t \x01(\x03R\rcompletedAtMs\"\x8a\x01\n" +
+	"\x0fcompleted_at_ms\x18\t \x01(\x03R\rcompletedAtMs\"\xbd\x01\n" +
 	"\x14RegisterAgentRequest\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x03 \x01(\tR\tnamespace\x12%\n" +
-	"\x0eclient_version\x18\x04 \x01(\tR\rclientVersion\"\x99\x01\n" +
+	"\x0eclient_version\x18\x04 \x01(\tR\rclientVersion\x121\n" +
+	"\x14hardware_fingerprint\x18\x05 \x01(\tR\x13hardwareFingerprint\"\xed\x01\n" +
 	"\x15RegisterAgentResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12*\n" +
 	"\x06config\x18\x03 \x01(\v2\x12.fleet.AgentConfigR\x06config\x12$\n" +
-	"\x0eserver_time_ms\x18\x04 \x01(\x03R\fserverTimeMs\"\x82\x01\n" +
+	"\x0eserver_time_ms\x18\x04 \x01(\x03R\fserverTimeMs\x12*\n" +
+	"\x11assigned_agent_id\x18\x05 \x01(\tR\x0fassignedAgentId\x12&\n" +
+	"\x0fid_was_assigned\x18\x06 \x01(\bR\ridWasAssigned\"\x82\x01\n" +
 	"\vAgentConfig\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12)\n" +
 	"\x10state_definition\x18\x02 \x01(\fR\x0fstateDefinition\x12-\n" +
@@ -2821,7 +3080,21 @@ const file_fleet_proto_rawDesc = "" +
 	"\x12PreconditionResult\x12\x1c\n" +
 	"\tsatisfied\x18\x01 \x01(\bR\tsatisfied\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12%\n" +
-	"\x0ematched_agents\x18\x03 \x03(\tR\rmatchedAgents*\\\n" +
+	"\x0ematched_agents\x18\x03 \x03(\tR\rmatchedAgents\"\xf2\x02\n" +
+	"\aTaskLog\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x17\n" +
+	"\atask_id\x18\x02 \x01(\tR\x06taskId\x12\x17\n" +
+	"\astep_id\x18\x03 \x01(\tR\x06stepId\x12\x1d\n" +
+	"\n" +
+	"command_id\x18\x04 \x01(\tR\tcommandId\x12)\n" +
+	"\x05level\x18\x05 \x01(\x0e2\x13.fleet.TaskLogLevelR\x05level\x12\x18\n" +
+	"\amessage\x18\x06 \x01(\tR\amessage\x12!\n" +
+	"\ftimestamp_ms\x18\a \x01(\x03R\vtimestampMs\x12\x1c\n" +
+	"\tcomponent\x18\b \x01(\tR\tcomponent\x128\n" +
+	"\bmetadata\x18\t \x03(\v2\x1c.fleet.TaskLog.MetadataEntryR\bmetadata\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*\\\n" +
 	"\n" +
 	"AgentState\x12\x11\n" +
 	"\rAGENT_UNKNOWN\x10\x00\x12\x10\n" +
@@ -2834,7 +3107,12 @@ const file_fleet_proto_rawDesc = "" +
 	"\rACTION_FAILED\x10\x02\x12\x14\n" +
 	"\x10ACTION_CANCELLED\x10\x03\x12\x12\n" +
 	"\x0eACTION_TIMEOUT\x10\x04\x12\x13\n" +
-	"\x0fACTION_REJECTED\x10\x052\x9a\x03\n" +
+	"\x0fACTION_REJECTED\x10\x05*\\\n" +
+	"\fTaskLogLevel\x12\x12\n" +
+	"\x0eTASK_LOG_DEBUG\x10\x00\x12\x11\n" +
+	"\rTASK_LOG_INFO\x10\x01\x12\x11\n" +
+	"\rTASK_LOG_WARN\x10\x02\x12\x12\n" +
+	"\x0eTASK_LOG_ERROR\x10\x032\x9a\x03\n" +
 	"\fFleetControl\x12>\n" +
 	"\rCommandStream\x12\x13.fleet.AgentMessage\x1a\x14.fleet.ServerMessage(\x010\x01\x12J\n" +
 	"\rRegisterAgent\x12\x1b.fleet.RegisterAgentRequest\x1a\x1c.fleet.RegisterAgentResponse\x12/\n" +
@@ -2857,85 +3135,91 @@ func file_fleet_proto_rawDescGZIP() []byte {
 	return file_fleet_proto_rawDescData
 }
 
-var file_fleet_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_fleet_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_fleet_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
+var file_fleet_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
 var file_fleet_proto_goTypes = []any{
 	(AgentState)(0),                                // 0: fleet.AgentState
 	(ActionStatus)(0),                              // 1: fleet.ActionStatus
-	(AgentStateUpdate_StatePhase)(0),               // 2: fleet.AgentStateUpdate.StatePhase
-	(EnhancedPrecondition_PreconditionType)(0),     // 3: fleet.EnhancedPrecondition.PreconditionType
-	(EnhancedPrecondition_PreconditionOperator)(0), // 4: fleet.EnhancedPrecondition.PreconditionOperator
-	(*AgentMessage)(nil),                           // 5: fleet.AgentMessage
-	(*AgentStateUpdate)(nil),                       // 6: fleet.AgentStateUpdate
-	(*AgentHeartbeat)(nil),                         // 7: fleet.AgentHeartbeat
-	(*AgentStatusUpdate)(nil),                      // 8: fleet.AgentStatusUpdate
-	(*ServerMessage)(nil),                          // 9: fleet.ServerMessage
-	(*FleetStateUpdate)(nil),                       // 10: fleet.FleetStateUpdate
-	(*AgentStateEntry)(nil),                        // 11: fleet.AgentStateEntry
-	(*DeployGraphCommand)(nil),                     // 12: fleet.DeployGraphCommand
-	(*GraphState)(nil),                             // 13: fleet.GraphState
-	(*ExecuteCommand)(nil),                         // 14: fleet.ExecuteCommand
-	(*CancelCommand)(nil),                          // 15: fleet.CancelCommand
-	(*ServerAck)(nil),                              // 16: fleet.ServerAck
-	(*ConfigUpdate)(nil),                           // 17: fleet.ConfigUpdate
-	(*ActionResult)(nil),                           // 18: fleet.ActionResult
-	(*RegisterAgentRequest)(nil),                   // 19: fleet.RegisterAgentRequest
-	(*RegisterAgentResponse)(nil),                  // 20: fleet.RegisterAgentResponse
-	(*AgentConfig)(nil),                            // 21: fleet.AgentConfig
-	(*ExecuteTaskRequest)(nil),                     // 22: fleet.ExecuteTaskRequest
-	(*ExecuteTaskResponse)(nil),                    // 23: fleet.ExecuteTaskResponse
-	(*CancelTaskRequest)(nil),                      // 24: fleet.CancelTaskRequest
-	(*CancelTaskResponse)(nil),                     // 25: fleet.CancelTaskResponse
-	(*FleetStateRequest)(nil),                      // 26: fleet.FleetStateRequest
-	(*FleetStateResponse)(nil),                     // 27: fleet.FleetStateResponse
-	(*AgentStateSnapshot)(nil),                     // 28: fleet.AgentStateSnapshot
-	(*ZoneReservation)(nil),                        // 29: fleet.ZoneReservation
-	(*Ack)(nil),                                    // 30: fleet.Ack
-	(*EnhancedPrecondition)(nil),                   // 31: fleet.EnhancedPrecondition
-	(*PreconditionFilter)(nil),                     // 32: fleet.PreconditionFilter
-	(*PreconditionResult)(nil),                     // 33: fleet.PreconditionResult
-	nil,                                            // 34: fleet.FleetStateResponse.AgentsEntry
+	(TaskLogLevel)(0),                              // 2: fleet.TaskLogLevel
+	(AgentStateUpdate_StatePhase)(0),               // 3: fleet.AgentStateUpdate.StatePhase
+	(EnhancedPrecondition_PreconditionType)(0),     // 4: fleet.EnhancedPrecondition.PreconditionType
+	(EnhancedPrecondition_PreconditionOperator)(0), // 5: fleet.EnhancedPrecondition.PreconditionOperator
+	(*AgentMessage)(nil),                           // 6: fleet.AgentMessage
+	(*AgentStateUpdate)(nil),                       // 7: fleet.AgentStateUpdate
+	(*AgentHeartbeat)(nil),                         // 8: fleet.AgentHeartbeat
+	(*AgentStatusUpdate)(nil),                      // 9: fleet.AgentStatusUpdate
+	(*ServerMessage)(nil),                          // 10: fleet.ServerMessage
+	(*FleetStateUpdate)(nil),                       // 11: fleet.FleetStateUpdate
+	(*AgentStateEntry)(nil),                        // 12: fleet.AgentStateEntry
+	(*DeployGraphCommand)(nil),                     // 13: fleet.DeployGraphCommand
+	(*GraphState)(nil),                             // 14: fleet.GraphState
+	(*ExecuteCommand)(nil),                         // 15: fleet.ExecuteCommand
+	(*CancelCommand)(nil),                          // 16: fleet.CancelCommand
+	(*ServerAck)(nil),                              // 17: fleet.ServerAck
+	(*ConfigUpdate)(nil),                           // 18: fleet.ConfigUpdate
+	(*ActionResult)(nil),                           // 19: fleet.ActionResult
+	(*RegisterAgentRequest)(nil),                   // 20: fleet.RegisterAgentRequest
+	(*RegisterAgentResponse)(nil),                  // 21: fleet.RegisterAgentResponse
+	(*AgentConfig)(nil),                            // 22: fleet.AgentConfig
+	(*ExecuteTaskRequest)(nil),                     // 23: fleet.ExecuteTaskRequest
+	(*ExecuteTaskResponse)(nil),                    // 24: fleet.ExecuteTaskResponse
+	(*CancelTaskRequest)(nil),                      // 25: fleet.CancelTaskRequest
+	(*CancelTaskResponse)(nil),                     // 26: fleet.CancelTaskResponse
+	(*FleetStateRequest)(nil),                      // 27: fleet.FleetStateRequest
+	(*FleetStateResponse)(nil),                     // 28: fleet.FleetStateResponse
+	(*AgentStateSnapshot)(nil),                     // 29: fleet.AgentStateSnapshot
+	(*ZoneReservation)(nil),                        // 30: fleet.ZoneReservation
+	(*Ack)(nil),                                    // 31: fleet.Ack
+	(*EnhancedPrecondition)(nil),                   // 32: fleet.EnhancedPrecondition
+	(*PreconditionFilter)(nil),                     // 33: fleet.PreconditionFilter
+	(*PreconditionResult)(nil),                     // 34: fleet.PreconditionResult
+	(*TaskLog)(nil),                                // 35: fleet.TaskLog
+	nil,                                            // 36: fleet.FleetStateResponse.AgentsEntry
+	nil,                                            // 37: fleet.TaskLog.MetadataEntry
 }
 var file_fleet_proto_depIdxs = []int32{
-	7,  // 0: fleet.AgentMessage.heartbeat:type_name -> fleet.AgentHeartbeat
-	18, // 1: fleet.AgentMessage.action_result:type_name -> fleet.ActionResult
-	8,  // 2: fleet.AgentMessage.status_update:type_name -> fleet.AgentStatusUpdate
-	6,  // 3: fleet.AgentMessage.state_update:type_name -> fleet.AgentStateUpdate
-	2,  // 4: fleet.AgentStateUpdate.phase:type_name -> fleet.AgentStateUpdate.StatePhase
-	0,  // 5: fleet.AgentStatusUpdate.state:type_name -> fleet.AgentState
-	14, // 6: fleet.ServerMessage.execute:type_name -> fleet.ExecuteCommand
-	15, // 7: fleet.ServerMessage.cancel:type_name -> fleet.CancelCommand
-	16, // 8: fleet.ServerMessage.ack:type_name -> fleet.ServerAck
-	17, // 9: fleet.ServerMessage.config_update:type_name -> fleet.ConfigUpdate
-	10, // 10: fleet.ServerMessage.fleet_state_update:type_name -> fleet.FleetStateUpdate
-	12, // 11: fleet.ServerMessage.deploy_graph:type_name -> fleet.DeployGraphCommand
-	11, // 12: fleet.FleetStateUpdate.agents:type_name -> fleet.AgentStateEntry
-	13, // 13: fleet.DeployGraphCommand.states:type_name -> fleet.GraphState
-	1,  // 14: fleet.ActionResult.status:type_name -> fleet.ActionStatus
-	21, // 15: fleet.RegisterAgentResponse.config:type_name -> fleet.AgentConfig
-	34, // 16: fleet.FleetStateResponse.agents:type_name -> fleet.FleetStateResponse.AgentsEntry
-	29, // 17: fleet.FleetStateResponse.zones:type_name -> fleet.ZoneReservation
-	3,  // 18: fleet.EnhancedPrecondition.type:type_name -> fleet.EnhancedPrecondition.PreconditionType
-	32, // 19: fleet.EnhancedPrecondition.filter:type_name -> fleet.PreconditionFilter
-	4,  // 20: fleet.EnhancedPrecondition.operator:type_name -> fleet.EnhancedPrecondition.PreconditionOperator
-	28, // 21: fleet.FleetStateResponse.AgentsEntry.value:type_name -> fleet.AgentStateSnapshot
-	5,  // 22: fleet.FleetControl.CommandStream:input_type -> fleet.AgentMessage
-	19, // 23: fleet.FleetControl.RegisterAgent:input_type -> fleet.RegisterAgentRequest
-	18, // 24: fleet.FleetControl.ReportResult:input_type -> fleet.ActionResult
-	22, // 25: fleet.FleetControl.ExecuteTask:input_type -> fleet.ExecuteTaskRequest
-	24, // 26: fleet.FleetControl.CancelTask:input_type -> fleet.CancelTaskRequest
-	26, // 27: fleet.FleetControl.GetFleetState:input_type -> fleet.FleetStateRequest
-	9,  // 28: fleet.FleetControl.CommandStream:output_type -> fleet.ServerMessage
-	20, // 29: fleet.FleetControl.RegisterAgent:output_type -> fleet.RegisterAgentResponse
-	30, // 30: fleet.FleetControl.ReportResult:output_type -> fleet.Ack
-	23, // 31: fleet.FleetControl.ExecuteTask:output_type -> fleet.ExecuteTaskResponse
-	25, // 32: fleet.FleetControl.CancelTask:output_type -> fleet.CancelTaskResponse
-	27, // 33: fleet.FleetControl.GetFleetState:output_type -> fleet.FleetStateResponse
-	28, // [28:34] is the sub-list for method output_type
-	22, // [22:28] is the sub-list for method input_type
-	22, // [22:22] is the sub-list for extension type_name
-	22, // [22:22] is the sub-list for extension extendee
-	0,  // [0:22] is the sub-list for field type_name
+	8,  // 0: fleet.AgentMessage.heartbeat:type_name -> fleet.AgentHeartbeat
+	19, // 1: fleet.AgentMessage.action_result:type_name -> fleet.ActionResult
+	9,  // 2: fleet.AgentMessage.status_update:type_name -> fleet.AgentStatusUpdate
+	7,  // 3: fleet.AgentMessage.state_update:type_name -> fleet.AgentStateUpdate
+	35, // 4: fleet.AgentMessage.task_log:type_name -> fleet.TaskLog
+	3,  // 5: fleet.AgentStateUpdate.phase:type_name -> fleet.AgentStateUpdate.StatePhase
+	0,  // 6: fleet.AgentStatusUpdate.state:type_name -> fleet.AgentState
+	15, // 7: fleet.ServerMessage.execute:type_name -> fleet.ExecuteCommand
+	16, // 8: fleet.ServerMessage.cancel:type_name -> fleet.CancelCommand
+	17, // 9: fleet.ServerMessage.ack:type_name -> fleet.ServerAck
+	18, // 10: fleet.ServerMessage.config_update:type_name -> fleet.ConfigUpdate
+	11, // 11: fleet.ServerMessage.fleet_state_update:type_name -> fleet.FleetStateUpdate
+	13, // 12: fleet.ServerMessage.deploy_graph:type_name -> fleet.DeployGraphCommand
+	12, // 13: fleet.FleetStateUpdate.agents:type_name -> fleet.AgentStateEntry
+	14, // 14: fleet.DeployGraphCommand.states:type_name -> fleet.GraphState
+	1,  // 15: fleet.ActionResult.status:type_name -> fleet.ActionStatus
+	22, // 16: fleet.RegisterAgentResponse.config:type_name -> fleet.AgentConfig
+	36, // 17: fleet.FleetStateResponse.agents:type_name -> fleet.FleetStateResponse.AgentsEntry
+	30, // 18: fleet.FleetStateResponse.zones:type_name -> fleet.ZoneReservation
+	4,  // 19: fleet.EnhancedPrecondition.type:type_name -> fleet.EnhancedPrecondition.PreconditionType
+	33, // 20: fleet.EnhancedPrecondition.filter:type_name -> fleet.PreconditionFilter
+	5,  // 21: fleet.EnhancedPrecondition.operator:type_name -> fleet.EnhancedPrecondition.PreconditionOperator
+	2,  // 22: fleet.TaskLog.level:type_name -> fleet.TaskLogLevel
+	37, // 23: fleet.TaskLog.metadata:type_name -> fleet.TaskLog.MetadataEntry
+	29, // 24: fleet.FleetStateResponse.AgentsEntry.value:type_name -> fleet.AgentStateSnapshot
+	6,  // 25: fleet.FleetControl.CommandStream:input_type -> fleet.AgentMessage
+	20, // 26: fleet.FleetControl.RegisterAgent:input_type -> fleet.RegisterAgentRequest
+	19, // 27: fleet.FleetControl.ReportResult:input_type -> fleet.ActionResult
+	23, // 28: fleet.FleetControl.ExecuteTask:input_type -> fleet.ExecuteTaskRequest
+	25, // 29: fleet.FleetControl.CancelTask:input_type -> fleet.CancelTaskRequest
+	27, // 30: fleet.FleetControl.GetFleetState:input_type -> fleet.FleetStateRequest
+	10, // 31: fleet.FleetControl.CommandStream:output_type -> fleet.ServerMessage
+	21, // 32: fleet.FleetControl.RegisterAgent:output_type -> fleet.RegisterAgentResponse
+	31, // 33: fleet.FleetControl.ReportResult:output_type -> fleet.Ack
+	24, // 34: fleet.FleetControl.ExecuteTask:output_type -> fleet.ExecuteTaskResponse
+	26, // 35: fleet.FleetControl.CancelTask:output_type -> fleet.CancelTaskResponse
+	28, // 36: fleet.FleetControl.GetFleetState:output_type -> fleet.FleetStateResponse
+	31, // [31:37] is the sub-list for method output_type
+	25, // [25:31] is the sub-list for method input_type
+	25, // [25:25] is the sub-list for extension type_name
+	25, // [25:25] is the sub-list for extension extendee
+	0,  // [0:25] is the sub-list for field type_name
 }
 
 func init() { file_fleet_proto_init() }
@@ -2948,6 +3232,7 @@ func file_fleet_proto_init() {
 		(*AgentMessage_ActionResult)(nil),
 		(*AgentMessage_StatusUpdate)(nil),
 		(*AgentMessage_StateUpdate)(nil),
+		(*AgentMessage_TaskLog)(nil),
 	}
 	file_fleet_proto_msgTypes[4].OneofWrappers = []any{
 		(*ServerMessage_Execute)(nil),
@@ -2963,8 +3248,8 @@ func file_fleet_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_fleet_proto_rawDesc), len(file_fleet_proto_rawDesc)),
-			NumEnums:      5,
-			NumMessages:   30,
+			NumEnums:      6,
+			NumMessages:   32,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

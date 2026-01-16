@@ -20,6 +20,10 @@ type Agent struct {
 	CreatedAt    time.Time `gorm:"autoCreateTime"`
 	UpdatedAt    time.Time `gorm:"autoUpdateTime"`
 
+	// Server-assigned ID support
+	HardwareFingerprint sql.NullString `gorm:"size:64;index"` // Hardware fingerprint for ID recovery
+	AssignedByServer    bool           `gorm:"default:false"` // True if ID was assigned by server
+
 	// Enhanced state tracking
 	CurrentStateCode string         `gorm:"size:100;default:idle"` // Current state code (e.g., "pick:executing")
 	SemanticTags     datatypes.JSON `gorm:"type:jsonb"`            // Current semantic tags []string
@@ -207,7 +211,7 @@ type Task struct {
 	ID               string         `gorm:"primaryKey;size:50"`
 	ActionGraphID    sql.NullString `gorm:"size:50"`
 	AgentID          sql.NullString `gorm:"size:50"`
-	Status           string         `gorm:"size:20;not null;default:pending"` // pending, running, completed, failed, cancelled, paused
+	Status           string         `gorm:"size:20;not null;default:pending"` // pending, running, completed, failed, cancelled, paused, waiting_precondition
 	CurrentStepID    sql.NullString `gorm:"size:50"`
 	CurrentStepIndex int            `gorm:"default:0"`
 	StepResults      datatypes.JSON `gorm:"type:jsonb"`
@@ -217,9 +221,25 @@ type Task struct {
 	StartedAt        sql.NullTime
 	CompletedAt      sql.NullTime
 
+	// Precondition waiting state
+	WaitingForPreconditionSince sql.NullTime   `gorm:"column:waiting_for_precondition_since"`
+	BlockingConditions          datatypes.JSON `gorm:"type:jsonb"` // []BlockingConditionInfo
+	PreconditionTimeoutSec      int            `gorm:"default:300"` // Default 5 minutes
+
 	// Relationships
 	ActionGraph *ActionGraph `gorm:"foreignKey:ActionGraphID"`
 	Agent       *Agent       `gorm:"foreignKey:AgentID"`
+}
+
+// BlockingConditionInfo describes why a precondition is blocking
+type BlockingConditionInfo struct {
+	ConditionID     string `json:"condition_id"`
+	Description     string `json:"description"`
+	TargetAgentID   string `json:"target_agent_id,omitempty"`
+	TargetAgentName string `json:"target_agent_name,omitempty"`
+	RequiredState   string `json:"required_state"`
+	CurrentState    string `json:"current_state,omitempty"`
+	Reason          string `json:"reason"` // state_mismatch, agent_offline, state_too_old
 }
 
 func (Task) TableName() string {

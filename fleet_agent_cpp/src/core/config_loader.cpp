@@ -198,6 +198,7 @@ StorageConfig parse_storage_config(const YAML::Node& node, const YAML::Node& pat
         config.state_definitions_path = get_string(node, "state_definitions_path", config.state_definitions_path);
         config.state_persistence_path = get_string(node, "state_persistence_path", config.state_persistence_path);
         config.message_queue_path = get_string(node, "message_queue_path", config.message_queue_path);
+        config.agent_id_path = get_string(node, "agent_id_path", config.agent_id_path);
         config.enable_state_persistence = get_bool(node, "enable_state_persistence", config.enable_state_persistence);
         config.enable_message_persistence = get_bool(node, "enable_message_persistence", config.enable_message_persistence);
     }
@@ -205,6 +206,7 @@ StorageConfig parse_storage_config(const YAML::Node& node, const YAML::Node& pat
     // Also check paths section
     if (paths) {
         config.action_graphs_path = get_string(paths, "action_graphs", config.action_graphs_path);
+        config.agent_id_path = get_string(paths, "agent_id", config.agent_id_path);
     }
 
     return config;
@@ -258,8 +260,10 @@ std::string expand_env_vars(const std::string& value) {
 }
 
 void validate_config(const AgentConfig& config) {
-    if (config.agent_id.empty()) {
-        throw ConfigValidationError("agent.id is required");
+    // agent.id is optional when use_server_assigned_id is true (default)
+    // In this case, the server will assign an ID on first connection
+    if (config.agent_id.empty() && !config.use_server_assigned_id) {
+        throw ConfigValidationError("agent.id is required when use_server_assigned_id is false");
     }
 
     // Robots section is optional - capabilities are discovered at agent level
@@ -285,7 +289,11 @@ void validate_config(const AgentConfig& config) {
 void apply_defaults(AgentConfig& config) {
     // Generate default agent name if not set
     if (config.agent_name.empty()) {
-        config.agent_name = "Fleet Agent " + config.agent_id;
+        if (!config.agent_id.empty()) {
+            config.agent_name = "Fleet Agent " + config.agent_id;
+        } else {
+            config.agent_name = "Fleet Agent";  // Will be updated after server assigns ID
+        }
     }
 
     // Apply robot defaults
@@ -310,6 +318,8 @@ AgentConfig load_config_from_string(const std::string& yaml_content) {
     if (root["agent"]) {
         config.agent_id = get_string(root["agent"], "id");
         config.agent_name = get_string(root["agent"], "name");
+        // use_server_assigned_id defaults to true, allowing server to assign ID when agent.id is empty
+        config.use_server_assigned_id = get_bool(root["agent"], "use_server_assigned_id", true);
     }
 
     // Parse robots section
@@ -441,8 +451,9 @@ std::string get_example_config() {
 # Agent-based capability model: all visible action servers belong to this agent
 
 agent:
-  id: "agent_01"
+  # id: "agent_01"  # Optional: if omitted, server will auto-assign a UUID
   name: "Factory Agent"
+  use_server_assigned_id: true  # Default: true. Set to false to require explicit id
 
 server:
   url: "http://192.168.0.200:8081"
@@ -459,8 +470,9 @@ server:
     enable_0rtt: true
     enable_datagrams: true
 
-storage:
-  action_graphs_path: "/var/lib/fleet_agent/graphs"
+paths:
+  action_graphs: "/var/lib/fleet_agent/graphs"
+  agent_id: "/var/lib/fleet_agent/agent_id"  # Stores server-assigned ID for persistence
 
 logging:
   level: "info"

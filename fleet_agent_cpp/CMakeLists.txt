@@ -135,6 +135,7 @@ set(FLEET_AGENT_SOURCES
   src/core/config_loader.cpp
   src/core/shutdown.cpp
   src/core/logger.cpp
+  src/core/agent_id_storage.cpp
 
   # Capability
   src/capability/type_loader.cpp

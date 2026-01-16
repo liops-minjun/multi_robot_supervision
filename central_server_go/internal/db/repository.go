@@ -434,12 +434,14 @@ func (r *Repository) CreateOrUpdateAgent(agent *Agent) error {
 	}
 	ctx := context.Background()
 	props := map[string]any{
-		"id":            agent.ID,
-		"name":          agent.Name,
-		"ip_address":    agent.IPAddress.String,
-		"status":        agent.Status,
-		"created_at_ms": timeToMillis(agent.CreatedAt),
-		"last_seen_ms":  timeToMillis(agent.LastSeen.Time),
+		"id":                   agent.ID,
+		"name":                 agent.Name,
+		"ip_address":           agent.IPAddress.String,
+		"status":               agent.Status,
+		"hardware_fingerprint": agent.HardwareFingerprint.String,
+		"assigned_by_server":   agent.AssignedByServer,
+		"created_at_ms":        timeToMillis(agent.CreatedAt),
+		"last_seen_ms":         timeToMillis(agent.LastSeen.Time),
 	}
 	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
 		_, err := tx.Run(ctx, `
@@ -447,12 +449,61 @@ func (r *Repository) CreateOrUpdateAgent(agent *Agent) error {
 			SET a.name = $name,
 			    a.ip_address = $ip_address,
 			    a.status = $status,
+			    a.hardware_fingerprint = $hardware_fingerprint,
+			    a.assigned_by_server = $assigned_by_server,
 			    a.created_at_ms = coalesce(a.created_at_ms, $created_at_ms),
 			    a.last_seen_ms = $last_seen_ms
 		`, props)
 		return nil, err
 	})
 	return err
+}
+
+// GetAgentByHardwareFingerprint retrieves an agent by its hardware fingerprint
+func (r *Repository) GetAgentByHardwareFingerprint(fingerprint string) (*Agent, error) {
+	if fingerprint == "" {
+		return nil, nil
+	}
+	ctx := context.Background()
+	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
+		result, err := tx.Run(ctx, `
+			MATCH (a:Agent {hardware_fingerprint: $fingerprint})
+			RETURN a.id AS id, a.name AS name, a.status AS status,
+			       a.hardware_fingerprint AS hardware_fingerprint,
+			       a.assigned_by_server AS assigned_by_server
+		`, map[string]any{"fingerprint": fingerprint})
+		if err != nil {
+			return nil, err
+		}
+		if result.Next(ctx) {
+			rec := result.Record()
+			agent := &Agent{}
+			if v, ok := rec.Get("id"); ok && v != nil {
+				agent.ID = v.(string)
+			}
+			if v, ok := rec.Get("name"); ok && v != nil {
+				agent.Name = v.(string)
+			}
+			if v, ok := rec.Get("status"); ok && v != nil {
+				agent.Status = v.(string)
+			}
+			if v, ok := rec.Get("hardware_fingerprint"); ok && v != nil {
+				agent.HardwareFingerprint = sql.NullString{String: v.(string), Valid: true}
+			}
+			if v, ok := rec.Get("assigned_by_server"); ok && v != nil {
+				agent.AssignedByServer = v.(bool)
+			}
+			return agent, nil
+		}
+		return nil, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, nil
+	}
+	return result.(*Agent), nil
 }
 
 func (r *Repository) CreateAgent(agent *Agent) error {
@@ -1800,6 +1851,43 @@ func (r *Repository) UpdateTaskStatus(id, status string, stepID string, stepInde
 			    t.current_step_id = $current_step_id,
 			    t.current_step_index = $current_step_index,
 			    t.error_message = $error_message,
+			    t.updated_at_ms = $now_ms
+		`, props)
+		return nil, err
+	})
+	return err
+}
+
+// UpdateTaskPreconditionStatus updates the precondition waiting status of a task
+func (r *Repository) UpdateTaskPreconditionStatus(taskID string, waiting bool, blockingConditions []BlockingConditionInfo) error {
+	ctx := context.Background()
+
+	var blockingJSON []byte
+	var err error
+	if waiting && len(blockingConditions) > 0 {
+		blockingJSON, err = json.Marshal(blockingConditions)
+		if err != nil {
+			return fmt.Errorf("failed to marshal blocking conditions: %w", err)
+		}
+	}
+
+	var waitingSinceMs int64
+	if waiting {
+		waitingSinceMs = time.Now().UTC().UnixMilli()
+	}
+
+	props := map[string]any{
+		"id":                             taskID,
+		"waiting_for_precondition_since": waitingSinceMs,
+		"blocking_conditions_json":       string(blockingJSON),
+		"now_ms":                         time.Now().UTC().UnixMilli(),
+	}
+
+	_, err = r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		_, err := tx.Run(ctx, `
+			MATCH (t:Task {id:$id})
+			SET t.waiting_for_precondition_since = CASE WHEN $waiting_for_precondition_since > 0 THEN $waiting_for_precondition_since ELSE null END,
+			    t.blocking_conditions_json = CASE WHEN $blocking_conditions_json <> '' THEN $blocking_conditions_json ELSE null END,
 			    t.updated_at_ms = $now_ms
 		`, props)
 		return nil, err

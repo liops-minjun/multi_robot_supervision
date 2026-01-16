@@ -153,10 +153,11 @@ message ServerAck {
 // ============================================================
 
 message RegisterAgentRequest {
-  string agent_id = 1;
+  string agent_id = 1;              // Empty = request server assignment
   string name = 2;
-  string namespace = 3;        // ROS namespace
+  string namespace = 3;             // ROS namespace
   string client_version = 4;
+  string hardware_fingerprint = 5;  // For ID recovery on reconnection
 }
 
 message ActionCapability {
@@ -188,6 +189,8 @@ message RegisterAgentResponse {
   string error = 2;
   AgentConfig config = 3;
   int64 server_time_ms = 4;
+  string assigned_agent_id = 5;     // Server-assigned ID (if id_was_assigned)
+  bool id_was_assigned = 6;         // True if server assigned the ID
 }
 
 message AgentConfig {

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Bot, Workflow, Wifi, WifiOff, ChevronRight, RefreshCw, Server, Play, Loader2, Circle, CheckCircle, XCircle } from 'lucide-react'
+import { Bot, Workflow, Wifi, WifiOff, ChevronRight, RefreshCw, Server, Play, Loader2, Circle, CheckCircle, XCircle, Clock, AlertTriangle } from 'lucide-react'
 import { robotApi, actionGraphApi, agentApi, fleetApi } from '../../api/client'
 import type { Robot, Agent, ExecutionPhase, RobotStateSnapshot } from '../../types'
 import { useTranslation } from '../../i18n'
@@ -13,6 +13,7 @@ function ExecutionStatusIndicator({ phase, size = 'sm' }: { phase: ExecutionPhas
     starting: { bg: 'bg-yellow-500/20', text: 'text-yellow-400', icon: <Loader2 className={`${size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} animate-spin`} />, label: 'Starting' },
     executing: { bg: 'bg-blue-500/20', text: 'text-blue-400', icon: <Play className={size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} />, label: 'Executing' },
     completing: { bg: 'bg-green-500/20', text: 'text-green-400', icon: <CheckCircle className={size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} />, label: 'Completing' },
+    waiting_for_precondition: { bg: 'bg-orange-500/20', text: 'text-orange-400', icon: <Clock className={`${size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} animate-pulse`} />, label: 'Waiting' },
   }
   const c = config[phase || 'idle'] || config.idle
 
@@ -21,6 +22,61 @@ function ExecutionStatusIndicator({ phase, size = 'sm' }: { phase: ExecutionPhas
       {c.icon}
       {c.label}
     </span>
+  )
+}
+
+// Blocking conditions display component
+function BlockingConditionsDisplay({ conditions, compact = false }: {
+  conditions?: Array<{
+    condition_id: string
+    description: string
+    target_agent_id?: string
+    target_agent_name?: string
+    required_state: string
+    current_state?: string
+    reason: string
+  }>
+  compact?: boolean
+}) {
+  if (!conditions || conditions.length === 0) return null
+
+  if (compact) {
+    return (
+      <div className="flex items-center gap-1 text-orange-400 text-[10px]">
+        <AlertTriangle className="w-3 h-3" />
+        <span>Waiting: {conditions[0]?.target_agent_name || conditions[0]?.target_agent_id}</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-2 p-2 bg-orange-500/10 border border-orange-500/30 rounded-lg">
+      <div className="flex items-center gap-1.5 text-orange-400 text-xs font-medium mb-2">
+        <Clock className="w-3.5 h-3.5" />
+        <span>Waiting for Preconditions</span>
+      </div>
+      <div className="space-y-1.5">
+        {conditions.map((condition, idx) => (
+          <div key={condition.condition_id || idx} className="flex items-start gap-2 text-[11px]">
+            <AlertTriangle className="w-3 h-3 text-orange-400 mt-0.5 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="text-gray-300">{condition.description}</div>
+              {condition.target_agent_name && (
+                <div className="text-gray-500 mt-0.5">
+                  Target: <span className="text-orange-300">{condition.target_agent_name}</span>
+                  {condition.current_state && (
+                    <span className="ml-2">
+                      (Current: <span className="text-gray-400">{condition.current_state}</span> → Need: <span className="text-green-400">{condition.required_state}</span>)
+                    </span>
+                  )}
+                </div>
+              )}
+              <div className="text-gray-600 text-[10px] mt-0.5">{condition.reason}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -151,6 +207,7 @@ export default function Monitoring() {
                 {agentRobots.map(robot => {
                   const stateSnapshot = getRobotStateSnapshot(robot.id)
                   const executionPhase = stateSnapshot?.execution_phase || (robot.is_online ? 'idle' : 'offline')
+                  const isWaitingForPrecondition = executionPhase === 'waiting_for_precondition' || stateSnapshot?.is_waiting_for_precondition
 
                   return (
                     <div
@@ -159,7 +216,9 @@ export default function Monitoring() {
                       className={`px-4 py-3 flex items-center gap-3 cursor-pointer transition-colors ${
                         selectedRobot?.id === robot.id
                           ? 'bg-blue-600/20 border-l-2 border-blue-500'
-                          : 'hover:bg-[#1a1a2e]'
+                          : isWaitingForPrecondition
+                            ? 'bg-orange-500/5 hover:bg-orange-500/10'
+                            : 'hover:bg-[#1a1a2e]'
                       }`}
                     >
                       {/* Online Status */}
@@ -186,6 +245,10 @@ export default function Monitoring() {
                             <span className="text-[10px] text-gray-500">{stateSnapshot.state_code}</span>
                           )}
                         </div>
+                        {/* Compact blocking conditions display */}
+                        {isWaitingForPrecondition && stateSnapshot?.blocking_conditions && (
+                          <BlockingConditionsDisplay conditions={stateSnapshot.blocking_conditions} compact />
+                        )}
                       </div>
 
                       <ChevronRight className="w-4 h-4 text-gray-600" />
@@ -225,49 +288,70 @@ export default function Monitoring() {
               {(() => {
                 const stateSnapshot = getRobotStateSnapshot(selectedRobot.id)
                 const executionPhase = stateSnapshot?.execution_phase || (selectedRobot.is_online ? 'idle' : 'offline')
+                const isWaitingForPrecondition = executionPhase === 'waiting_for_precondition' || stateSnapshot?.is_waiting_for_precondition
 
                 return (
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className={`w-3 h-3 rounded-full ${selectedRobot.is_online ? 'bg-green-500' : 'bg-gray-600'}`} />
-                      <div>
-                        <h2 className="text-lg font-semibold text-white">{selectedRobot.name}</h2>
-                        <p className="text-sm text-gray-500">
-                          {getAgent(selectedRobot.agent_id)?.name || 'Unassigned'} • {selectedRobot.ip_address}
-                        </p>
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-3 h-3 rounded-full ${
+                          isWaitingForPrecondition ? 'bg-orange-500 animate-pulse' :
+                          selectedRobot.is_online ? 'bg-green-500' : 'bg-gray-600'
+                        }`} />
+                        <div>
+                          <h2 className="text-lg font-semibold text-white">{selectedRobot.name}</h2>
+                          <p className="text-sm text-gray-500">
+                            {getAgent(selectedRobot.agent_id)?.name || 'Unassigned'} • {selectedRobot.ip_address}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        {/* Execution Status */}
+                        <div className="text-right">
+                          <div className="text-xs text-gray-500 mb-1">{t('monitoring.currentState')}</div>
+                          <ExecutionStatusIndicator phase={executionPhase} size="md" />
+                        </div>
+
+                        {/* State Code */}
+                        {selectedRobot.is_online && (
+                          <div className="text-right">
+                            <div className="text-xs text-gray-500">State Code</div>
+                            <div
+                              className="text-sm font-medium"
+                              style={{ color: getStateColor(stateSnapshot?.state_code || selectedRobot.current_state) }}
+                            >
+                              {stateSnapshot?.state_code || selectedRobot.current_state || 'idle'}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Current Graph */}
+                        {stateSnapshot?.current_graph_id && (
+                          <div className="text-right">
+                            <div className="text-xs text-gray-500">Graph</div>
+                            <div className="text-sm font-medium text-blue-400">
+                              {actionGraphs.find(g => g.id === stateSnapshot.current_graph_id)?.name
+                                || stateSnapshot.current_graph_id.slice(0, 8)}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Waiting Time */}
+                        {isWaitingForPrecondition && stateSnapshot?.waiting_for_precondition_since && (
+                          <div className="text-right">
+                            <div className="text-xs text-gray-500">Waiting Since</div>
+                            <div className="text-sm font-medium text-orange-400">
+                              {formatWaitingTime(stateSnapshot.waiting_for_precondition_since)}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-4">
-                      {/* Execution Status */}
-                      <div className="text-right">
-                        <div className="text-xs text-gray-500 mb-1">{t('monitoring.currentState')}</div>
-                        <ExecutionStatusIndicator phase={executionPhase} size="md" />
-                      </div>
 
-                      {/* State Code */}
-                      {selectedRobot.is_online && (
-                        <div className="text-right">
-                          <div className="text-xs text-gray-500">State Code</div>
-                          <div
-                            className="text-sm font-medium"
-                            style={{ color: getStateColor(stateSnapshot?.state_code || selectedRobot.current_state) }}
-                          >
-                            {stateSnapshot?.state_code || selectedRobot.current_state || 'idle'}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Current Graph */}
-                      {stateSnapshot?.current_graph_id && (
-                        <div className="text-right">
-                          <div className="text-xs text-gray-500">Graph</div>
-                          <div className="text-sm font-medium text-blue-400">
-                            {actionGraphs.find(g => g.id === stateSnapshot.current_graph_id)?.name
-                              || stateSnapshot.current_graph_id.slice(0, 8)}
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    {/* Full Blocking Conditions Display */}
+                    {isWaitingForPrecondition && stateSnapshot?.blocking_conditions && (
+                      <BlockingConditionsDisplay conditions={stateSnapshot.blocking_conditions} />
+                    )}
                   </div>
                 )
               })()}
@@ -373,4 +457,28 @@ function getStateColor(state: string): string {
     waiting_confirm: '#eab308',
   }
   return colors[state] || '#6b7280'
+}
+
+// Helper function to format waiting time
+function formatWaitingTime(isoTimestamp: string): string {
+  try {
+    const waitingSince = new Date(isoTimestamp)
+    const now = new Date()
+    const diffMs = now.getTime() - waitingSince.getTime()
+    const diffSec = Math.floor(diffMs / 1000)
+
+    if (diffSec < 60) {
+      return `${diffSec}s`
+    }
+    const diffMin = Math.floor(diffSec / 60)
+    const remainingSec = diffSec % 60
+    if (diffMin < 60) {
+      return `${diffMin}m ${remainingSec}s`
+    }
+    const diffHour = Math.floor(diffMin / 60)
+    const remainingMin = diffMin % 60
+    return `${diffHour}h ${remainingMin}m`
+  } catch {
+    return isoTimestamp
+  }
 }

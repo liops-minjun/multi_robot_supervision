@@ -23,6 +23,7 @@ import {
   ChevronDown,
   ChevronUp,
   RotateCcw,
+  AlertTriangle,
 } from 'lucide-react'
 import { agentApi, actionGraphApi, fleetApi, stateDefinitionApi, taskApi, logsApi } from '../../api/client'
 import type { AgentCapabilityInfo, AgentConnectionStatus, ActionGraph, RobotStateSnapshot, StateDefinition, ExecutionPhase, TaskLogEntry, TaskLogLevel } from '../../types'
@@ -88,10 +89,20 @@ function ExecutionPhaseBadge({
   phase,
   currentStepName,
   graphName,
+  blockingConditions,
 }: {
   phase: ExecutionPhase | string | undefined
   currentStepName?: string | null
   graphName?: string | null
+  blockingConditions?: Array<{
+    condition_id: string
+    description: string
+    target_agent_id?: string
+    target_agent_name?: string
+    required_state: string
+    current_state?: string
+    reason: string
+  }> | null
 }) {
   const config: Record<string, { bg: string; text: string; icon: React.ReactNode; label: string }> = {
     idle: {
@@ -124,21 +135,58 @@ function ExecutionPhaseBadge({
       icon: <CheckCircle className="w-3 h-3" />,
       label: 'Completing'
     },
+    waiting_for_precondition: {
+      bg: 'bg-orange-500/20',
+      text: 'text-orange-400',
+      icon: <Clock className="w-3 h-3 animate-pulse" />,
+      label: 'Waiting'
+    },
   }
 
   const c = config[phase || 'idle'] || config.idle
 
   return (
-    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg ${c.bg}`}>
-      <div className={`flex items-center gap-1.5 ${c.text}`}>
-        {c.icon}
-        <span className="font-medium">{c.label}</span>
+    <div className="flex flex-col gap-2">
+      <div className={`flex items-center gap-2 px-3 py-2 rounded-lg ${c.bg}`}>
+        <div className={`flex items-center gap-1.5 ${c.text}`}>
+          {c.icon}
+          <span className="font-medium">{c.label}</span>
+        </div>
+        {(phase === 'executing' || phase === 'starting') && graphName && (
+          <span className="text-xs text-gray-500">
+            {graphName}
+            {currentStepName && <span className="text-gray-400"> / {currentStepName}</span>}
+          </span>
+        )}
+        {phase === 'waiting_for_precondition' && blockingConditions && blockingConditions.length > 0 && (
+          <span className="text-xs text-orange-300">
+            {blockingConditions[0].target_agent_name || blockingConditions[0].target_agent_id}
+          </span>
+        )}
       </div>
-      {(phase === 'executing' || phase === 'starting') && graphName && (
-        <span className="text-xs text-gray-500">
-          {graphName}
-          {currentStepName && <span className="text-gray-400"> / {currentStepName}</span>}
-        </span>
+      {/* Detailed blocking conditions */}
+      {phase === 'waiting_for_precondition' && blockingConditions && blockingConditions.length > 0 && (
+        <div className="px-3 py-2 bg-orange-500/10 border border-orange-500/20 rounded-lg">
+          <div className="flex items-center gap-1.5 text-orange-400 text-[10px] font-medium mb-1.5">
+            <AlertTriangle className="w-3 h-3" />
+            <span>Waiting for Preconditions</span>
+          </div>
+          <div className="space-y-1">
+            {blockingConditions.map((condition, idx) => (
+              <div key={condition.condition_id || idx} className="text-[11px] text-gray-300">
+                <span className="text-gray-500">{condition.description}</span>
+                {condition.target_agent_name && (
+                  <span className="ml-1 text-orange-300">({condition.target_agent_name})</span>
+                )}
+                {condition.current_state && (
+                  <span className="ml-1 text-gray-500">
+                    {condition.current_state} → <span className="text-green-400">{condition.required_state}</span>
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   )
@@ -903,6 +951,7 @@ export default function AgentDashboard() {
                             phase={selectedRobotState.execution_phase}
                             currentStepName={currentStepId ? (fleetGraph?.steps.find(s => s.id === currentStepId)?.job_name || fleetGraph?.steps.find(s => s.id === currentStepId)?.name) : null}
                             graphName={fleetGraph?.name}
+                            blockingConditions={selectedRobotState.blocking_conditions}
                           />
                         </div>
 

@@ -26,6 +26,11 @@ type RobotState struct {
 	CurrentStateCode string   // State code (e.g., "pick:executing")
 	SemanticTags     []string // Current semantic tags
 	CurrentGraphID   string   // Currently executing graph ID
+
+	// Precondition waiting status (for UI display)
+	IsWaitingForPrecondition      bool
+	WaitingForPreconditionSince   time.Time
+	BlockingConditions            []BlockingConditionInfo
 }
 
 // AgentConnection represents a connected agent (1:1 model: agent = robot)
@@ -554,6 +559,28 @@ func (m *GlobalStateManager) SetRobotOnline(agentID string, isOnline bool) error
 
 	// Update state registry
 	m.stateRegistry.SetAgentOnline(agentID, isOnline)
+	return nil
+}
+
+// SetRobotWaitingForPrecondition updates the precondition waiting status of a robot
+func (m *GlobalStateManager) SetRobotWaitingForPrecondition(agentID string, waiting bool, blockingInfos []BlockingConditionInfo) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	robot, exists := m.robots[agentID]
+	if !exists {
+		return fmt.Errorf("robot %s not found", agentID)
+	}
+
+	robot.IsWaitingForPrecondition = waiting
+	if waiting {
+		robot.WaitingForPreconditionSince = time.Now()
+		robot.BlockingConditions = blockingInfos
+	} else {
+		robot.WaitingForPreconditionSince = time.Time{}
+		robot.BlockingConditions = nil
+	}
+
 	return nil
 }
 
@@ -1125,6 +1152,119 @@ func (m *GlobalStateManager) ValidateStartConditions(executingAgentID string, co
 		FailedConditions: len(results) - passedCount,
 		ErrorMessage:     errorMessage,
 	}
+}
+
+// BlockingConditionInfo describes why a precondition is blocking (for UI display)
+type BlockingConditionInfo struct {
+	ConditionID     string `json:"condition_id"`
+	Description     string `json:"description"`
+	TargetAgentID   string `json:"target_agent_id,omitempty"`
+	TargetAgentName string `json:"target_agent_name,omitempty"`
+	RequiredState   string `json:"required_state"`
+	CurrentState    string `json:"current_state,omitempty"`
+	Reason          string `json:"reason"` // state_mismatch, agent_offline, state_too_old, no_targets
+}
+
+// EvaluateStartConditionsWithBlockingInfo evaluates conditions and returns detailed blocking info for UI
+func (m *GlobalStateManager) EvaluateStartConditionsWithBlockingInfo(executingAgentID string, conditions []StartCondition) (bool, []BlockingConditionInfo) {
+	if len(conditions) == 0 {
+		return true, nil
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	now := time.Now()
+	var blockingInfos []BlockingConditionInfo
+	allPassed := true
+
+	for _, cond := range conditions {
+		result := m.evaluateSingleConditionDetailed(executingAgentID, cond, now)
+		if !result.Passed {
+			allPassed = false
+
+			// Build blocking condition info for each failed robot
+			if len(result.StaleRobots) > 0 {
+				for _, robotID := range result.StaleRobots {
+					robotState, _ := m.robots[robotID]
+					info := BlockingConditionInfo{
+						ConditionID:   cond.ID,
+						Description:   cond.Message,
+						TargetAgentID: robotID,
+						RequiredState: cond.State,
+						Reason:        "state_too_old",
+					}
+					if robotState != nil {
+						info.TargetAgentName = robotState.Name
+						info.CurrentState = robotState.CurrentState
+					}
+					if info.Description == "" {
+						info.Description = fmt.Sprintf("Agent %s state is stale", robotID)
+					}
+					blockingInfos = append(blockingInfos, info)
+				}
+			}
+
+			if len(result.OfflineRobots) > 0 {
+				for _, robotID := range result.OfflineRobots {
+					robotState, _ := m.robots[robotID]
+					info := BlockingConditionInfo{
+						ConditionID:   cond.ID,
+						Description:   cond.Message,
+						TargetAgentID: robotID,
+						RequiredState: cond.State,
+						Reason:        "agent_offline",
+					}
+					if robotState != nil {
+						info.TargetAgentName = robotState.Name
+						info.CurrentState = robotState.CurrentState
+					}
+					if info.Description == "" {
+						info.Description = fmt.Sprintf("Agent %s is offline", robotID)
+					}
+					blockingInfos = append(blockingInfos, info)
+				}
+			}
+
+			if len(result.FailedRobots) > 0 {
+				for _, robotID := range result.FailedRobots {
+					robotState, _ := m.robots[robotID]
+					info := BlockingConditionInfo{
+						ConditionID:   cond.ID,
+						Description:   cond.Message,
+						TargetAgentID: robotID,
+						RequiredState: cond.State,
+						Reason:        "state_mismatch",
+					}
+					if robotState != nil {
+						info.TargetAgentName = robotState.Name
+						info.CurrentState = robotState.CurrentState
+					}
+					if info.Description == "" {
+						info.Description = fmt.Sprintf("Agent %s state mismatch: expected %s, got %s",
+							robotID, cond.State, info.CurrentState)
+					}
+					blockingInfos = append(blockingInfos, info)
+				}
+			}
+
+			// No target robots found
+			if len(result.TargetRobots) == 0 && cond.Quantifier != QuantifierNone {
+				info := BlockingConditionInfo{
+					ConditionID:   cond.ID,
+					Description:   cond.Message,
+					RequiredState: cond.State,
+					Reason:        "no_targets",
+				}
+				if info.Description == "" {
+					info.Description = fmt.Sprintf("No target agents found for condition %s", cond.ID)
+				}
+				blockingInfos = append(blockingInfos, info)
+			}
+		}
+	}
+
+	return allPassed, blockingInfos
 }
 
 // evaluateSingleConditionDetailed evaluates one condition with full detail tracking

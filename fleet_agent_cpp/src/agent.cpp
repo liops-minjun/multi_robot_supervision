@@ -113,7 +113,34 @@ private:
 Agent::Agent(const AgentConfig& config)
     : config_(config) {
 
-    log.info("Creating agent: {}", config_.agent_id);
+    // Initialize AgentIdStorage for server-assigned ID support
+    agent_id_storage_ = std::make_unique<AgentIdStorage>(config_.storage.agent_id_path);
+
+    // Generate hardware fingerprint for ID recovery
+    hardware_fingerprint_ = AgentIdStorage::generate_hardware_fingerprint();
+    log.debug("Hardware fingerprint: {}", hardware_fingerprint_);
+
+    // Resolve effective agent ID with priority:
+    // 1. Config file ID (if set)
+    // 2. Stored server-assigned ID
+    // 3. Temporary ID using hardware fingerprint (will request real ID from server)
+    if (!config_.agent_id.empty()) {
+        effective_agent_id_ = config_.agent_id;
+        log.info("Using configured agent ID: {}", effective_agent_id_);
+    } else if (config_.use_server_assigned_id) {
+        auto stored_id = agent_id_storage_->load();
+        if (stored_id) {
+            effective_agent_id_ = *stored_id;
+            log.info("Using stored server-assigned ID: {}", effective_agent_id_);
+        } else {
+            // Use temporary ID based on hardware fingerprint for initialization
+            // Will be replaced with server-assigned ID on registration
+            effective_agent_id_ = "agent_" + hardware_fingerprint_.substr(0, 8);
+            log.info("Using temporary ID {} - will request permanent ID from server", effective_agent_id_);
+        }
+    }
+
+    log.info("Creating agent: {}", effective_agent_id_);
 }
 
 Agent::~Agent() {
@@ -320,7 +347,7 @@ bool Agent::is_running() const {
 }
 
 const std::string& Agent::agent_id() const {
-    return config_.agent_id;
+    return effective_agent_id_;
 }
 
 std::vector<std::string> Agent::agent_ids() const {
@@ -431,7 +458,7 @@ bool Agent::init_transport() {
         quic_outbound_sender_ = std::make_unique<transport::QUICOutboundSender>(
             quic_client_.get(),
             *quic_outbound_queue_,
-            config_.agent_id,
+            effective_agent_id_,
             sender_config);
 
         // Set connection callback for outbound sender
@@ -467,7 +494,7 @@ bool Agent::init_components() {
     // Command processor (with state tracker integration)
     command_processor_ = std::make_unique<executor::CommandProcessor>(
         node_,
-        config_.agent_id,
+        effective_agent_id_,
         *inbound_queue_,
         *quic_outbound_queue_,
         *capability_store_,
@@ -476,11 +503,11 @@ bool Agent::init_components() {
         state_tracker_mgr_.get());
 
     // Add robots to command processor
-    // In 1:1 model, agent is the robot - use agent_id as robot_id
+    // In 1:1 model, agent is the robot - use effective_agent_id as robot_id
     if (config_.robots.empty()) {
-        // 1:1 model: agent_id is the robot_id
-        command_processor_->add_robot(config_.agent_id, "");
-        log.info("1:1 model: registered agent {} as robot", config_.agent_id);
+        // 1:1 model: effective_agent_id is the robot_id
+        command_processor_->add_robot(effective_agent_id_, "");
+        log.info("1:1 model: registered agent {} as robot", effective_agent_id_);
     } else {
         for (const auto& robot : config_.robots) {
             command_processor_->add_robot(robot.id, robot.ros_namespace);
@@ -517,11 +544,11 @@ void Agent::start_heartbeat_thread() {
             auto loop_start = std::chrono::steady_clock::now();
 
             auto msg = std::make_shared<fleet::v1::AgentMessage>();
-            msg->set_agent_id(config_.agent_id);
+            msg->set_agent_id(effective_agent_id_);
             msg->set_timestamp_ms(now_ms());
 
             auto* heartbeat = msg->mutable_heartbeat();
-            heartbeat->set_agent_id(config_.agent_id);
+            heartbeat->set_agent_id(effective_agent_id_);
 
             // Get execution state for this agent (1:1 model: agent_id = robot_id)
             bool is_executing = false;
@@ -531,7 +558,7 @@ void Agent::start_heartbeat_thread() {
 
             if (execution_contexts_) {
                 ExecutionContextMap::const_accessor acc;
-                if (execution_contexts_->find(acc, config_.agent_id)) {
+                if (execution_contexts_->find(acc, effective_agent_id_)) {
                     const auto exec_state = acc->second.state.load();
                     is_executing = (exec_state == RobotExecutionState::EXECUTING_ACTION ||
                                     exec_state == RobotExecutionState::WAITING_RESULT);
@@ -544,14 +571,14 @@ void Agent::start_heartbeat_thread() {
             // Get state from tracker
             std::string state_name = "idle";
             if (state_tracker_mgr_) {
-                auto tracker = state_tracker_mgr_->get_tracker(config_.agent_id);
+                auto tracker = state_tracker_mgr_->get_tracker(effective_agent_id_);
                 if (tracker) {
                     state_name = tracker->current_state();
                 }
             }
 
             log.debug("[Heartbeat] Agent {} state: {}, executing: {}",
-                     config_.agent_id, state_name, is_executing);
+                     effective_agent_id_, state_name, is_executing);
 
             heartbeat->set_state(state_name);
             heartbeat->set_is_executing(is_executing);
@@ -678,17 +705,17 @@ void Agent::discover_capabilities() {
     }
 
     log.info("Agent {} has {} capabilities (available: {})",
-             config_.agent_id, all_caps.size(), available_caps.size());
+             effective_agent_id_, all_caps.size(), available_caps.size());
 
     // Register ALL capabilities under agent_id (not per-robot)
     if (capability_registrar_ && quic_client_ && quic_client_->is_connected()) {
-        // Use agent_id for registration (server will store in agent_capabilities table)
-        if (capability_registrar_->register_capabilities(config_.agent_id, available_caps)) {
+        // Use effective_agent_id for registration (server will store in agent_capabilities table)
+        if (capability_registrar_->register_capabilities(effective_agent_id_, available_caps)) {
             log.info("Registered {} capabilities for agent {} via QUIC",
-                     available_caps.size(), config_.agent_id);
+                     available_caps.size(), effective_agent_id_);
         } else {
             log.warn("Failed to register capabilities for agent {} via QUIC",
-                     config_.agent_id);
+                     effective_agent_id_);
         }
     }
 }
@@ -703,9 +730,16 @@ bool Agent::register_with_server() {
 
     // Build RegisterAgentRequest protobuf message (1:1 model: agent = robot)
     fleet::v1::RegisterAgentRequest request;
-    request.set_agent_id(config_.agent_id);
+
+    // Send effective_agent_id (may be empty for server assignment)
+    request.set_agent_id(effective_agent_id_);
     request.set_name(config_.agent_name);
     request.set_client_version("1.0.0");
+
+    // Always send hardware fingerprint for ID recovery
+    if (!hardware_fingerprint_.empty()) {
+        request.set_hardware_fingerprint(hardware_fingerprint_);
+    }
 
     // Set namespace (use agent's ros_namespace or fallback to first robot's namespace)
     std::string ns = config_.ros_namespace;
@@ -741,21 +775,84 @@ bool Agent::register_with_server() {
         return false;
     }
 
-    // Send via stream
-    bool success = stream->write(data.data(), data.size(), false);
-    if (success) {
-        quic_client_->release_stream(stream);
-    } else {
-        stream->close();
-    }
-
-    if (!success) {
+    // Send via stream (keep stream open to receive response)
+    if (!stream->write(data.data(), data.size(), false)) {
         log.error("Failed to send RegisterAgentRequest via QUIC stream");
+        stream->close();
         return false;
     }
 
-    log.info("Agent registration sent via QUIC: {} with {} robots",
-             config_.agent_id, config_.robots.size());
+    // Wait for RegisterAgentResponse (with timeout)
+    std::vector<uint8_t> response_buffer;
+    std::mutex response_mutex;
+    std::condition_variable response_cv;
+    bool response_received = false;
+
+    stream->set_data_callback([&](const uint8_t* recv_data, size_t recv_len, bool fin) {
+        std::lock_guard<std::mutex> lock(response_mutex);
+        response_buffer.insert(response_buffer.end(), recv_data, recv_data + recv_len);
+        if (response_buffer.size() >= 4) {
+            uint32_t expected_len = (static_cast<uint32_t>(response_buffer[0]) << 24) |
+                                    (static_cast<uint32_t>(response_buffer[1]) << 16) |
+                                    (static_cast<uint32_t>(response_buffer[2]) << 8) |
+                                    static_cast<uint32_t>(response_buffer[3]);
+            if (response_buffer.size() >= 4 + expected_len) {
+                response_received = true;
+                response_cv.notify_one();
+            }
+        }
+    });
+
+    // Wait for response (5 second timeout)
+    {
+        std::unique_lock<std::mutex> lock(response_mutex);
+        response_cv.wait_for(lock, std::chrono::seconds(5), [&] { return response_received; });
+    }
+
+    stream->close();
+
+    if (!response_received || response_buffer.size() < 4) {
+        log.error("Timeout waiting for RegisterAgentResponse");
+        return false;
+    }
+
+    // Parse response
+    uint32_t resp_len = (static_cast<uint32_t>(response_buffer[0]) << 24) |
+                        (static_cast<uint32_t>(response_buffer[1]) << 16) |
+                        (static_cast<uint32_t>(response_buffer[2]) << 8) |
+                        static_cast<uint32_t>(response_buffer[3]);
+
+    if (response_buffer.size() < 4 + resp_len) {
+        log.error("Incomplete RegisterAgentResponse");
+        return false;
+    }
+
+    fleet::v1::RegisterAgentResponse response;
+    if (!response.ParseFromArray(response_buffer.data() + 4, static_cast<int>(resp_len))) {
+        log.error("Failed to parse RegisterAgentResponse");
+        return false;
+    }
+
+    if (!response.success()) {
+        log.error("Server rejected registration: {}", response.error());
+        return false;
+    }
+
+    // Handle server-assigned ID
+    if (response.id_was_assigned() && !response.assigned_agent_id().empty()) {
+        effective_agent_id_ = response.assigned_agent_id();
+        log.info("Server assigned agent ID: {}", effective_agent_id_);
+
+        // Persist the assigned ID
+        if (agent_id_storage_->save(effective_agent_id_)) {
+            log.info("Saved server-assigned ID to {}", config_.storage.agent_id_path);
+        } else {
+            log.warn("Failed to save server-assigned ID - will request again on restart");
+        }
+    }
+
+    log.info("Agent registration successful via QUIC: {} with {} robots",
+             effective_agent_id_, config_.robots.size());
     return true;
 }
 
@@ -888,17 +985,17 @@ bool Agent::init_state_management() {
         });
 
     // Initialize state tracker for this agent
-    auto tracker = state_tracker_mgr_->get_tracker(config_.agent_id);
+    auto tracker = state_tracker_mgr_->get_tracker(effective_agent_id_);
 
     // Try to load existing state definition for this agent
-    auto state_def = state_storage_->get_for_agent(config_.agent_id);
+    auto state_def = state_storage_->get_for_agent(effective_agent_id_);
     if (state_def) {
         tracker->configure(*state_def);
         log.info("Loaded state definition for agent {}: {} (version {})",
-                 config_.agent_id, state_def->id, state_def->version);
+                 effective_agent_id_, state_def->id, state_def->version);
     } else {
         log.debug("No state definition found for agent {}, using defaults",
-                  config_.agent_id);
+                  effective_agent_id_);
     }
 
     // Create fleet state cache for cross-agent coordination
@@ -922,13 +1019,13 @@ bool Agent::init_protocol() {
     deps.command_processor = command_processor_.get();
     deps.command_queue = command_queue_.get();
     deps.quic_outbound_queue = quic_outbound_queue_.get();
-    deps.agent_id = config_.agent_id;
+    deps.agent_id = effective_agent_id_;
 
     message_handler_ = std::make_unique<protocol::MessageHandler>(deps);
 
     // Create capability registrar
     capability_registrar_ = std::make_unique<protocol::CapabilityRegistrar>(
-        quic_client_.get(), config_.agent_id);
+        quic_client_.get(), effective_agent_id_);
 
     // Configure inbound QUIC stream handling for ServerMessage frames
     setup_quic_stream_handler();
@@ -994,16 +1091,16 @@ void Agent::on_capabilities_changed() {
     }
 
     log.info("Agent {} capabilities changed: {} total (available: {})",
-             config_.agent_id, all_caps.size(), available_caps.size());
+             effective_agent_id_, all_caps.size(), available_caps.size());
 
     // Re-register capabilities with server via QUIC (agent-based)
     if (capability_registrar_ && quic_client_ && quic_client_->is_connected()) {
-        if (capability_registrar_->register_capabilities(config_.agent_id, available_caps)) {
+        if (capability_registrar_->register_capabilities(effective_agent_id_, available_caps)) {
             log.info("Re-registered {} capabilities for agent {} via QUIC",
-                     available_caps.size(), config_.agent_id);
+                     available_caps.size(), effective_agent_id_);
         } else {
             log.warn("Failed to re-register capabilities for agent {} via QUIC",
-                     config_.agent_id);
+                     effective_agent_id_);
         }
     } else {
         log.warn("QUIC not connected - cannot re-register capabilities");
@@ -1024,8 +1121,8 @@ void Agent::resync_capabilities() {
     auto available_caps = capability_scanner_->get_for_registration();
     log.info("Resyncing {} capabilities after reconnect", available_caps.size());
 
-    if (!capability_registrar_->register_capabilities(config_.agent_id, available_caps)) {
-        log.warn("Capability resync failed for agent {}", config_.agent_id);
+    if (!capability_registrar_->register_capabilities(effective_agent_id_, available_caps)) {
+        log.warn("Capability resync failed for agent {}", effective_agent_id_);
     }
 }
 

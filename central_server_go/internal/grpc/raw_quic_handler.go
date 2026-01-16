@@ -19,6 +19,7 @@ import (
 	"central_server_go/internal/db"
 	"central_server_go/internal/state"
 
+	"github.com/google/uuid"
 	"github.com/quic-go/quic-go"
 	"google.golang.org/protobuf/encoding/protowire"
 )
@@ -292,10 +293,11 @@ func (h *RawQUICHandler) handleConnection(conn quic.Connection) {
 
 // RegisterAgentReq represents a parsed RegisterAgentRequest (1:1 model)
 type RegisterAgentReq struct {
-	AgentID       string
-	Name          string
-	Namespace     string // ROS namespace
-	ClientVersion string
+	AgentID             string
+	Name                string
+	Namespace           string // ROS namespace
+	ClientVersion       string
+	HardwareFingerprint string // For server-assigned ID recovery
 }
 
 // AgentMsg represents a parsed AgentMessage with all payload types
@@ -502,6 +504,17 @@ func parseRegisterAgentRequest(data []byte) (*RegisterAgentReq, error) {
 			req.ClientVersion = v
 			data = data[n:]
 			sawRegisterFields = true
+		case 5: // hardware_fingerprint (string)
+			if wireType != protowire.BytesType {
+				return nil, fmt.Errorf("invalid hardware_fingerprint wire type")
+			}
+			v, n := protowire.ConsumeString(data)
+			if n < 0 {
+				return nil, fmt.Errorf("invalid hardware_fingerprint")
+			}
+			req.HardwareFingerprint = v
+			data = data[n:]
+			sawRegisterFields = true
 		default:
 			if fieldNum >= 10 {
 				return nil, fmt.Errorf("unexpected payload field: %d", fieldNum)
@@ -515,7 +528,8 @@ func parseRegisterAgentRequest(data []byte) (*RegisterAgentReq, error) {
 		}
 	}
 
-	if req.AgentID == "" || !sawRegisterFields {
+	// Valid if has agent_id OR has fingerprint (for server-assigned ID)
+	if !sawRegisterFields {
 		return nil, fmt.Errorf("not a register request")
 	}
 
@@ -1200,68 +1214,105 @@ func (h *RawQUICHandler) handleRegisterAgent(
 	stream quic.Stream,
 	req *RegisterAgentReq,
 ) {
-	log.Printf("[RawQUIC] Agent registration: %s (%s)", req.AgentID, req.Name)
+	// Server-assigned ID logic
+	effectiveAgentID := req.AgentID
+	idWasAssigned := false
+
+	if req.AgentID == "" {
+		// Agent requesting server-assigned ID
+		// First, try to recover ID from hardware fingerprint
+		if req.HardwareFingerprint != "" {
+			existingAgent, err := h.repo.GetAgentByHardwareFingerprint(req.HardwareFingerprint)
+			if err == nil && existingAgent != nil {
+				// Found existing agent with same fingerprint
+				effectiveAgentID = existingAgent.ID
+				idWasAssigned = true
+				log.Printf("[RawQUIC] Recovered agent ID %s from hardware fingerprint", effectiveAgentID)
+			}
+		}
+
+		// If no existing ID found, generate new UUID
+		if effectiveAgentID == "" {
+			effectiveAgentID = uuid.New().String()
+			idWasAssigned = true
+			log.Printf("[RawQUIC] Generated new agent ID: %s", effectiveAgentID)
+		}
+	}
+
+	log.Printf("[RawQUIC] Agent registration: %s (%s) assigned=%v", effectiveAgentID, req.Name, idWasAssigned)
 
 	// Store agent ID in connection
-	agentConn.agentID = req.AgentID
+	agentConn.agentID = effectiveAgentID
 	agentConn.registered = true
 	agentConn.lastSeen = time.Now()
 
 	// Track connection
 	h.connMu.Lock()
-	if existing, ok := h.connections[req.AgentID]; ok && existing != agentConn {
+	if existing, ok := h.connections[effectiveAgentID]; ok && existing != agentConn {
 		existing.quicConn.CloseWithError(0, "replaced by new connection")
 	}
-	h.connections[req.AgentID] = agentConn
+	h.connections[effectiveAgentID] = agentConn
 	h.connMu.Unlock()
 
 	// Register robot in state manager (agent_id = robot_id in 1:1 model)
 	h.stateManager.RegisterRobot(
-		req.AgentID,
+		effectiveAgentID,
 		req.Name,
-		req.AgentID,
+		effectiveAgentID,
 		"idle",
 	)
 
 	// In 1:1 model, agent_id = robot_id, so no separate robotIDs needed
-	h.stateManager.RegisterAgent(req.AgentID, req.Name, req.Namespace)
+	h.stateManager.RegisterAgent(effectiveAgentID, req.Name, req.Namespace)
 
 	// Update database - Agent
-	agent, _ := h.repo.GetAgent(req.AgentID)
+	agent, _ := h.repo.GetAgent(effectiveAgentID)
 	if agent == nil {
 		// Create new agent
 		agent = &db.Agent{
-			ID:        req.AgentID,
-			Name:      req.Name,
-			Namespace: req.Namespace,
-			Status:    "online",
-			CreatedAt: time.Now(),
-			LastSeen:  sql.NullTime{Time: time.Now(), Valid: true},
+			ID:               effectiveAgentID,
+			Name:             req.Name,
+			Namespace:        req.Namespace,
+			Status:           "online",
+			AssignedByServer: idWasAssigned,
+			CreatedAt:        time.Now(),
+			LastSeen:         sql.NullTime{Time: time.Now(), Valid: true},
+		}
+		if req.HardwareFingerprint != "" {
+			agent.HardwareFingerprint = sql.NullString{String: req.HardwareFingerprint, Valid: true}
 		}
 		h.repo.CreateAgent(agent)
 	} else {
 		// Update existing agent
-		h.repo.UpdateAgentStatus(req.AgentID, "online", agentConn.quicConn.RemoteAddr().String())
+		h.repo.UpdateAgentStatus(effectiveAgentID, "online", agentConn.quicConn.RemoteAddr().String())
+		// Update hardware fingerprint if provided and not yet set
+		if req.HardwareFingerprint != "" && !agent.HardwareFingerprint.Valid {
+			agent.HardwareFingerprint = sql.NullString{String: req.HardwareFingerprint, Valid: true}
+			h.repo.CreateOrUpdateAgent(agent)
+		}
 	}
 
 	// Broadcast to frontend via WebSocket
 	if h.wsHub != nil {
-		h.wsHub.BroadcastAgentUpdate(req.AgentID, "online")
+		h.wsHub.BroadcastAgentUpdate(effectiveAgentID, "online")
 	}
 
 	// Send response (length-prefixed protobuf RegisterAgentResponse)
-	h.sendRegisterResponse(stream, true, "")
+	h.sendRegisterResponse(stream, true, "", effectiveAgentID, idWasAssigned)
 
-	log.Printf("[RawQUIC] Agent %s registered (1:1 model)", req.AgentID)
+	log.Printf("[RawQUIC] Agent %s registered (1:1 model, assigned=%v)", effectiveAgentID, idWasAssigned)
 }
 
 // sendRegisterResponse sends a RegisterAgentResponse protobuf
-func (h *RawQUICHandler) sendRegisterResponse(stream quic.Stream, success bool, errorMsg string) error {
+func (h *RawQUICHandler) sendRegisterResponse(stream quic.Stream, success bool, errorMsg string, assignedAgentID string, idWasAssigned bool) error {
 	// Build RegisterAgentResponse protobuf manually
 	// message RegisterAgentResponse {
 	//   bool success = 1;
 	//   string error = 2;
+	//   AgentConfig config = 3;
 	//   int64 server_time_ms = 4;
+	//   string assigned_agent_id = 5;
+	//   bool id_was_assigned = 6;
 	// }
 
 	var data []byte
@@ -1283,6 +1334,20 @@ func (h *RawQUICHandler) sendRegisterResponse(stream quic.Stream, success bool, 
 	// Field 4: server_time_ms (int64)
 	data = protowire.AppendTag(data, 4, protowire.VarintType)
 	data = protowire.AppendVarint(data, uint64(time.Now().UnixMilli()))
+
+	// Field 5: assigned_agent_id (string) - always send if not empty
+	if assignedAgentID != "" {
+		data = protowire.AppendTag(data, 5, protowire.BytesType)
+		data = protowire.AppendString(data, assignedAgentID)
+	}
+
+	// Field 6: id_was_assigned (bool)
+	data = protowire.AppendTag(data, 6, protowire.VarintType)
+	if idWasAssigned {
+		data = protowire.AppendVarint(data, 1)
+	} else {
+		data = protowire.AppendVarint(data, 0)
+	}
 
 	// Write length prefix
 	lenBuf := make([]byte, 4)

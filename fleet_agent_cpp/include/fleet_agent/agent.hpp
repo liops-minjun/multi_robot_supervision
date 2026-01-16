@@ -6,6 +6,7 @@
 #include "fleet_agent/core/types.hpp"
 #include "fleet_agent/core/config.hpp"
 #include "fleet_agent/core/shutdown.hpp"
+#include "fleet_agent/core/agent_id_storage.hpp"
 
 #include <memory>
 #include <string>
@@ -141,6 +142,11 @@ public:
 private:
     AgentConfig config_;
     std::atomic<State> state_{State::CREATED};
+
+    // Server-assigned ID support
+    std::unique_ptr<AgentIdStorage> agent_id_storage_;
+    std::string effective_agent_id_;  // Runtime agent ID (may be server-assigned)
+    std::string hardware_fingerprint_;
 
     // ROS2
     std::shared_ptr<rclcpp::Node> node_;

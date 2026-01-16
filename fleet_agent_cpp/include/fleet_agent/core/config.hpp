@@ -107,6 +107,7 @@ struct StorageConfig {
     std::string state_definitions_path{"/var/lib/fleet_agent/state_definitions"};
     std::string state_persistence_path{"/var/lib/fleet_agent/state"};
     std::string message_queue_path{"/var/lib/fleet_agent/queue"};
+    std::string agent_id_path{"/var/lib/fleet_agent/agent_id"};  // Server-assigned ID storage
     bool enable_state_persistence{true};
     bool enable_message_persistence{true};
 };
@@ -139,10 +140,11 @@ struct LoggingConfig {
 // ============================================================
 
 struct AgentConfig {
-    std::string agent_id;
+    std::string agent_id;                // Optional: if empty, server will assign
     std::string agent_name{"Fleet Agent"};
     std::string ros_namespace;           // ROS namespace (e.g., "/robot_001")
     std::vector<std::string> tags;       // Agent tags
+    bool use_server_assigned_id{true};   // If true and agent_id empty, request from server
 
     // Deprecated: kept for config file backwards compatibility
     std::vector<RobotConfig> robots;

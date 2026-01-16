@@ -383,8 +383,11 @@ func (s *Scheduler) executeStep(ctx context.Context, task *RunningTask, step *db
 		}
 	}
 
-	// Wait for start conditions (server-mode only)
-	if err := s.waitForStartConditions(ctx, task.AgentID, step.StartConditions); err != nil {
+	// Wait for start conditions (server-mode only) with timeout and state tracking
+	if err := s.waitForStartConditionsWithConfig(ctx, task.AgentID, step.StartConditions, PreconditionWaitConfig{
+		TaskID:     task.ID,
+		TimeoutSec: DefaultPreconditionTimeout,
+	}); err != nil {
 		return &StepResult{
 			StepID: step.ID,
 			Status: fleetgrpc.ActionStatusCancelled,
@@ -409,7 +412,20 @@ func (s *Scheduler) executeStep(ctx context.Context, task *RunningTask, step *db
 	}
 }
 
+// PreconditionWaitConfig configures precondition waiting behavior
+type PreconditionWaitConfig struct {
+	TaskID     string
+	TimeoutSec int // Default: 300 (5 minutes)
+}
+
+// DefaultPreconditionTimeout is the default timeout for precondition waiting (5 minutes)
+const DefaultPreconditionTimeout = 300
+
 func (s *Scheduler) waitForStartConditions(ctx context.Context, agentID string, conditions []db.StartCondition) error {
+	return s.waitForStartConditionsWithConfig(ctx, agentID, conditions, PreconditionWaitConfig{})
+}
+
+func (s *Scheduler) waitForStartConditionsWithConfig(ctx context.Context, agentID string, conditions []db.StartCondition, config PreconditionWaitConfig) error {
 	if len(conditions) == 0 {
 		return nil
 	}
@@ -431,24 +447,99 @@ func (s *Scheduler) waitForStartConditions(ctx context.Context, agentID string, 
 		})
 	}
 
+	// Set timeout
+	timeoutSec := config.TimeoutSec
+	if timeoutSec <= 0 {
+		timeoutSec = DefaultPreconditionTimeout
+	}
+
 	ticker := time.NewTicker(startConditionPollInterval)
 	defer ticker.Stop()
 
+	waitStartTime := time.Now()
+	timeout := time.After(time.Duration(timeoutSec) * time.Second)
+	var lastBlockingInfos []state.BlockingConditionInfo
+	waitingReported := false
+
 	for {
-		passed, errMsg := s.stateManager.EvaluateStartConditionList(agentID, stateConditions)
+		passed, blockingInfos := s.stateManager.EvaluateStartConditionsWithBlockingInfo(agentID, stateConditions)
 		if passed {
+			// Clear waiting status if it was set
+			if waitingReported && config.TaskID != "" {
+				s.repo.UpdateTaskPreconditionStatus(config.TaskID, false, nil)
+				s.stateManager.SetRobotWaitingForPrecondition(agentID, false, nil)
+			}
 			return nil
+		}
+
+		// Report waiting status (only when blocking info changes or first time)
+		if !waitingReported || !blockingInfosEqual(lastBlockingInfos, blockingInfos) {
+			lastBlockingInfos = blockingInfos
+			waitingReported = true
+
+			// Convert to db.BlockingConditionInfo
+			dbBlockingInfos := make([]db.BlockingConditionInfo, len(blockingInfos))
+			for i, info := range blockingInfos {
+				dbBlockingInfos[i] = db.BlockingConditionInfo{
+					ConditionID:     info.ConditionID,
+					Description:     info.Description,
+					TargetAgentID:   info.TargetAgentID,
+					TargetAgentName: info.TargetAgentName,
+					RequiredState:   info.RequiredState,
+					CurrentState:    info.CurrentState,
+					Reason:          info.Reason,
+				}
+			}
+
+			// Update task in database
+			if config.TaskID != "" {
+				s.repo.UpdateTaskPreconditionStatus(config.TaskID, true, dbBlockingInfos)
+			}
+
+			// Update in-memory robot state for WebSocket broadcast
+			s.stateManager.SetRobotWaitingForPrecondition(agentID, true, blockingInfos)
+
+			log.Printf("Task %s waiting for precondition: %d blocking conditions for agent %s",
+				config.TaskID, len(blockingInfos), agentID)
 		}
 
 		select {
 		case <-ctx.Done():
-			if errMsg == "" {
-				errMsg = "start condition wait cancelled"
+			// Clear waiting status on cancel
+			if waitingReported && config.TaskID != "" {
+				s.repo.UpdateTaskPreconditionStatus(config.TaskID, false, nil)
+				s.stateManager.SetRobotWaitingForPrecondition(agentID, false, nil)
 			}
-			return fmt.Errorf("%s", errMsg)
+			return fmt.Errorf("start condition wait cancelled")
+
+		case <-timeout:
+			// Clear waiting status on timeout
+			if config.TaskID != "" {
+				s.repo.UpdateTaskPreconditionStatus(config.TaskID, false, nil)
+				s.stateManager.SetRobotWaitingForPrecondition(agentID, false, nil)
+			}
+			elapsed := time.Since(waitStartTime)
+			return fmt.Errorf("precondition wait timed out after %.1f seconds", elapsed.Seconds())
+
 		case <-ticker.C:
 		}
 	}
+}
+
+// blockingInfosEqual checks if two blocking info slices are equal
+func blockingInfosEqual(a, b []state.BlockingConditionInfo) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].ConditionID != b[i].ConditionID ||
+			a[i].TargetAgentID != b[i].TargetAgentID ||
+			a[i].CurrentState != b[i].CurrentState ||
+			a[i].Reason != b[i].Reason {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Scheduler) waitForPreStates(ctx context.Context, agentID string, preStates []string) error {

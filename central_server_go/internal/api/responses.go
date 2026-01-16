@@ -243,6 +243,23 @@ type TaskResponse struct {
 	CreatedAt        time.Time                `json:"created_at"`
 	StartedAt        *time.Time               `json:"started_at,omitempty"`
 	CompletedAt      *time.Time               `json:"completed_at,omitempty"`
+
+	// Precondition waiting status
+	IsWaitingForPrecondition    bool                            `json:"is_waiting_for_precondition,omitempty"`
+	WaitingForPreconditionSince *time.Time                      `json:"waiting_for_precondition_since,omitempty"`
+	BlockingConditions          []BlockingConditionInfoResponse `json:"blocking_conditions,omitempty"`
+	PreconditionTimeoutSec      int                             `json:"precondition_timeout_sec,omitempty"`
+}
+
+// BlockingConditionInfoResponse represents blocking condition info for API response
+type BlockingConditionInfoResponse struct {
+	ConditionID     string `json:"condition_id"`
+	Description     string `json:"description"`
+	TargetAgentID   string `json:"target_agent_id,omitempty"`
+	TargetAgentName string `json:"target_agent_name,omitempty"`
+	RequiredState   string `json:"required_state"`
+	CurrentState    string `json:"current_state,omitempty"`
+	Reason          string `json:"reason"`
 }
 
 type TaskControlRequest struct {

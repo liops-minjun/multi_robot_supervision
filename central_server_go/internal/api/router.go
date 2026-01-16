@@ -148,6 +148,7 @@ func (s *Server) setupRouter() {
 			r.Post("/{taskID}/pause", s.PauseTask)
 			r.Post("/{taskID}/resume", s.ResumeTask)
 			r.Get("/{taskID}/logs", s.GetTaskLogs)
+			r.Get("/{taskID}/precondition-status", s.GetTaskPreconditionStatus)
 		})
 
 		// Task Logs (execution streaming logs)

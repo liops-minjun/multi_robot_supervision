@@ -242,6 +242,8 @@ func (s *Server) buildFleetStateJSON() []byte {
 		executionPhase := "idle"
 		if !robot.IsOnline {
 			executionPhase = "offline"
+		} else if robot.IsWaitingForPrecondition {
+			executionPhase = "waiting_for_precondition"
 		} else if robot.IsExecuting {
 			if robot.CurrentStepID == "" {
 				executionPhase = "starting"
@@ -262,6 +264,29 @@ func (s *Server) buildFleetStateJSON() []byte {
 			IsExecuting:    robot.IsExecuting,
 			StalenessSec:   now.Sub(robot.LastSeen).Seconds(),
 		}
+
+		// Add precondition waiting info
+		if robot.IsWaitingForPrecondition {
+			r.IsWaitingForPrecondition = true
+			if !robot.WaitingForPreconditionSince.IsZero() {
+				r.WaitingForPreconditionSince = robot.WaitingForPreconditionSince.Format(time.RFC3339)
+			}
+			if len(robot.BlockingConditions) > 0 {
+				r.BlockingConditions = make([]BlockingConditionInfoWS, len(robot.BlockingConditions))
+				for i, bc := range robot.BlockingConditions {
+					r.BlockingConditions[i] = BlockingConditionInfoWS{
+						ConditionID:     bc.ConditionID,
+						Description:     bc.Description,
+						TargetAgentID:   bc.TargetAgentID,
+						TargetAgentName: bc.TargetAgentName,
+						RequiredState:   bc.RequiredState,
+						CurrentState:    bc.CurrentState,
+						Reason:          bc.Reason,
+					}
+				}
+			}
+		}
+
 		if robot.IsExecuting && robot.CurrentTaskID != "" {
 			r.CurrentTask = &TaskInfoWS{
 				ID:          robot.CurrentTaskID,
@@ -329,12 +354,28 @@ type RobotStateWS struct {
 	State          string       `json:"state"`
 	StateCode      string       `json:"state_code,omitempty"`       // Enhanced state code (e.g., "pick:executing")
 	CurrentGraphID string       `json:"current_graph_id,omitempty"` // Currently executing graph ID
-	ExecutionPhase string       `json:"execution_phase"`            // Explicit phase: idle, starting, executing, completing
+	ExecutionPhase string       `json:"execution_phase"`            // Explicit phase: idle, starting, executing, completing, waiting_for_precondition
 	SemanticTags   []string     `json:"semantic_tags,omitempty"`    // State semantic tags
 	IsOnline       bool         `json:"is_online"`
 	IsExecuting    bool         `json:"is_executing"`               // Explicit execution flag
 	StalenessSec   float64      `json:"staleness_sec"`
 	CurrentTask    *TaskInfoWS  `json:"current_task,omitempty"`
+
+	// Precondition waiting status
+	IsWaitingForPrecondition    bool                      `json:"is_waiting_for_precondition,omitempty"`
+	WaitingForPreconditionSince string                    `json:"waiting_for_precondition_since,omitempty"` // ISO timestamp
+	BlockingConditions          []BlockingConditionInfoWS `json:"blocking_conditions,omitempty"`
+}
+
+// BlockingConditionInfoWS represents blocking condition info for WebSocket
+type BlockingConditionInfoWS struct {
+	ConditionID     string `json:"condition_id"`
+	Description     string `json:"description"`
+	TargetAgentID   string `json:"target_agent_id,omitempty"`
+	TargetAgentName string `json:"target_agent_name,omitempty"`
+	RequiredState   string `json:"required_state"`
+	CurrentState    string `json:"current_state,omitempty"`
+	Reason          string `json:"reason"`
 }
 
 type TaskInfoWS struct {
