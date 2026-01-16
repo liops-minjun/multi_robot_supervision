@@ -2600,17 +2600,16 @@ func (h *RawQUICHandler) handleHeartbeat(agentConn *agentConnection, hb *AgentHe
 	robotState, robotExists := h.stateManager.GetRobotState(agentConn.agentID)
 	if robotExists && robotState.IsExecuting && robotState.CurrentTaskID != "" {
 		// Server is managing this task - don't let heartbeat override execution state
-		// Only allow heartbeat to update if it's reporting the same task
-		if hb.CurrentTaskID != robotState.CurrentTaskID {
-			// Different task or no task from heartbeat - skip execution update to preserve server state
-			log.Printf("[RawQUIC] Skipping heartbeat execution update: server task=%s running (heartbeat task=%s)",
-				robotState.CurrentTaskID, hb.CurrentTaskID)
-		} else {
-			// Same task - allow update
-			if err := h.stateManager.UpdateRobotExecution(agentConn.agentID, hb.IsExecuting, hb.CurrentTaskID, hb.CurrentStepID); err != nil {
-				log.Printf("[RawQUIC] Failed to update agent execution for %s: %v", agentConn.agentID, err)
-			}
+		// Server is the source of truth for execution state during server-controlled execution
+		// Skip ALL heartbeat execution updates while server task is running
+		// The scheduler will update execution state directly when steps change
+		if hb.CurrentTaskID != robotState.CurrentTaskID || !hb.IsExecuting {
+			// Different task, or agent reports not executing - skip to preserve server state
+			// Agent may report is_executing=false between steps, but server knows task is still running
+			log.Printf("[RawQUIC] Skipping heartbeat execution update: server task=%s is_executing=true (heartbeat task=%s is_executing=%v)",
+				robotState.CurrentTaskID, hb.CurrentTaskID, hb.IsExecuting)
 		}
+		// Note: We don't update anything here - server/scheduler controls execution state
 	} else {
 		// No server-managed task running
 		// If agent reports is_executing=false, don't accept stale task_id/step_id
