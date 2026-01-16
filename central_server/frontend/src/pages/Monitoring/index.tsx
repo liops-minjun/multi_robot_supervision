@@ -241,8 +241,8 @@ export default function Monitoring() {
                         </div>
                         <div className="flex items-center gap-2 mt-0.5">
                           <span className="text-[10px] text-gray-600 font-mono">{robot.ip_address}</span>
-                          {robot.is_online && stateSnapshot?.state_code && (
-                            <span className="text-[10px] text-gray-500">{stateSnapshot.state_code}</span>
+                          {robot.is_online && (stateSnapshot?.current_state || stateSnapshot?.state_code) && (
+                            <span className="text-[10px] text-gray-500">{stateSnapshot.current_state || stateSnapshot.state_code}</span>
                           )}
                         </div>
                         {/* Compact blocking conditions display */}
@@ -318,9 +318,9 @@ export default function Monitoring() {
                             <div className="text-xs text-gray-500">State Code</div>
                             <div
                               className="text-sm font-medium"
-                              style={{ color: getStateColor(stateSnapshot?.state_code || selectedRobot.current_state) }}
+                              style={{ color: getStateColor(stateSnapshot?.current_state || stateSnapshot?.state_code || selectedRobot.current_state) }}
                             >
-                              {stateSnapshot?.state_code || selectedRobot.current_state || 'idle'}
+                              {stateSnapshot?.current_state || stateSnapshot?.state_code || 'idle'}
                             </div>
                           </div>
                         )}

@@ -1052,7 +1052,7 @@ export default function AgentDashboard() {
                           <div>
                             <span className="text-gray-500">State:</span>
                             <div className="text-gray-200 font-medium mt-0.5">
-                              {selectedRobotState.state_code || selectedRobotCurrentState || 'idle'}
+                              {selectedRobotCurrentState || selectedRobotState.state_code || 'idle'}
                             </div>
                           </div>
 

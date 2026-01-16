@@ -1601,6 +1601,14 @@ func (m *GlobalStateManager) CompleteExecution(agentID string, releasedZones []s
 	robot.CurrentGraphID = ""
 	robot.LastSeen = time.Now()
 
+	// Clear any state overrides (failsafe cleanup)
+	delete(m.stateOverrides, agentID)
+
+	// Restore CurrentState to ReportedState now that overrides are cleared
+	if robot.ReportedState != "" {
+		robot.CurrentState = robot.ReportedState
+	}
+
 	// Update state registry
 	m.stateRegistry.UpdateAgentState(agentID, robot.CurrentStateCode, robot.SemanticTags, "", robot.IsOnline, false)
 
@@ -1907,6 +1915,14 @@ func (m *GlobalStateManager) CompleteMultiExecution(executions []MultiExecutionR
 		robot.CurrentStepID = ""
 		robot.CurrentGraphID = ""
 		robot.LastSeen = now
+
+		// Clear any state overrides (failsafe cleanup)
+		delete(m.stateOverrides, exec.AgentID)
+
+		// Restore CurrentState to ReportedState now that overrides are cleared
+		if robot.ReportedState != "" {
+			robot.CurrentState = robot.ReportedState
+		}
 
 		// Release zones
 		for _, zoneID := range exec.RequiredZones {

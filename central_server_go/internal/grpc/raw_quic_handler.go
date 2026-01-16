@@ -2658,11 +2658,10 @@ func (h *RawQUICHandler) handleActionResult(agentConn *agentConnection, resultMs
 		h.callbackMu.Unlock()
 	}
 
-	// Update execution state in state manager
-	isTerminal := result.Status == ActionStatusSucceeded || result.Status == ActionStatusFailed || result.Status == ActionStatusCancelled
-	if isTerminal {
-		h.stateManager.CompleteExecution(result.AgentID, nil)
-	}
+	// NOTE: Do NOT call CompleteExecution() here.
+	// Individual action completion does not mean graph execution is complete.
+	// Graph completion is handled by handleGraphStatus() when the agent sends
+	// GraphExecutionStatusMsg with completed/failed/cancelled status.
 }
 
 // handleActionFeedback processes action progress feedback
@@ -2736,6 +2735,9 @@ func (h *RawQUICHandler) handleGraphStatus(agentConn *agentConnection, status *G
 	if status == nil {
 		return
 	}
+
+	log.Printf("[RawQUIC] handleGraphStatus: ExecutionID=%s GraphID=%s AgentID=%s State=%d StepID=%s",
+		status.ExecutionID, status.GraphID, status.AgentID, status.State, status.CurrentVertexID)
 
 	taskID := status.ExecutionID
 	if taskID == "" {
@@ -2835,8 +2837,12 @@ func (h *RawQUICHandler) updateGraphStateOverrides(executionID, graphID, agentID
 		}
 	}
 	if step == nil {
+		log.Printf("[RawQUIC] updateGraphStateOverrides: step %s not found in graph %s", stepID, graphID)
 		return
 	}
+
+	log.Printf("[RawQUIC] updateGraphStateOverrides: step=%s DuringStates=%v DuringStateTargets=%+v",
+		stepID, step.DuringStates, step.DuringStateTargets)
 
 	applied := h.applyDuringStateTargets(
 		agentID,

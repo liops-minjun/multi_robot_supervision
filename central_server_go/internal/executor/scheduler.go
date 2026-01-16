@@ -349,6 +349,11 @@ func (s *Scheduler) runTask(ctx context.Context, task *RunningTask) {
 		if idx, found := task.StepIndex[nextStep]; found {
 			log.Printf("[DEBUG] Found step index: %d, advancing to step %s", idx, task.Steps[idx].ID)
 			task.CurrentStep = idx
+
+			// Update state manager with new step ID for accurate UI display
+			if err := s.stateManager.UpdateRobotExecution(task.AgentID, true, task.ID, task.Steps[idx].ID); err != nil {
+				log.Printf("[Scheduler] Failed to update step in state manager: %v", err)
+			}
 		} else {
 			log.Printf("Next step %s not found in task %s (available: %v)", nextStep, task.ID, task.StepIndex)
 			task.Status = TaskFailed
@@ -365,6 +370,10 @@ func (s *Scheduler) runTask(ctx context.Context, task *RunningTask) {
 // executeStep executes a single step
 func (s *Scheduler) executeStep(ctx context.Context, task *RunningTask, step *db.ActionGraphStep) *StepResult {
 	log.Printf("Executing step: task=%s step=%s type=%s", task.ID, step.ID, step.Type)
+
+	// Apply during states at step start
+	s.applyStepDuringStates(task, step)
+	defer s.clearStepDuringStates(task, step)
 
 	// Handle terminal steps
 	if step.Type == "terminal" {
@@ -1636,4 +1645,80 @@ func (s *Scheduler) runMultiAgentTask(ctx context.Context, task *RunningTask, sy
 
 	// Run the task (reuse existing runTask logic)
 	s.runTask(ctx, task)
+}
+
+// applyStepDuringStates applies during_states for a step execution
+func (s *Scheduler) applyStepDuringStates(task *RunningTask, step *db.ActionGraphStep) {
+	if s.stateManager == nil {
+		return
+	}
+
+	sourceID := fmt.Sprintf("task:%s:step:%s", task.ID, step.ID)
+
+	// First try DuringStateTargets
+	for _, target := range step.DuringStateTargets {
+		if target.State == "" {
+			continue
+		}
+
+		targetAgentID := task.AgentID
+		switch target.TargetType {
+		case "self", "":
+			targetAgentID = task.AgentID
+		case "agent", "specific":
+			if target.AgentID != "" {
+				targetAgentID = target.AgentID
+			}
+		case "all":
+			// Apply to all robots - for now just apply to self
+			targetAgentID = task.AgentID
+		}
+
+		if err := s.stateManager.SetRobotStateOverride(targetAgentID, sourceID, target.State); err != nil {
+			log.Printf("[Scheduler] Failed to apply during state %s to %s: %v", target.State, targetAgentID, err)
+		} else {
+			log.Printf("[Scheduler] Applied during state %s to %s (step=%s)", target.State, targetAgentID, step.ID)
+		}
+	}
+
+	// Fallback to DuringStates if no targets
+	if len(step.DuringStateTargets) == 0 && len(step.DuringStates) > 0 {
+		for _, state := range step.DuringStates {
+			if state == "" {
+				continue
+			}
+			if err := s.stateManager.SetRobotStateOverride(task.AgentID, sourceID, state); err != nil {
+				log.Printf("[Scheduler] Failed to apply during state %s: %v", state, err)
+			} else {
+				log.Printf("[Scheduler] Applied during state %s (step=%s)", state, step.ID)
+			}
+			break // Only apply first state
+		}
+	}
+}
+
+// clearStepDuringStates clears during_states after step execution
+func (s *Scheduler) clearStepDuringStates(task *RunningTask, step *db.ActionGraphStep) {
+	if s.stateManager == nil {
+		return
+	}
+
+	sourceID := fmt.Sprintf("task:%s:step:%s", task.ID, step.ID)
+
+	// Clear from DuringStateTargets
+	for _, target := range step.DuringStateTargets {
+		targetAgentID := task.AgentID
+		switch target.TargetType {
+		case "agent", "specific":
+			if target.AgentID != "" {
+				targetAgentID = target.AgentID
+			}
+		}
+		_ = s.stateManager.ClearRobotStateOverride(targetAgentID, sourceID)
+	}
+
+	// Also clear from self if using fallback DuringStates
+	if len(step.DuringStateTargets) == 0 && len(step.DuringStates) > 0 {
+		_ = s.stateManager.ClearRobotStateOverride(task.AgentID, sourceID)
+	}
 }
