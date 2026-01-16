@@ -2595,9 +2595,38 @@ func (h *RawQUICHandler) handleHeartbeat(agentConn *agentConnection, hb *AgentHe
 		log.Printf("[RawQUIC] Failed to update agent state for %s: %v", agentConn.agentID, err)
 	}
 
-	// Update execution state
-	if err := h.stateManager.UpdateRobotExecution(agentConn.agentID, hb.IsExecuting, hb.CurrentTaskID, hb.CurrentStepID); err != nil {
-		log.Printf("[RawQUIC] Failed to update agent execution for %s: %v", agentConn.agentID, err)
+	// Update execution state, but only if server is not actively managing a task
+	// This prevents agent heartbeat from overwriting server-controlled execution state
+	robotState, robotExists := h.stateManager.GetRobotState(agentConn.agentID)
+	if robotExists && robotState.IsExecuting && robotState.CurrentTaskID != "" {
+		// Server is managing this task - don't let heartbeat override execution state
+		// Only allow heartbeat to update if it's reporting the same task
+		if hb.CurrentTaskID != robotState.CurrentTaskID {
+			// Different task or no task from heartbeat - skip execution update to preserve server state
+			log.Printf("[RawQUIC] Skipping heartbeat execution update: server task=%s running (heartbeat task=%s)",
+				robotState.CurrentTaskID, hb.CurrentTaskID)
+		} else {
+			// Same task - allow update
+			if err := h.stateManager.UpdateRobotExecution(agentConn.agentID, hb.IsExecuting, hb.CurrentTaskID, hb.CurrentStepID); err != nil {
+				log.Printf("[RawQUIC] Failed to update agent execution for %s: %v", agentConn.agentID, err)
+			}
+		}
+	} else {
+		// No server-managed task running
+		// If agent reports is_executing=false, don't accept stale task_id/step_id
+		// This prevents stale heartbeat values from restoring cleared state
+		if !hb.IsExecuting && hb.CurrentTaskID != "" {
+			// Agent is not executing but reports a task_id - this is stale data, ignore it
+			// Just update is_executing to false with empty task/step
+			if err := h.stateManager.UpdateRobotExecution(agentConn.agentID, false, "", ""); err != nil {
+				log.Printf("[RawQUIC] Failed to update agent execution for %s: %v", agentConn.agentID, err)
+			}
+		} else {
+			// Use heartbeat values as-is
+			if err := h.stateManager.UpdateRobotExecution(agentConn.agentID, hb.IsExecuting, hb.CurrentTaskID, hb.CurrentStepID); err != nil {
+				log.Printf("[RawQUIC] Failed to update agent execution for %s: %v", agentConn.agentID, err)
+			}
+		}
 	}
 
 	// Update last seen
