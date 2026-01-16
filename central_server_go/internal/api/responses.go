@@ -317,13 +317,18 @@ type RobotStateSnapshot struct {
 	CurrentState   string   `json:"current_state"`
 	StateCode      string   `json:"state_code,omitempty"`       // Enhanced state code (e.g., "pick:executing")
 	CurrentGraphID string   `json:"current_graph_id,omitempty"` // Currently executing graph ID
-	ExecutionPhase string   `json:"execution_phase,omitempty"`  // idle, offline, starting, executing
+	ExecutionPhase string   `json:"execution_phase,omitempty"`  // idle, offline, starting, executing, waiting_for_precondition
 	SemanticTags   []string `json:"semantic_tags,omitempty"`    // State semantic tags
 	IsOnline       bool     `json:"is_online"`
 	IsExecuting    bool     `json:"is_executing"`
 	CurrentTaskID  string   `json:"current_task_id,omitempty"`
 	CurrentStepID  string   `json:"current_step_id,omitempty"`
 	StalenessSec   float64  `json:"staleness_sec"`
+
+	// Precondition waiting status
+	IsWaitingForPrecondition    bool                            `json:"is_waiting_for_precondition,omitempty"`
+	WaitingForPreconditionSince string                          `json:"waiting_for_precondition_since,omitempty"` // ISO timestamp
+	BlockingConditions          []BlockingConditionInfoResponse `json:"blocking_conditions,omitempty"`
 }
 
 type AgentStateSnapshot struct {

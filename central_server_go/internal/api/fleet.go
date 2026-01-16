@@ -143,16 +143,57 @@ func (s *Server) GetRobotState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now()
+
+	// Determine execution phase
+	executionPhase := "idle"
+	if !robotState.IsOnline {
+		executionPhase = "offline"
+	} else if robotState.IsWaitingForPrecondition {
+		executionPhase = "waiting_for_precondition"
+	} else if robotState.IsExecuting {
+		if robotState.CurrentStepID == "" {
+			executionPhase = "starting"
+		} else {
+			executionPhase = "executing"
+		}
+	}
+
 	response := &RobotStateSnapshot{
-		ID:            robotState.ID,
-		Name:          robotState.Name,
-		AgentID:       robotState.AgentID,
-		CurrentState:  robotState.CurrentState,
-		IsOnline:      robotState.IsOnline,
-		IsExecuting:   robotState.IsExecuting,
-		CurrentTaskID: robotState.CurrentTaskID,
-		CurrentStepID: robotState.CurrentStepID,
-		StalenessSec:  now.Sub(robotState.LastSeen).Seconds(),
+		ID:             robotState.ID,
+		Name:           robotState.Name,
+		AgentID:        robotState.AgentID,
+		CurrentState:   robotState.CurrentState,
+		StateCode:      robotState.CurrentStateCode,
+		CurrentGraphID: robotState.CurrentGraphID,
+		ExecutionPhase: executionPhase,
+		SemanticTags:   robotState.SemanticTags,
+		IsOnline:       robotState.IsOnline,
+		IsExecuting:    robotState.IsExecuting,
+		CurrentTaskID:  robotState.CurrentTaskID,
+		CurrentStepID:  robotState.CurrentStepID,
+		StalenessSec:   now.Sub(robotState.LastSeen).Seconds(),
+	}
+
+	// Add precondition waiting info
+	if robotState.IsWaitingForPrecondition {
+		response.IsWaitingForPrecondition = true
+		if !robotState.WaitingForPreconditionSince.IsZero() {
+			response.WaitingForPreconditionSince = robotState.WaitingForPreconditionSince.Format(time.RFC3339)
+		}
+		if len(robotState.BlockingConditions) > 0 {
+			response.BlockingConditions = make([]BlockingConditionInfoResponse, len(robotState.BlockingConditions))
+			for i, bc := range robotState.BlockingConditions {
+				response.BlockingConditions[i] = BlockingConditionInfoResponse{
+					ConditionID:     bc.ConditionID,
+					Description:     bc.Description,
+					TargetAgentID:   bc.TargetAgentID,
+					TargetAgentName: bc.TargetAgentName,
+					RequiredState:   bc.RequiredState,
+					CurrentState:    bc.CurrentState,
+					Reason:          bc.Reason,
+				}
+			}
+		}
 	}
 
 	writeJSON(w, http.StatusOK, response)
@@ -170,16 +211,56 @@ func (s *Server) GetAgentRobotsState(w http.ResponseWriter, r *http.Request) {
 
 	for _, robot := range snapshot.Robots {
 		if robot.AgentID == agentID {
+			// Determine execution phase
+			executionPhase := "idle"
+			if !robot.IsOnline {
+				executionPhase = "offline"
+			} else if robot.IsWaitingForPrecondition {
+				executionPhase = "waiting_for_precondition"
+			} else if robot.IsExecuting {
+				if robot.CurrentStepID == "" {
+					executionPhase = "starting"
+				} else {
+					executionPhase = "executing"
+				}
+			}
+
 			robotSnapshot := &RobotStateSnapshot{
-				ID:            robot.ID,
-				Name:          robot.Name,
-				AgentID:       robot.AgentID,
-				CurrentState:  robot.CurrentState,
-				IsOnline:      robot.IsOnline,
-				IsExecuting:   robot.IsExecuting,
-				CurrentTaskID: robot.CurrentTaskID,
-				CurrentStepID: robot.CurrentStepID,
-				StalenessSec:  now.Sub(robot.LastSeen).Seconds(),
+				ID:             robot.ID,
+				Name:           robot.Name,
+				AgentID:        robot.AgentID,
+				CurrentState:   robot.CurrentState,
+				StateCode:      robot.CurrentStateCode,
+				CurrentGraphID: robot.CurrentGraphID,
+				ExecutionPhase: executionPhase,
+				SemanticTags:   robot.SemanticTags,
+				IsOnline:       robot.IsOnline,
+				IsExecuting:    robot.IsExecuting,
+				CurrentTaskID:  robot.CurrentTaskID,
+				CurrentStepID:  robot.CurrentStepID,
+				StalenessSec:   now.Sub(robot.LastSeen).Seconds(),
+			}
+
+			// Add precondition waiting info
+			if robot.IsWaitingForPrecondition {
+				robotSnapshot.IsWaitingForPrecondition = true
+				if !robot.WaitingForPreconditionSince.IsZero() {
+					robotSnapshot.WaitingForPreconditionSince = robot.WaitingForPreconditionSince.Format(time.RFC3339)
+				}
+				if len(robot.BlockingConditions) > 0 {
+					robotSnapshot.BlockingConditions = make([]BlockingConditionInfoResponse, len(robot.BlockingConditions))
+					for i, bc := range robot.BlockingConditions {
+						robotSnapshot.BlockingConditions[i] = BlockingConditionInfoResponse{
+							ConditionID:     bc.ConditionID,
+							Description:     bc.Description,
+							TargetAgentID:   bc.TargetAgentID,
+							TargetAgentName: bc.TargetAgentName,
+							RequiredState:   bc.RequiredState,
+							CurrentState:    bc.CurrentState,
+							Reason:          bc.Reason,
+						}
+					}
+				}
 			}
 
 			robots = append(robots, robotSnapshot)
