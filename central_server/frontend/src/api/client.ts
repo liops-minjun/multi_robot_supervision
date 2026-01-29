@@ -19,6 +19,7 @@ import type {
   AssignmentInfo,
   AgentOverviewInfo,
   AgentCapabilitiesResponse,
+  AgentActionGraphInfo,
   ActionTypeStats,
   ActionServerInfo,
   CompatibleAgentsResponse,
@@ -27,7 +28,11 @@ import type {
   SystemStatesResponse,
   TaskLogEntry,
   TaskLogStats,
-  MultiAgentExecuteResponse
+  MultiAgentExecuteResponse,
+  RobotTelemetry,
+  JointStateData,
+  OdometryData,
+  TransformData
 } from '../types'
 
 const api = axios.create({
@@ -47,6 +52,17 @@ export const agentApi = {
   get: async (id: string): Promise<Agent> => {
     const { data } = await api.get(`/agents/${id}`)
     return data
+  },
+
+  // Update agent (primarily for renaming)
+  update: async (id: string, updates: { name?: string }): Promise<Agent> => {
+    const { data } = await api.patch(`/agents/${id}`, updates)
+    return data
+  },
+
+  // Delete agent
+  delete: async (id: string): Promise<void> => {
+    await api.delete(`/agents/${id}`)
   },
 
   // Get aggregated capabilities for all robots of an agent
@@ -81,6 +97,26 @@ export const agentApi = {
     message: string
   }> => {
     const { data } = await api.post(`/agents/${agentId}/reset-state`)
+    return data
+  },
+
+  // Get action graphs assigned to an agent
+  getAssignedActionGraphs: async (agentId: string): Promise<AgentActionGraphInfo[]> => {
+    const { data } = await api.get(`/agents/${agentId}/action-graphs`)
+    return data
+  },
+
+  // Deploy an action graph to an agent via QUIC
+  deployActionGraph: async (graphId: string, agentId: string): Promise<{
+    success: boolean
+    action_graph_id: string
+    agent_id: string
+    version: number
+    checksum: string
+    error: string
+    deployment_status: string
+  }> => {
+    const { data } = await api.post(`/action-graphs/${graphId}/deploy/${agentId}`)
     return data
   },
 }
@@ -118,10 +154,11 @@ export const capabilityApi = {
       status: string
       is_available: boolean
       goal_schema: Record<string, unknown>
+      result_schema: Record<string, unknown>
     }>
     total: number
   }> => {
-    const { data } = await api.get(`/capabilities/${actionType}`)
+    const { data } = await api.get(`/capabilities/action-type/${actionType}`)
     return data
   },
 }
@@ -210,6 +247,23 @@ export const actionGraphApi = {
   execute: async (id: string, agentId: string, params?: Record<string, unknown>): Promise<unknown> => {
     const { data } = await api.post(`/action-graphs/${id}/execute`, null, {
       params: { agent_id: agentId, ...params }
+    })
+    return data
+  },
+
+  // Check if action graph can be executed on an agent (safety check)
+  checkExecutability: async (graphId: string, agentId: string): Promise<{
+    action_graph_id: string
+    agent_id: string
+    can_execute: boolean
+    capabilities_valid: boolean
+    agent_online: boolean
+    missing_capabilities: string[] | null
+    unavailable_servers: string[] | null
+    message: string
+  }> => {
+    const { data } = await api.get(`/action-graphs/${graphId}/check-executability`, {
+      params: { agent_id: agentId }
     })
     return data
   },
@@ -513,6 +567,33 @@ export const systemApi = {
     const { data } = await api.post('/system/cache/evict', {
       max_age_minutes: maxAgeMinutes || 60
     })
+    return data
+  },
+}
+
+// Telemetry APIs (for parameter loading)
+export const telemetryApi = {
+  // Get full telemetry for a robot
+  getRobotTelemetry: async (robotId: string): Promise<RobotTelemetry> => {
+    const { data } = await api.get(`/fleet/robots/${robotId}/telemetry`)
+    return data
+  },
+
+  // Get joint state only
+  getJointState: async (robotId: string): Promise<JointStateData> => {
+    const { data } = await api.get(`/fleet/robots/${robotId}/telemetry/joint-state`)
+    return data
+  },
+
+  // Get odometry only
+  getOdometry: async (robotId: string): Promise<OdometryData> => {
+    const { data } = await api.get(`/fleet/robots/${robotId}/telemetry/odometry`)
+    return data
+  },
+
+  // Get transforms only
+  getTransforms: async (robotId: string): Promise<TransformData[]> => {
+    const { data } = await api.get(`/fleet/robots/${robotId}/telemetry/transforms`)
     return data
   },
 }

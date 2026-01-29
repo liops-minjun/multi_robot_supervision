@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
 """
-Test Action Server A
+Test Action Server A (Lifecycle Node)
 
-A simple action server that:
+A lifecycle-managed action server that:
 - Waits randomly 5-10 seconds
 - Returns Success with 90% probability
 - Returns Failure with 10% probability
 
-Used for testing Action Graph workflows.
+Lifecycle States:
+- UNCONFIGURED: Node created, no resources allocated
+- INACTIVE: Configured but action server not accepting goals
+- ACTIVE: Action server is running and accepting goals
+- FINALIZED: Shutting down
+
+Used for testing Action Graph workflows and lifecycle state monitoring.
 """
 
 import rclpy
-from rclpy.node import Node
+from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -22,10 +28,43 @@ import time
 from test_action_server.action import TestAction
 
 
-class TestActionServerA(Node):
+class TestActionServerA(LifecycleNode):
     def __init__(self):
         super().__init__('test_a_action_server')
 
+        self._action_server = None
+        self._callback_group = ReentrantCallbackGroup()
+
+        # Configuration
+        self.min_duration = 5.0   # Minimum execution time (seconds)
+        self.max_duration = 10.0  # Maximum execution time (seconds)
+        self.success_rate = 0.9   # 90% success rate
+
+        self.get_logger().info('Test Action Server A created (UNCONFIGURED state)')
+        self.get_logger().info('Use "ros2 lifecycle set /test_a_action_server configure" to configure')
+        self.get_logger().info('Use "ros2 lifecycle set /test_a_action_server activate" to activate')
+
+    # ============================================================
+    # Lifecycle Callbacks
+    # ============================================================
+
+    def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
+        """Configure the node - allocate resources."""
+        self.get_logger().info('Configuring...')
+
+        # In a real system, this is where you would:
+        # - Load parameters
+        # - Initialize connections
+        # - Allocate memory buffers
+
+        self.get_logger().info('Configured successfully (INACTIVE state)')
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_activate(self, state: LifecycleState) -> TransitionCallbackReturn:
+        """Activate the node - start the action server."""
+        self.get_logger().info('Activating...')
+
+        # Create action server only when activated
         self._action_server = ActionServer(
             self,
             TestAction,
@@ -33,15 +72,55 @@ class TestActionServerA(Node):
             execute_callback=self.execute_callback,
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback,
-            callback_group=ReentrantCallbackGroup()
+            callback_group=self._callback_group
         )
 
-        self.get_logger().info('Test Action Server A started on /test_A_action')
+        self.get_logger().info('Test Action Server A activated on /test_A_action (ACTIVE state)')
+        return TransitionCallbackReturn.SUCCESS
 
-        # Configuration
-        self.min_duration = 5.0   # Minimum execution time (seconds)
-        self.max_duration = 10.0  # Maximum execution time (seconds)
-        self.success_rate = 0.9   # 90% success rate
+    def on_deactivate(self, state: LifecycleState) -> TransitionCallbackReturn:
+        """Deactivate the node - stop accepting new goals."""
+        self.get_logger().info('Deactivating...')
+
+        # Destroy action server when deactivated
+        if self._action_server:
+            self._action_server.destroy()
+            self._action_server = None
+
+        self.get_logger().info('Deactivated (INACTIVE state)')
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_cleanup(self, state: LifecycleState) -> TransitionCallbackReturn:
+        """Clean up resources - return to unconfigured state."""
+        self.get_logger().info('Cleaning up...')
+
+        # Clean up any allocated resources
+        if self._action_server:
+            self._action_server.destroy()
+            self._action_server = None
+
+        self.get_logger().info('Cleaned up (UNCONFIGURED state)')
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_shutdown(self, state: LifecycleState) -> TransitionCallbackReturn:
+        """Shutdown the node."""
+        self.get_logger().info('Shutting down...')
+
+        if self._action_server:
+            self._action_server.destroy()
+            self._action_server = None
+
+        self.get_logger().info('Shutdown complete (FINALIZED state)')
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_error(self, state: LifecycleState) -> TransitionCallbackReturn:
+        """Handle error state."""
+        self.get_logger().error(f'Error occurred in state {state.label}')
+        return TransitionCallbackReturn.SUCCESS
+
+    # ============================================================
+    # Action Server Callbacks
+    # ============================================================
 
     def goal_callback(self, goal_request):
         """Accept or reject a goal request."""

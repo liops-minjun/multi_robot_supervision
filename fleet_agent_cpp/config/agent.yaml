@@ -6,9 +6,13 @@
 #   ros2 launch fleet_agent_cpp fleet_agent.launch.py server_ip:=192.168.0.100 agent_id:=agent_02
 
 # Agent identification
+# id와 name을 비워두면 server가 자동으로 할당합니다
+# - id: hardware fingerprint 기반으로 서버가 UUID 할당
+# - name: "Agent-001", "Agent-002" 등 순차적으로 서버가 할당
 agent:
-  id: "${FLEET_AGENT_ID:-agent_01}"
-  name: "Fleet Agent"
+  id: ""  # Server-assigned ID 사용 (재시작 시에도 동일한 에이전트로 인식)
+  name: ""  # Server-assigned name 사용 (빈 값 또는 "Fleet Agent"면 서버가 자동 할당)
+  use_server_assigned_id: true
 
 # Server connection
 server:
@@ -46,6 +50,7 @@ storage:
   state_definitions_path: "/tmp/fleet_agent/state_definitions"
   state_persistence_path: "/tmp/fleet_agent/state"
   message_queue_path: "/tmp/fleet_agent/queue"
+  agent_id_path: "/tmp/fleet_agent/agent_id"  # Server-assigned ID 저장 경로
   enable_state_persistence: false
   enable_message_persistence: false
 

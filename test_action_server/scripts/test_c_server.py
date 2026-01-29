@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
 """
-Test Action Server C
+Test Action Server C (Lifecycle Node)
 
-A simple action server that:
+A lifecycle-managed action server that:
 - Waits randomly 5-10 seconds
 - Returns Success with 90% probability
 - Returns Failure with 10% probability
 
-Used for testing Action Graph workflows.
+Lifecycle States:
+- UNCONFIGURED: Node created, no resources allocated
+- INACTIVE: Configured but action server not accepting goals
+- ACTIVE: Action server is running and accepting goals
+- FINALIZED: Shutting down
+
+Used for testing Action Graph workflows and lifecycle state monitoring.
 """
 
 import rclpy
-from rclpy.node import Node
+from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -22,9 +28,35 @@ import time
 from test_action_server.action import TestAction
 
 
-class TestActionServerC(Node):
+class TestActionServerC(LifecycleNode):
     def __init__(self):
         super().__init__('test_c_action_server')
+
+        self._action_server = None
+        self._callback_group = ReentrantCallbackGroup()
+
+        # Configuration
+        self.min_duration = 5.0   # Minimum execution time (seconds)
+        self.max_duration = 10.0  # Maximum execution time (seconds)
+        self.success_rate = 0.9   # 90% success rate
+
+        self.get_logger().info('Test Action Server C created (UNCONFIGURED state)')
+        self.get_logger().info('Use "ros2 lifecycle set /test_c_action_server configure" to configure')
+        self.get_logger().info('Use "ros2 lifecycle set /test_c_action_server activate" to activate')
+
+    # ============================================================
+    # Lifecycle Callbacks
+    # ============================================================
+
+    def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
+        """Configure the node - allocate resources."""
+        self.get_logger().info('Configuring...')
+        self.get_logger().info('Configured successfully (INACTIVE state)')
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_activate(self, state: LifecycleState) -> TransitionCallbackReturn:
+        """Activate the node - start the action server."""
+        self.get_logger().info('Activating...')
 
         self._action_server = ActionServer(
             self,
@@ -33,15 +65,53 @@ class TestActionServerC(Node):
             execute_callback=self.execute_callback,
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback,
-            callback_group=ReentrantCallbackGroup()
+            callback_group=self._callback_group
         )
 
-        self.get_logger().info('Test Action Server C started on /test_C_action')
+        self.get_logger().info('Test Action Server C activated on /test_C_action (ACTIVE state)')
+        return TransitionCallbackReturn.SUCCESS
 
-        # Configuration
-        self.min_duration = 5.0   # Minimum execution time (seconds)
-        self.max_duration = 10.0  # Maximum execution time (seconds)
-        self.success_rate = 0.9   # 90% success rate
+    def on_deactivate(self, state: LifecycleState) -> TransitionCallbackReturn:
+        """Deactivate the node - stop accepting new goals."""
+        self.get_logger().info('Deactivating...')
+
+        if self._action_server:
+            self._action_server.destroy()
+            self._action_server = None
+
+        self.get_logger().info('Deactivated (INACTIVE state)')
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_cleanup(self, state: LifecycleState) -> TransitionCallbackReturn:
+        """Clean up resources - return to unconfigured state."""
+        self.get_logger().info('Cleaning up...')
+
+        if self._action_server:
+            self._action_server.destroy()
+            self._action_server = None
+
+        self.get_logger().info('Cleaned up (UNCONFIGURED state)')
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_shutdown(self, state: LifecycleState) -> TransitionCallbackReturn:
+        """Shutdown the node."""
+        self.get_logger().info('Shutting down...')
+
+        if self._action_server:
+            self._action_server.destroy()
+            self._action_server = None
+
+        self.get_logger().info('Shutdown complete (FINALIZED state)')
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_error(self, state: LifecycleState) -> TransitionCallbackReturn:
+        """Handle error state."""
+        self.get_logger().error(f'Error occurred in state {state.label}')
+        return TransitionCallbackReturn.SUCCESS
+
+    # ============================================================
+    # Action Server Callbacks
+    # ============================================================
 
     def goal_callback(self, goal_request):
         """Accept or reject a goal request."""
@@ -57,18 +127,15 @@ class TestActionServerC(Node):
         """Execute the action."""
         self.get_logger().info(f'Executing goal: {goal_handle.request.task_name}')
 
-        # Determine random execution time
         execution_time = random.uniform(self.min_duration, self.max_duration)
         start_time = time.time()
 
         feedback_msg = TestAction.Feedback()
 
-        # Execute with progress feedback
         while True:
             elapsed = time.time() - start_time
             progress = min(elapsed / execution_time, 1.0)
 
-            # Check for cancellation
             if goal_handle.is_cancel_requested:
                 goal_handle.canceled()
                 self.get_logger().info('Goal canceled')
@@ -78,20 +145,16 @@ class TestActionServerC(Node):
                 result.execution_time = elapsed
                 return result
 
-            # Send feedback
             feedback_msg.progress = progress
             feedback_msg.status = f'Processing... ({int(progress * 100)}%)'
             feedback_msg.elapsed_time = elapsed
             goal_handle.publish_feedback(feedback_msg)
 
-            # Check if done
             if elapsed >= execution_time:
                 break
 
-            # Sleep briefly
             time.sleep(0.1)
 
-        # Determine success or failure
         actual_execution_time = time.time() - start_time
         success = random.random() < self.success_rate
 

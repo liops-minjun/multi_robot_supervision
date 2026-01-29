@@ -5,6 +5,7 @@
 #include "fleet_agent/core/logger.hpp"
 #include "fleet_agent/transport/quic_transport.hpp"
 #include "fleet_agent/executor/command_processor.hpp"
+#include "fleet_agent/executor/task_executor.hpp"
 
 #include "fleet/v1/service.pb.h"
 #include "fleet/v1/commands.pb.h"
@@ -419,6 +420,9 @@ MessageHandler::HandleResult MessageHandler::handle(const fleet::v1::ServerMessa
         case fleet::v1::ServerMessage::kFleetState:
             return handle_fleet_state(message.fleet_state());
 
+        case fleet::v1::ServerMessage::kStartTask:
+            return handle_start_task(message.start_task());
+
         case fleet::v1::ServerMessage::kAck:
             // Server acknowledgment - just log
             log.debug("Received server ack for message: {}",
@@ -671,6 +675,40 @@ MessageHandler::HandleResult MessageHandler::handle_fleet_state(
 
     log.debug("Updated fleet state cache with {} agent entries", entries.size());
 
+    return HandleResult{true, "", nullptr};
+}
+
+MessageHandler::HandleResult MessageHandler::handle_start_task(
+    const fleet::v1::StartTaskCommand& cmd) {
+
+    log.info("[TASK] StartTaskCommand received: task={}, graph={}, robot={}",
+             cmd.task_id(), cmd.graph_id(), cmd.robot_id());
+
+    if (!deps_.task_executor) {
+        log.error("[TASK] TaskExecutor not configured, cannot execute task");
+        return HandleResult{false, "TaskExecutor not available", nullptr};
+    }
+
+    // Convert params from protobuf map to std::unordered_map
+    std::unordered_map<std::string, std::string> params;
+    for (const auto& [key, value] : cmd.params()) {
+        params[key] = value;
+    }
+
+    // Start the task via TaskExecutor
+    bool started = deps_.task_executor->start_task(
+        cmd.task_id(),
+        cmd.graph_id(),
+        cmd.robot_id(),
+        params
+    );
+
+    if (!started) {
+        log.error("[TASK] Failed to start task: {}", cmd.task_id());
+        return HandleResult{false, "Failed to start task", nullptr};
+    }
+
+    log.info("[TASK] Task started successfully: {}", cmd.task_id());
     return HandleResult{true, "", nullptr};
 }
 

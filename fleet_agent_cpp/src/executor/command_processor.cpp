@@ -120,6 +120,48 @@ void CommandProcessor::remove_robot(const std::string& agent_id) {
     }
 }
 
+bool CommandProcessor::rename_robot(const std::string& old_id, const std::string& new_id) {
+    std::lock_guard<std::mutex> lock(executors_mutex_);
+
+    // Rename in executors_ map
+    auto it = executors_.find(old_id);
+    if (it == executors_.end()) {
+        log.warn("Cannot rename robot {} to {} - old ID not found", old_id, new_id);
+        return false;
+    }
+
+    if (executors_.find(new_id) != executors_.end()) {
+        log.warn("Cannot rename robot {} to {} - new ID already exists", old_id, new_id);
+        return false;
+    }
+
+    auto executor = std::move(it->second);
+    executors_.erase(it);
+    executors_[new_id] = std::move(executor);
+
+    // Rename in execution_contexts_ map
+    ExecutionContextMap::accessor old_acc;
+    if (execution_contexts_.find(old_acc, old_id)) {
+        auto ctx = std::move(old_acc->second);
+        execution_contexts_.erase(old_acc);
+
+        ExecutionContextMap::accessor new_acc;
+        execution_contexts_.insert(new_acc, new_id);
+        new_acc->second = std::move(ctx);
+    }
+
+    // Update TaskLogSender's agent ID (1:1 model: agent_id == robot_id)
+    if (task_log_sender_) {
+        task_log_sender_->set_agent_id(new_id);
+    }
+
+    // Update our own agent_id_
+    agent_id_ = new_id;
+
+    log.info("Renamed robot {} to {}", old_id, new_id);
+    return true;
+}
+
 void CommandProcessor::cancel_action(const std::string& agent_id, const std::string& reason) {
     auto* executor = get_executor(agent_id);
     if (executor && executor->is_executing()) {
@@ -226,8 +268,8 @@ void CommandProcessor::handle_execute_command(
     const fleet::v1::ExecuteCommand& cmd,
     const std::string& message_id) {
 
-    log.info("Execute command: {} for robot {} (action: {})",
-             cmd.command_id(), cmd.agent_id(), cmd.action_type());
+    log.info("Execute command: {} for robot {} (action_type: {}, action_server: '{}')",
+             cmd.command_id(), cmd.agent_id(), cmd.action_type(), cmd.action_server());
 
     // Set task context for logging
     task_log_sender_->set_task_context(cmd.task_id(), cmd.step_id(), cmd.command_id());
@@ -263,6 +305,67 @@ void CommandProcessor::handle_execute_command(
         result.completed_at_ms = now_ms();
         send_action_result(result);
         return;
+    }
+
+    // SAFETY CHECK: Validate capability/action server is available
+    // This prevents execution when action server is offline
+    {
+        CapabilityStore::const_accessor acc;
+        bool capability_found = capability_store_.find(acc, cmd.action_server());
+
+        if (!capability_found) {
+            log.error("Action server not found in capabilities: '{}'", cmd.action_server());
+            // Debug: List all registered capabilities
+            std::string available_caps;
+            for (auto it = capability_store_.begin(); it != capability_store_.end(); ++it) {
+                if (!available_caps.empty()) available_caps += ", ";
+                available_caps += "'" + it->first + "'";
+            }
+            log.error("Available capabilities: [{}]", available_caps);
+
+            task_log_sender_->error(
+                "Action server not found in capabilities",
+                "CommandProcessor",
+                {
+                    {"action_server", cmd.action_server()},
+                    {"action_type", cmd.action_type()}
+                }
+            );
+            ActionResultInternal result;
+            result.command_id = cmd.command_id();
+            result.agent_id = cmd.agent_id();
+            result.task_id = cmd.task_id();
+            result.step_id = cmd.step_id();
+            result.status = static_cast<int>(fleet::v1::ACTION_STATUS_REJECTED);
+            result.error = "Action server not found: " + cmd.action_server();
+            result.completed_at_ms = now_ms();
+            send_action_result(result);
+            return;
+        }
+
+        if (!acc->second.available.load()) {
+            log.error("Action server is not available: {}", cmd.action_server());
+            task_log_sender_->error(
+                "Action server is offline/unavailable",
+                "CommandProcessor",
+                {
+                    {"action_server", cmd.action_server()},
+                    {"action_type", cmd.action_type()}
+                }
+            );
+            ActionResultInternal result;
+            result.command_id = cmd.command_id();
+            result.agent_id = cmd.agent_id();
+            result.task_id = cmd.task_id();
+            result.step_id = cmd.step_id();
+            result.status = static_cast<int>(fleet::v1::ACTION_STATUS_REJECTED);
+            result.error = "Action server unavailable: " + cmd.action_server();
+            result.completed_at_ms = now_ms();
+            send_action_result(result);
+            return;
+        }
+
+        log.debug("Capability validation passed: {} ({})", cmd.action_server(), cmd.action_type());
     }
 
     // Check start conditions for Hybrid control
@@ -434,16 +537,92 @@ void CommandProcessor::handle_cancel_command(const fleet::v1::CancelCommand& cmd
 }
 
 void CommandProcessor::handle_deploy_graph(const fleet::v1::DeployGraphRequest& req) {
-    log.info("Deploy graph: {} (correlation: {})",
-             req.graph().metadata().id(), req.correlation_id());
+    const auto& graph = req.graph();
+    const auto& meta = graph.metadata();
 
-    bool success = graph_storage_.store(req.graph());
+    // Detailed graph logging
+    log.info("[GRAPH] ════════════════════════════════════════════════");
+    log.info("[GRAPH] 📥 Received Action Graph");
+    log.info("[GRAPH]   ID: {}", meta.id());
+    log.info("[GRAPH]   Name: {}", meta.name());
+    log.info("[GRAPH]   Version: {}", meta.version());
+    log.info("[GRAPH]   Entry: {}", graph.entry_point());
+
+    // Truncate checksum for display
+    std::string checksum_preview = graph.checksum();
+    if (checksum_preview.length() > 16) {
+        checksum_preview = checksum_preview.substr(0, 16) + "...";
+    }
+    log.info("[GRAPH]   Checksum: {}", checksum_preview);
+    log.info("[GRAPH] ────────────────────────────────────────────────");
+
+    // Log each vertex
+    int step_num = 1;
+    for (const auto& vertex : graph.vertices()) {
+        if (vertex.type() == fleet::v1::VERTEX_TYPE_STEP) {
+            const auto& step = vertex.step();
+
+            // Step type string
+            std::string step_type_str;
+            switch (step.step_type()) {
+                case fleet::v1::STEP_TYPE_ACTION: step_type_str = "action"; break;
+                case fleet::v1::STEP_TYPE_WAIT: step_type_str = "wait"; break;
+                case fleet::v1::STEP_TYPE_CONDITION: step_type_str = "condition"; break;
+                default: step_type_str = "unknown"; break;
+            }
+
+            log.info("[GRAPH]   [{:02d}] {} ({})", step_num++, vertex.id(), step_type_str);
+
+            if (step.has_action()) {
+                const auto& action = step.action();
+                log.info("[GRAPH]       └─ Action: {}", action.action_type());
+                log.info("[GRAPH]          Server: {}", action.action_server());
+                log.info("[GRAPH]          Timeout: {:.1f}s", action.timeout_sec());
+
+                // Log params with variable reference highlighting
+                std::string params(action.goal_params().begin(), action.goal_params().end());
+                if (!params.empty()) {
+                    // Truncate for display
+                    std::string params_preview = params;
+                    if (params_preview.length() > 60) {
+                        params_preview = params_preview.substr(0, 57) + "...";
+                    }
+
+                    if (params.find("${") != std::string::npos) {
+                        log.info("[GRAPH]          Params: {} [📎 USES VARIABLES]", params_preview);
+                    } else {
+                        log.info("[GRAPH]          Params: {}", params_preview);
+                    }
+                }
+
+            }
+
+            // Log start conditions if present
+            if (step.start_conditions_size() > 0) {
+                log.info("[GRAPH]          ⏳ Start conditions: {} total", step.start_conditions_size());
+                for (const auto& cond : step.start_conditions()) {
+                    log.info("[GRAPH]             - {}: {} {} {}",
+                             cond.id(), cond.target_type(), cond.state_operator(), cond.state());
+                }
+            }
+        } else if (vertex.type() == fleet::v1::VERTEX_TYPE_TERMINAL) {
+            std::string terminal_str = (vertex.terminal().terminal_type() == fleet::v1::TERMINAL_TYPE_SUCCESS)
+                                       ? "✓ success" : "✗ failure";
+            log.info("[GRAPH]   [END] {} ({})", vertex.id(), terminal_str);
+        }
+    }
+
+    log.info("[GRAPH] ════════════════════════════════════════════════");
+
+    // Store graph
+    bool success = graph_storage_.store(graph);
+    log.info("[GRAPH] Storage: {}", success ? "✓ Saved" : "✗ Failed");
 
     send_deploy_response(
         req.correlation_id(),
         success,
-        req.graph().metadata().id(),
-        req.graph().metadata().version(),
+        meta.id(),
+        meta.version(),
         success ? "" : "Failed to store graph"
     );
 }

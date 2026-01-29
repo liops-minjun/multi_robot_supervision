@@ -391,6 +391,7 @@ type CapabilityResponse struct {
 	SuccessCriteria map[string]interface{} `json:"success_criteria,omitempty"`
 	Status          string                 `json:"status"`
 	IsAvailable     bool                   `json:"is_available"`
+	LifecycleState  string                 `json:"lifecycle_state"` // unknown, unconfigured, inactive, active, finalized
 	DiscoveredAt    time.Time              `json:"discovered_at"`
 }
 
@@ -418,6 +419,8 @@ type CapabilityRegisterItem struct {
 	ResultSchema    map[string]interface{} `json:"result_schema,omitempty"`
 	FeedbackSchema  map[string]interface{} `json:"feedback_schema,omitempty"`
 	SuccessCriteria map[string]interface{} `json:"success_criteria,omitempty"`
+	IsAvailable     *bool                  `json:"is_available,omitempty"`     // Optional: defaults to true if not specified
+	LifecycleState  string                 `json:"lifecycle_state,omitempty"`  // unknown, unconfigured, inactive, active, finalized
 }
 
 // CapabilityStatusUpdateRequest represents a request to update capability status
@@ -429,8 +432,9 @@ type CapabilityStatusUpdateRequest struct {
 
 // CapabilityStatus represents the runtime status of a capability
 type CapabilityStatus struct {
-	Available bool   `json:"available"`
-	Status    string `json:"status"` // idle, executing
+	Available      bool   `json:"available"`
+	Status         string `json:"status"`                    // idle, executing
+	LifecycleState string `json:"lifecycle_state,omitempty"` // unknown, unconfigured, inactive, active, finalized
 }
 
 // AllCapabilitiesResponse represents capabilities aggregated across all agents
@@ -450,12 +454,56 @@ type ActionTypeInfo struct {
 
 // ActionServerInfo represents an individual action server (not grouped by type)
 type ActionServerInfo struct {
-	ActionType   string `json:"action_type"`   // e.g., "test_msgs/TestAction"
-	ActionServer string `json:"action_server"` // e.g., "/test_A_action"
-	AgentID      string `json:"agent_id"`
-	AgentName    string `json:"agent_name,omitempty"`
-	IsAvailable  bool   `json:"is_available"`
-	Status       string `json:"status"`
+	ActionType     string `json:"action_type"`   // e.g., "test_msgs/TestAction"
+	ActionServer   string `json:"action_server"` // e.g., "/test_A_action"
+	AgentID        string `json:"agent_id"`
+	AgentName      string `json:"agent_name,omitempty"`
+	IsAvailable    bool   `json:"is_available"`
+	LifecycleState string `json:"lifecycle_state"` // unknown, unconfigured, inactive, active, finalized
+	Status         string `json:"status"`
+}
+
+// ============================================================
+// Capability Detail & Incremental Sync Models
+// ============================================================
+
+// CapabilityDetailResponse represents a single capability with full details
+type CapabilityDetailResponse struct {
+	ID              string                 `json:"id"`
+	AgentID         string                 `json:"agent_id"`
+	AgentName       string                 `json:"agent_name,omitempty"`
+	ActionType      string                 `json:"action_type"`
+	ActionServer    string                 `json:"action_server"`
+	GoalSchema      map[string]interface{} `json:"goal_schema,omitempty"`
+	ResultSchema    map[string]interface{} `json:"result_schema,omitempty"`
+	FeedbackSchema  map[string]interface{} `json:"feedback_schema,omitempty"`
+	SuccessCriteria map[string]interface{} `json:"success_criteria,omitempty"`
+	Description     string                 `json:"description,omitempty"`
+	Category        string                 `json:"category,omitempty"`
+	DefaultTimeout  float64                `json:"default_timeout"`
+	SchemaVersion   int                    `json:"schema_version"`
+	Status          string                 `json:"status"`
+	IsAvailable     bool                   `json:"is_available"`
+	LifecycleState  string                 `json:"lifecycle_state"` // unknown, unconfigured, inactive, active, finalized
+	LastUsedAt      *time.Time             `json:"last_used_at,omitempty"`
+	DiscoveredAt    time.Time              `json:"discovered_at"`
+	UpdatedAt       time.Time              `json:"updated_at"`
+	DeletedAt       *time.Time             `json:"deleted_at,omitempty"` // Non-nil if soft-deleted
+}
+
+// CapabilityChangeInfo represents a capability change for incremental sync
+type CapabilityChangeInfo struct {
+	ChangeType string                   `json:"change_type"` // "updated" or "deleted"
+	ChangedAt  time.Time                `json:"changed_at"`
+	Capability CapabilityDetailResponse `json:"capability"`
+}
+
+// CapabilitiesChangedResponse represents the response for incremental sync
+type CapabilitiesChangedResponse struct {
+	Since      time.Time              `json:"since"`       // The requested since timestamp
+	Changes    []CapabilityChangeInfo `json:"changes"`     // Changed capabilities
+	TotalCount int                    `json:"total_count"` // Number of changes
+	ServerTime time.Time              `json:"server_time"` // Current server time for next sync
 }
 
 // ============================================================

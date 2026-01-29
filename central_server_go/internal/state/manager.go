@@ -28,9 +28,12 @@ type RobotState struct {
 	CurrentGraphID   string   // Currently executing graph ID
 
 	// Precondition waiting status (for UI display)
-	IsWaitingForPrecondition      bool
-	WaitingForPreconditionSince   time.Time
-	BlockingConditions            []BlockingConditionInfo
+	IsWaitingForPrecondition    bool
+	WaitingForPreconditionSince time.Time
+	BlockingConditions          []BlockingConditionInfo
+
+	// Telemetry data for parameter loading
+	Telemetry *RobotTelemetry
 }
 
 // AgentConnection represents a connected agent (1:1 model: agent = robot)
@@ -179,10 +182,11 @@ func (m *GlobalStateManager) SetOnAgentDisconnect(callback AgentDisconnectCallba
 
 // Start starts background workers for the state manager
 func (m *GlobalStateManager) Start() {
-	m.wg.Add(2)
+	m.wg.Add(3)
 	go m.runCacheCleanup()
 	go m.runHeartbeatChecker()
-	log.Println("GlobalStateManager background workers started (cache cleanup + heartbeat checker)")
+	go m.runStaleAgentCleanup()
+	log.Println("GlobalStateManager background workers started (cache cleanup + heartbeat checker + stale agent cleanup)")
 }
 
 // Stop stops all background workers gracefully
@@ -278,6 +282,60 @@ func (m *GlobalStateManager) checkStaleAgents() {
 	for _, agentID := range staleAgentIDs {
 		m.graphCache.InvalidateAgentCache(agentID)
 	}
+}
+
+// runStaleAgentCleanup periodically removes agents that have been offline for too long
+// This prevents accumulation of orphan agents when fleet agents reconnect with new IDs
+func (m *GlobalStateManager) runStaleAgentCleanup() {
+	defer m.wg.Done()
+
+	// Clean up agents offline for more than 1 hour, check every 10 minutes
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-ticker.C:
+			removed := m.CleanupStaleAgents(1 * time.Hour)
+			if removed > 0 {
+				log.Printf("[StaleCleanup] Removed %d stale agents from in-memory state", removed)
+			}
+		}
+	}
+}
+
+// CleanupStaleAgents removes agents that have been offline longer than maxOfflineAge
+// Returns the number of agents removed
+func (m *GlobalStateManager) CleanupStaleAgents(maxOfflineAge time.Duration) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now()
+	count := 0
+	toRemove := make([]string, 0)
+
+	for agentID, robot := range m.robots {
+		if !robot.IsOnline {
+			offlineAge := now.Sub(robot.LastSeen)
+			if offlineAge > maxOfflineAge {
+				toRemove = append(toRemove, agentID)
+			}
+		}
+	}
+
+	for _, agentID := range toRemove {
+		log.Printf("[StaleCleanup] Removing stale agent: %s (offline for %v)",
+			agentID, now.Sub(m.robots[agentID].LastSeen).Round(time.Second))
+		delete(m.robots, agentID)
+		delete(m.stateOverrides, agentID)
+		delete(m.agents, agentID)
+		m.graphCache.InvalidateAgentCache(agentID)
+		count++
+	}
+
+	return count
 }
 
 // GraphCache returns the action graph cache
@@ -544,6 +602,57 @@ func (m *GlobalStateManager) UpdateRobotExecution(agentID string, isExecuting bo
 	return nil
 }
 
+// TryUpdateRobotExecutionFromHeartbeat atomically checks and updates robot execution state from heartbeat.
+// Returns (updated bool, error) where updated=false means server is managing execution and heartbeat was ignored.
+// This prevents the TOCTOU race condition between checking state and updating it.
+func (m *GlobalStateManager) TryUpdateRobotExecutionFromHeartbeat(agentID string, hbIsExecuting bool, hbTaskID, hbStepID string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	robot, exists := m.robots[agentID]
+	if !exists {
+		return false, fmt.Errorf("robot %s not found", agentID)
+	}
+
+	// Check if server is actively managing a task (inside the lock!)
+	if robot.IsExecuting && robot.CurrentTaskID != "" {
+		// Server is managing this task - check if we should skip heartbeat update
+		if hbTaskID != robot.CurrentTaskID || !hbIsExecuting {
+			// Different task, or agent reports not executing - skip to preserve server state
+			// Agent may report is_executing=false between steps, but server knows task is still running
+			return false, nil // Skipped, not an error
+		}
+		// Same task and agent reports executing - update CurrentStepID from heartbeat
+		// Agent knows which step it's currently executing, so we should reflect that
+		if hbStepID != "" && hbStepID != robot.CurrentStepID {
+			robot.CurrentStepID = hbStepID
+			robot.LastSeen = time.Now()
+			return true, nil // Updated step from heartbeat
+		}
+		return false, nil // No change needed
+	}
+
+	// No server-managed task running - accept heartbeat update
+	// But if agent reports not executing with a stale task_id, clear it
+	if !hbIsExecuting && hbTaskID != "" {
+		// Agent is not executing but reports a task_id - this is stale data
+		// Clear execution state completely
+		robot.IsExecuting = false
+		robot.CurrentTaskID = ""
+		robot.CurrentStepID = ""
+	} else {
+		// Use heartbeat values as-is
+		robot.IsExecuting = hbIsExecuting
+		robot.CurrentTaskID = hbTaskID
+		robot.CurrentStepID = hbStepID
+	}
+	robot.LastSeen = time.Now()
+
+	// Update state registry
+	m.stateRegistry.SetAgentExecuting(agentID, robot.IsExecuting)
+	return true, nil
+}
+
 // SetRobotOnline sets a robot's online status
 func (m *GlobalStateManager) SetRobotOnline(agentID string, isOnline bool) error {
 	m.mu.Lock()
@@ -582,6 +691,119 @@ func (m *GlobalStateManager) SetRobotWaitingForPrecondition(agentID string, wait
 	}
 
 	return nil
+}
+
+// ============================================================
+// Telemetry Operations (for Parameter Loading)
+// ============================================================
+
+// UpdateRobotTelemetry updates the telemetry data for a robot
+func (m *GlobalStateManager) UpdateRobotTelemetry(robotID string, telemetry *RobotTelemetry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	robot, exists := m.robots[robotID]
+	if !exists {
+		// Auto-register the robot if it doesn't exist yet
+		// This handles the case where telemetry arrives before formal registration
+		log.Printf("[StateManager] Robot %s not found for telemetry, auto-registering", robotID)
+		robot = &RobotState{
+			ID:               robotID,
+			Name:             robotID,
+			AgentID:          robotID,
+			CurrentState:     "idle",
+			ReportedState:    "idle",
+			CurrentStateCode: "idle",
+			SemanticTags:     []string{},
+			IsOnline:         true,
+			LastSeen:         time.Now(),
+		}
+		m.robots[robotID] = robot
+	}
+
+	if telemetry != nil {
+		telemetry.UpdatedAt = time.Now()
+	}
+	robot.Telemetry = telemetry
+
+	return nil
+}
+
+// GetRobotTelemetry returns the telemetry data for a robot
+func (m *GlobalStateManager) GetRobotTelemetry(robotID string) *RobotTelemetry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	robot, exists := m.robots[robotID]
+	if !exists || robot.Telemetry == nil {
+		return nil
+	}
+
+	// Return a copy to avoid race conditions
+	telemetryCopy := &RobotTelemetry{
+		UpdatedAt: robot.Telemetry.UpdatedAt,
+		IsStale:   time.Since(robot.Telemetry.UpdatedAt) > DefaultTelemetryStaleThreshold,
+	}
+
+	if robot.Telemetry.JointState != nil {
+		js := *robot.Telemetry.JointState
+		telemetryCopy.JointState = &js
+	}
+
+	if robot.Telemetry.Odometry != nil {
+		odom := *robot.Telemetry.Odometry
+		telemetryCopy.Odometry = &odom
+	}
+
+	if robot.Telemetry.Transforms != nil {
+		telemetryCopy.Transforms = make([]TransformData, len(robot.Telemetry.Transforms))
+		copy(telemetryCopy.Transforms, robot.Telemetry.Transforms)
+	}
+
+	return telemetryCopy
+}
+
+// GetRobotJointState returns only the joint state data for a robot
+func (m *GlobalStateManager) GetRobotJointState(robotID string) *JointStateData {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	robot, exists := m.robots[robotID]
+	if !exists || robot.Telemetry == nil || robot.Telemetry.JointState == nil {
+		return nil
+	}
+
+	js := *robot.Telemetry.JointState
+	return &js
+}
+
+// GetRobotOdometry returns only the odometry data for a robot
+func (m *GlobalStateManager) GetRobotOdometry(robotID string) *OdometryData {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	robot, exists := m.robots[robotID]
+	if !exists || robot.Telemetry == nil || robot.Telemetry.Odometry == nil {
+		return nil
+	}
+
+	odom := *robot.Telemetry.Odometry
+	return &odom
+}
+
+// GetRobotTransforms returns only the transforms for a robot
+func (m *GlobalStateManager) GetRobotTransforms(robotID string) []TransformData {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	robot, exists := m.robots[robotID]
+	if !exists || robot.Telemetry == nil || len(robot.Telemetry.Transforms) == 0 {
+		return nil
+	}
+
+	transforms := make([]TransformData, len(robot.Telemetry.Transforms))
+	copy(transforms, robot.Telemetry.Transforms)
+	return transforms
 }
 
 // ============================================================
@@ -1163,6 +1385,86 @@ type BlockingConditionInfo struct {
 	RequiredState   string `json:"required_state"`
 	CurrentState    string `json:"current_state,omitempty"`
 	Reason          string `json:"reason"` // state_mismatch, agent_offline, state_too_old, no_targets
+}
+
+// ============================================================
+// Telemetry Types for Parameter Loading
+// ============================================================
+
+// Vector3 represents a 3D vector
+type Vector3 struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
+}
+
+// Quaternion represents orientation
+type Quaternion struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
+	W float64 `json:"w"`
+}
+
+// Pose represents position and orientation
+type Pose struct {
+	Position    Vector3    `json:"position"`
+	Orientation Quaternion `json:"orientation"`
+}
+
+// Twist represents linear and angular velocity
+type Twist struct {
+	Linear  Vector3 `json:"linear"`
+	Angular Vector3 `json:"angular"`
+}
+
+// JointStateData represents joint state telemetry
+type JointStateData struct {
+	Name        []string  `json:"name"`
+	Position    []float64 `json:"position"`
+	Velocity    []float64 `json:"velocity,omitempty"`
+	Effort      []float64 `json:"effort,omitempty"`
+	TopicName   string    `json:"topic_name,omitempty"`   // ROS2 topic name for visualization
+	TimestampNs int64     `json:"timestamp_ns,omitempty"` // ROS2 message timestamp in nanoseconds
+}
+
+// OdometryData represents odometry telemetry
+type OdometryData struct {
+	FrameID      string `json:"frame_id"`
+	ChildFrameID string `json:"child_frame_id"`
+	Pose         Pose   `json:"pose"`
+	Twist        Twist  `json:"twist"`
+	TopicName    string `json:"topic_name,omitempty"`   // ROS2 topic name for visualization
+	TimestampNs  int64  `json:"timestamp_ns,omitempty"` // ROS2 message timestamp in nanoseconds
+}
+
+// TransformData represents TF transform
+type TransformData struct {
+	FrameID      string     `json:"frame_id"`
+	ChildFrameID string     `json:"child_frame_id"`
+	Translation  Vector3    `json:"translation"`
+	Rotation     Quaternion `json:"rotation"`
+	TimestampNs  int64      `json:"timestamp_ns,omitempty"` // ROS2 message timestamp in nanoseconds
+}
+
+// RobotTelemetry holds telemetry data for a robot
+type RobotTelemetry struct {
+	JointState *JointStateData  `json:"joint_state,omitempty"`
+	Odometry   *OdometryData    `json:"odometry,omitempty"`
+	Transforms []TransformData  `json:"transforms,omitempty"`
+	UpdatedAt  time.Time        `json:"updated_at"`
+	IsStale    bool             `json:"is_stale,omitempty"` // True if data is older than staleness threshold
+}
+
+// DefaultTelemetryStaleThreshold is the default duration after which telemetry is considered stale
+const DefaultTelemetryStaleThreshold = 5 * time.Second
+
+// IsTelemetryStale checks if telemetry data is older than the given threshold
+func (t *RobotTelemetry) IsTelemetryStale(threshold time.Duration) bool {
+	if t == nil {
+		return true
+	}
+	return time.Since(t.UpdatedAt) > threshold
 }
 
 // EvaluateStartConditionsWithBlockingInfo evaluates conditions and returns detailed blocking info for UI

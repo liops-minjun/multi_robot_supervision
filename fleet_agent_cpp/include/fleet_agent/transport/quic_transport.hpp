@@ -88,6 +88,7 @@ public:
 
     using DataCallback = std::function<void(const uint8_t*, size_t, bool fin)>;
     using CloseCallback = std::function<void(uint64_t error_code)>;
+    using CleanupCallback = std::function<void(uint64_t stream_id)>;
 
     QUICStream(const QUIC_API_TABLE* msquic, HQUIC stream_handle, uint64_t stream_id);
     ~QUICStream();
@@ -119,6 +120,7 @@ public:
     // Callbacks
     void set_data_callback(DataCallback cb);
     void set_close_callback(CloseCallback cb);
+    void set_cleanup_callback(CleanupCallback cb);
 
     // Internal - called by MsQuic callbacks
     void on_data_received(const uint8_t* data, size_t len, bool fin);
@@ -143,6 +145,7 @@ private:
 
     DataCallback data_callback_;
     CloseCallback close_callback_;
+    CleanupCallback cleanup_callback_;
 };
 
 // ============================================================
@@ -186,6 +189,9 @@ public:
 
     // Disconnect
     void disconnect(uint64_t error_code = 0);
+
+    // Wait for shutdown to complete (blocking)
+    bool wait_shutdown(std::chrono::milliseconds timeout = std::chrono::milliseconds(5000));
 
     // State
     State state() const { return state_.load(); }

@@ -158,18 +158,285 @@ type StepData struct {
 
 // ActionConfig defines an action to execute
 type ActionConfig struct {
-	Type       string        `json:"type"`              // ROS2 action type (e.g., "nav2_msgs/action/NavigateToPose")
-	Server     string        `json:"server"`            // Action server name
-	Params     *ActionParams `json:"params,omitempty"`  // Action parameters
-	TimeoutSec float64       `json:"timeout_sec,omitempty"`
+	Type         string            `json:"type"`                    // ROS2 action type (e.g., "nav2_msgs/action/NavigateToPose")
+	Server       string            `json:"server"`                  // Action server name
+	Params       *ActionParams     `json:"params,omitempty"`        // Action parameters
+	TimeoutSec   float64           `json:"timeout_sec,omitempty"`
+	ResultSchema *StepResultSchema `json:"result_schema,omitempty"` // Expected result schema (for other steps to reference)
+}
+
+// ParameterSourceType defines how a parameter field gets its value
+type ParameterSourceType string
+
+const (
+	ParameterSourceConstant   ParameterSourceType = "constant"
+	ParameterSourceStepResult ParameterSourceType = "step_result"
+	ParameterSourceDynamic    ParameterSourceType = "dynamic"
+	ParameterSourceExpression ParameterSourceType = "expression"
+)
+
+// =============================================================================
+// Canonical Data Type System
+// =============================================================================
+
+// CanonicalDataType defines the canonical data types for parameter binding
+type CanonicalDataType string
+
+const (
+	// Primitive types
+	DataTypeBool    CanonicalDataType = "bool"
+	DataTypeInt8    CanonicalDataType = "int8"
+	DataTypeInt16   CanonicalDataType = "int16"
+	DataTypeInt32   CanonicalDataType = "int32"
+	DataTypeInt64   CanonicalDataType = "int64"
+	DataTypeUint8   CanonicalDataType = "uint8"
+	DataTypeUint16  CanonicalDataType = "uint16"
+	DataTypeUint32  CanonicalDataType = "uint32"
+	DataTypeUint64  CanonicalDataType = "uint64"
+	DataTypeFloat32 CanonicalDataType = "float32"
+	DataTypeFloat64 CanonicalDataType = "float64"
+	DataTypeString  CanonicalDataType = "string"
+	// Complex types
+	DataTypeObject CanonicalDataType = "object"
+	DataTypeArray  CanonicalDataType = "array"
+	// Any type (for dynamic/expression sources)
+	DataTypeAny CanonicalDataType = "any"
+)
+
+// TypeCategory groups canonical types for compatibility checking
+type TypeCategory string
+
+const (
+	TypeCategoryBoolean TypeCategory = "boolean"
+	TypeCategoryInteger TypeCategory = "integer"
+	TypeCategoryFloat   TypeCategory = "float"
+	TypeCategoryString  TypeCategory = "string"
+	TypeCategoryObject  TypeCategory = "object"
+	TypeCategoryArray   TypeCategory = "array"
+	TypeCategoryAny     TypeCategory = "any"
+)
+
+// DataTypeInfo contains full type information including array/object structure
+type DataTypeInfo struct {
+	Type             CanonicalDataType        `json:"type"`
+	Category         TypeCategory             `json:"category"`
+	IsArray          bool                     `json:"is_array"`
+	ArrayElementType *DataTypeInfo            `json:"array_element_type,omitempty"`
+	ObjectFields     map[string]*DataTypeInfo `json:"object_fields,omitempty"`
+	ROSType          string                   `json:"ros_type,omitempty"`
+}
+
+// TypeConversionConfig configures how type conversion should be performed
+type TypeConversionConfig struct {
+	Enabled          bool   `json:"enabled"`
+	Mode             string `json:"mode"` // implicit, explicit, custom
+	CustomExpression string `json:"custom_expression,omitempty"`
+}
+
+// GetTypeCategory returns the category for a canonical data type
+func GetTypeCategory(t CanonicalDataType) TypeCategory {
+	switch t {
+	case DataTypeBool:
+		return TypeCategoryBoolean
+	case DataTypeInt8, DataTypeInt16, DataTypeInt32, DataTypeInt64,
+		DataTypeUint8, DataTypeUint16, DataTypeUint32, DataTypeUint64:
+		return TypeCategoryInteger
+	case DataTypeFloat32, DataTypeFloat64:
+		return TypeCategoryFloat
+	case DataTypeString:
+		return TypeCategoryString
+	case DataTypeObject:
+		return TypeCategoryObject
+	case DataTypeArray:
+		return TypeCategoryArray
+	default:
+		return TypeCategoryAny
+	}
+}
+
+// ROSTypeToCanonical converts a ROS2 type string to canonical type
+func ROSTypeToCanonical(rosType string) *DataTypeInfo {
+	// Handle array types
+	isArray := false
+	baseType := rosType
+	if len(rosType) > 2 && rosType[len(rosType)-2:] == "[]" {
+		isArray = true
+		baseType = rosType[:len(rosType)-2]
+	}
+
+	// Primitive mappings
+	var canonicalType CanonicalDataType
+	switch baseType {
+	case "bool", "boolean":
+		canonicalType = DataTypeBool
+	case "int8":
+		canonicalType = DataTypeInt8
+	case "int16":
+		canonicalType = DataTypeInt16
+	case "int32", "int":
+		canonicalType = DataTypeInt32
+	case "int64":
+		canonicalType = DataTypeInt64
+	case "uint8", "byte":
+		canonicalType = DataTypeUint8
+	case "uint16":
+		canonicalType = DataTypeUint16
+	case "uint32":
+		canonicalType = DataTypeUint32
+	case "uint64":
+		canonicalType = DataTypeUint64
+	case "float32", "float":
+		canonicalType = DataTypeFloat32
+	case "float64", "double":
+		canonicalType = DataTypeFloat64
+	case "string":
+		canonicalType = DataTypeString
+	default:
+		canonicalType = DataTypeObject
+	}
+
+	typeInfo := &DataTypeInfo{
+		Type:     canonicalType,
+		Category: GetTypeCategory(canonicalType),
+		IsArray:  isArray,
+		ROSType:  rosType,
+	}
+
+	if isArray {
+		typeInfo.ArrayElementType = &DataTypeInfo{
+			Type:     canonicalType,
+			Category: GetTypeCategory(canonicalType),
+			IsArray:  false,
+			ROSType:  baseType,
+		}
+	}
+
+	return typeInfo
+}
+
+// TypeCompatibilityResult describes the result of a type compatibility check
+type TypeCompatibilityResult struct {
+	Compatible         bool   `json:"compatible"`
+	RequiresConversion bool   `json:"requires_conversion"`
+	ConversionType     string `json:"conversion_type,omitempty"` // implicit, explicit, lossy
+	WarningMessage     string `json:"warning_message,omitempty"`
+}
+
+// CheckTypeCompatibility checks if source type is compatible with target type
+func CheckTypeCompatibility(sourceType, targetType *DataTypeInfo) TypeCompatibilityResult {
+	// Any type is always compatible
+	if sourceType.Type == DataTypeAny || targetType.Type == DataTypeAny {
+		return TypeCompatibilityResult{Compatible: true, RequiresConversion: false}
+	}
+
+	// Exact type match
+	if sourceType.Type == targetType.Type && sourceType.IsArray == targetType.IsArray {
+		return TypeCompatibilityResult{Compatible: true, RequiresConversion: false}
+	}
+
+	// Array compatibility
+	if sourceType.IsArray != targetType.IsArray {
+		// Array to non-array: need index access
+		if sourceType.IsArray && !targetType.IsArray && sourceType.ArrayElementType != nil {
+			elementCompat := CheckTypeCompatibility(sourceType.ArrayElementType, targetType)
+			if elementCompat.Compatible {
+				return TypeCompatibilityResult{
+					Compatible:         true,
+					RequiresConversion: true,
+					ConversionType:     "explicit",
+					WarningMessage:     "Array access required - use [index] syntax",
+				}
+			}
+		}
+		return TypeCompatibilityResult{Compatible: false, RequiresConversion: false}
+	}
+
+	sourceCategory := sourceType.Category
+	targetCategory := targetType.Category
+
+	// Boolean only with boolean
+	if sourceCategory == TypeCategoryBoolean || targetCategory == TypeCategoryBoolean {
+		return TypeCompatibilityResult{Compatible: sourceCategory == targetCategory, RequiresConversion: false}
+	}
+
+	// Integer to float (implicit, safe)
+	if sourceCategory == TypeCategoryInteger && targetCategory == TypeCategoryFloat {
+		return TypeCompatibilityResult{Compatible: true, RequiresConversion: true, ConversionType: "implicit"}
+	}
+
+	// Float to integer (lossy)
+	if sourceCategory == TypeCategoryFloat && targetCategory == TypeCategoryInteger {
+		return TypeCompatibilityResult{
+			Compatible:         true,
+			RequiresConversion: true,
+			ConversionType:     "lossy",
+			WarningMessage:     "Float to integer conversion may lose precision",
+		}
+	}
+
+	// Integer type widening/narrowing
+	if sourceCategory == TypeCategoryInteger && targetCategory == TypeCategoryInteger {
+		return TypeCompatibilityResult{Compatible: true, RequiresConversion: true, ConversionType: "implicit"}
+	}
+
+	// Float type precision
+	if sourceCategory == TypeCategoryFloat && targetCategory == TypeCategoryFloat {
+		return TypeCompatibilityResult{Compatible: true, RequiresConversion: true, ConversionType: "implicit"}
+	}
+
+	// String only with string
+	if sourceCategory == TypeCategoryString || targetCategory == TypeCategoryString {
+		return TypeCompatibilityResult{Compatible: sourceCategory == targetCategory, RequiresConversion: false}
+	}
+
+	// Object compatibility
+	if sourceCategory == TypeCategoryObject && targetCategory == TypeCategoryObject {
+		return TypeCompatibilityResult{Compatible: true, RequiresConversion: false}
+	}
+
+	return TypeCompatibilityResult{Compatible: false, RequiresConversion: false}
+}
+
+// =============================================================================
+// Parameter Field Source
+// =============================================================================
+
+// ParameterFieldSource defines how a single field gets its value
+type ParameterFieldSource struct {
+	Source      ParameterSourceType `json:"source"`                  // constant, step_result, dynamic, expression
+	Value       interface{}         `json:"value,omitempty"`         // For constant
+	StepID      string              `json:"step_id,omitempty"`       // For step_result
+	ResultField string              `json:"result_field,omitempty"`  // For step_result (e.g., "pose.position.x", "poses[0].position")
+	Expression  string              `json:"expression,omitempty"`    // For expression
+
+	// Type information (for validation)
+	SourceType *DataTypeInfo         `json:"source_type,omitempty"`
+	TargetType *DataTypeInfo         `json:"target_type,omitempty"`
+	Conversion *TypeConversionConfig `json:"conversion,omitempty"`
+}
+
+// StepResultSchema defines the expected result schema for a step
+type StepResultSchema struct {
+	Fields []ResultFieldDef `json:"fields,omitempty"`
+}
+
+// ResultFieldDef defines a single field in the result schema
+type ResultFieldDef struct {
+	Name        string        `json:"name"`
+	Type        string        `json:"type"`
+	Description string        `json:"description,omitempty"`
+	TypeInfo    *DataTypeInfo `json:"type_info,omitempty"` // Parsed type information
 }
 
 // ActionParams defines how to resolve action parameters
 type ActionParams struct {
-	Source     string                 `json:"source"` // "waypoint", "inline", "dynamic"
+	Source     string                 `json:"source"` // "waypoint", "inline", "dynamic", "mapped"
 	WaypointID string                 `json:"waypoint_id,omitempty"`
 	Data       map[string]interface{} `json:"data,omitempty"`
 	Fields     []string               `json:"fields,omitempty"` // For dynamic: fields to request
+
+	// NEW: Per-field source mapping (when Source="mapped")
+	FieldSources map[string]ParameterFieldSource `json:"field_sources,omitempty"`
 }
 
 // WaitConfig defines a wait step

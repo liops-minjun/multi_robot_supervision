@@ -22,9 +22,6 @@ namespace capability {
 namespace {
 logging::ComponentLogger log("CapabilityScanner");
 
-constexpr auto kProbeInterval = std::chrono::seconds(1);
-constexpr auto kProbeTimeout = std::chrono::milliseconds(200);
-constexpr int kProbeFailThreshold = 1;
 constexpr auto kMissingGrace = std::chrono::seconds(2);
 constexpr auto kStatusTimeout = std::chrono::seconds(3);
 
@@ -100,7 +97,7 @@ bool check_action_server_alive(
     // Combined decision: need status publishers AND (services OR rcl_available)
     bool is_alive = (status_pubs > 0) && (has_services || rcl_available);
 
-    log.info(
+    log.debug(
         "Action server {} availability: status_pubs={}, feedback_pubs={}, "
         "services={}, rcl_avail={} -> {} (type: {})",
         action_name,
@@ -195,7 +192,7 @@ std::map<std::string, std::vector<std::string>> discover_action_servers(
         rcl_reset_error();
     }
 
-    log.info("Action graph discovery found {} responsive action servers", result.size());
+    CLOG_INFO_THROTTLE(log, 30.0, "Action graph discovery found {} responsive action servers", result.size());
     return result;
 }
 
@@ -330,14 +327,9 @@ int CapabilityScanner::scan_all() {
     for (const auto& [server_name, types] : action_servers) {
         (void)types;
         ensure_status_subscription(server_name);
-        ensure_cancel_client(server_name);
     }
     for (auto it = store_.begin(); it != store_.end(); ++it) {
         ensure_status_subscription(it->first);
-    }
-
-    for (auto it = store_.begin(); it != store_.end(); ++it) {
-        ensure_cancel_client(it->first);
     }
 
     {
@@ -395,11 +387,9 @@ int CapabilityScanner::refresh() {
     for (const auto& [server_name, types] : action_servers) {
         (void)types;
         ensure_status_subscription(server_name);
-        ensure_cancel_client(server_name);
     }
     for (auto it = store_.begin(); it != store_.end(); ++it) {
         ensure_status_subscription(it->first);
-        ensure_cancel_client(it->first);
     }
 
     // NOTE: We do NOT update status_publishers_alive_ from get_publisher_count() here
@@ -415,16 +405,16 @@ int CapabilityScanner::refresh() {
             filtered_count++;
         }
     }
-    log.info("Refresh: ROS2 graph has {} action servers ({} in namespace '{}')",
-             action_servers.size(), filtered_count, namespace_filter_);
+    CLOG_INFO_THROTTLE(log, 30.0, "Refresh: ROS2 graph has {} action servers ({} in namespace '{}')",
+                       action_servers.size(), filtered_count, namespace_filter_);
 
     const auto now = std::chrono::steady_clock::now();
 
     // Track which capabilities are still present
     std::unordered_set<std::string> current_actions;
 
-    log.info("=== REFRESH: Checking {} action servers against {} stored capabilities ===",
-             action_servers.size(), store_.size());
+    log.debug("REFRESH: Checking {} action servers against {} stored capabilities",
+              action_servers.size(), store_.size());
 
     for (const auto& [server_name, types] : action_servers) {
         if (!is_in_namespace(server_name)) {
@@ -442,7 +432,7 @@ int CapabilityScanner::refresh() {
                 in_store = store_.find(acc, server_name);
                 // acc released when scope ends
             }
-            log.info("  Server {} in_store={}", server_name, in_store);
+            log.debug("  Server {} in_store={}", server_name, in_store);
             if (!in_store) {
                 // New capability discovered
                 if (scan_action_server(server_name, action_type)) {
@@ -451,102 +441,24 @@ int CapabilityScanner::refresh() {
                              normalize_action_type(action_type), server_name);
                 }
             } else {
-                // Check if capability is still alive based on status message reception
+                // Server is in current action graph - discover_action_servers()
+                // already confirmed it's alive via check_action_server_alive()
+                // (status_pubs > 0, services exist, rcl_available).
+                // Trust discovery result and mark available.
                 CapabilityStore::accessor write_acc;
                 if (store_.find(write_acc, server_name)) {
-                    auto status_alive = get_status_publisher_alive(server_name);
-                    auto last_status = get_last_status_seen(server_name);
+                    write_acc->second.last_seen = now;
 
-                    // Only probe cancel_goal if NOT executing (to avoid canceling active goals)
-                    // When executing, we rely on status messages (active goals = status published)
-                    bool is_executing = write_acc->second.executing.load();
-                    std::optional<bool> probe_alive = std::nullopt;
-                    if (!is_executing) {
-                        probe_alive = probe_cancel_alive(server_name);
-                    }
-
-                    // Calculate time since last status message
-                    bool status_timed_out = false;
-                    std::chrono::milliseconds ms_since_status{0};
-                    if (last_status.has_value()) {
-                        ms_since_status = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            now - last_status.value());
-                        status_timed_out = ms_since_status > kStatusTimeout;
-                    } else {
-                        // Never received a status message - check time since discovery
-                        ms_since_status = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            now - write_acc->second.last_seen);
-                        status_timed_out = ms_since_status > kStatusTimeout;
-                    }
-
-                    // Check if we have other signals that server is alive
-                    bool has_services = has_action_services(server_name);
-                    bool probe_ok = probe_alive.has_value() && probe_alive.value();
-                    bool probe_failed = probe_alive.has_value() && !probe_alive.value();
-
-                    // If probe succeeded, server is definitely alive - reset the timeout
-                    // (status topic only publishes with active goals, so we can't rely on it alone)
-                    if (probe_ok) {
+                    // Reset status timeout so downstream checks stay consistent
+                    {
                         std::lock_guard<std::mutex> lock(status_mutex_);
                         status_last_seen_[server_name] = now;
-                        status_timed_out = false;
-                        ms_since_status = std::chrono::milliseconds{0};
-                        log.debug("Reset status timeout for {} - cancel probe succeeded", server_name);
                     }
 
-                    // Determine availability based on all signals
-                    // Server is available if:
-                    // 1. Currently executing (we're using it right now!)
-                    // 2. OR Probe succeeded (most reliable - server actually responded)
-                    // 3. OR has services AND status not timed out
-                    // 4. AND probe didn't explicitly fail
-                    bool allow_available = false;
-                    if (is_executing) {
-                        // Currently executing an action - it MUST be available
-                        allow_available = true;
-                    } else if (probe_ok) {
-                        // Probe succeeded - server is definitely alive
-                        allow_available = true;
-                    } else if (has_services && !status_timed_out) {
-                        // Has services and status not timed out
-                        allow_available = true;
-                    }
-                    // If probe explicitly failed, override to unavailable (but not if executing)
-                    if (probe_failed && !is_executing) {
-                        allow_available = false;
-                    }
-
-                    bool was_available = write_acc->second.available.load();
-
-                    // Log status check for each known capability
-                    log.info("Capability {} check: executing={}, probe_ok={}, has_services={}, "
-                             "ms_since_status={}, timed_out={}, allow_available={}, was_available={}",
-                             server_name,
-                             is_executing,
-                             probe_ok,
-                             has_services,
-                             ms_since_status.count(),
-                             status_timed_out,
-                             allow_available,
-                             was_available);
-                    // Only update last_seen if we actually received a status message
-                    // (confirmed alive via subscription callback)
-                    if (last_status.has_value()) {
-                        write_acc->second.last_seen = last_status.value();
-                    }
-                    if (allow_available) {
+                    if (!write_acc->second.available.load()) {
                         write_acc->second.available.store(true);
-                        if (!was_available) {
-                            changes++;
-                            log.info("Capability available again: {}", server_name);
-                        }
-                    } else if (was_available) {
-                        write_acc->second.available.store(false);
                         changes++;
-                        log.info("Capability marked unavailable (status_timed_out={}, last_status={}): {}",
-                                 status_timed_out,
-                                 last_status.has_value() ? "set" : "unset",
-                                 server_name);
+                        log.info("Capability available (verified by discovery): {}", server_name);
                     }
                 }
             }
@@ -560,21 +472,7 @@ int CapabilityScanner::refresh() {
         if (current_actions.find(it->first) == current_actions.end()) {
             auto status_alive = get_status_publisher_alive(it->first);
             bool has_services = has_action_services(it->first);
-
-            // Only probe if NOT executing (to avoid canceling active goals)
             bool is_executing = it->second.executing.load();
-            std::optional<bool> probe_alive = std::nullopt;
-            if (!is_executing) {
-                probe_alive = probe_cancel_alive(it->first);
-            }
-            bool probe_ok = probe_alive.has_value() && probe_alive.value();
-            bool probe_failed = probe_alive.has_value() && !probe_alive.value();
-
-            // If probe succeeded, server is definitely alive - reset timeout
-            if (probe_ok) {
-                std::lock_guard<std::mutex> lock(status_mutex_);
-                status_last_seen_[it->first] = now;
-            }
 
             // Calculate status timeout
             bool status_timed_out = false;
@@ -584,22 +482,14 @@ int CapabilityScanner::refresh() {
                 status_timed_out = true;
             }
 
-            // Determine if we should keep this capability
-            // Keep if: executing OR probe succeeded OR (has services AND status not timed out)
+            // Keep if: executing OR (has services AND not timed out) OR (liveliness alive AND not timed out)
             bool should_keep = false;
             if (is_executing) {
-                // Currently executing - definitely keep
-                should_keep = true;
-            } else if (probe_ok) {
                 should_keep = true;
             } else if (has_services && !status_timed_out) {
                 should_keep = true;
             } else if (status_alive.value_or(false) && !status_timed_out) {
                 should_keep = true;
-            }
-            // If probe explicitly failed, don't keep (but not if executing)
-            if (probe_failed && !is_executing) {
-                should_keep = false;
             }
 
             if (should_keep) {
@@ -629,6 +519,7 @@ int CapabilityScanner::refresh() {
         }
     }
 
+    // Final availability check for all capabilities using non-destructive signals
     for (auto it = store_.begin(); it != store_.end(); ++it) {
         auto status_alive = get_status_publisher_alive(it->first);
 
@@ -638,21 +529,7 @@ int CapabilityScanner::refresh() {
         }
 
         bool has_services = has_action_services(it->first);
-
-        // Only probe if NOT executing (to avoid canceling active goals)
         bool is_executing = acc->second.executing.load();
-        std::optional<bool> probe_alive = std::nullopt;
-        if (!is_executing) {
-            probe_alive = probe_cancel_alive(it->first);
-        }
-        bool probe_ok = probe_alive.has_value() && probe_alive.value();
-        bool probe_failed = probe_alive.has_value() && !probe_alive.value();
-
-        // If probe succeeded, server is definitely alive - reset the timeout
-        if (probe_ok) {
-            std::lock_guard<std::mutex> lock(status_mutex_);
-            status_last_seen_[it->first] = now;
-        }
 
         // Calculate status timeout
         bool status_timed_out = false;
@@ -662,33 +539,25 @@ int CapabilityScanner::refresh() {
             status_timed_out = true;
         }
 
-        // Determine if server is alive
-        // Alive if: executing OR probe succeeded OR (has services AND status not timed out)
-        // NOT alive if: probe explicitly failed (unless executing)
+        // Alive if: executing OR (has services AND not timed out) OR (liveliness alive AND not timed out)
         bool alive = false;
         if (is_executing) {
-            // Currently executing - it MUST be alive
-            alive = true;
-        } else if (probe_ok) {
             alive = true;
         } else if (has_services && !status_timed_out) {
             alive = true;
-        } else if (status_alive.has_value() && status_alive.value() && !status_timed_out) {
+        } else if (status_alive.value_or(false) && !status_timed_out) {
             alive = true;
-        }
-        if (probe_failed && !is_executing) {
-            alive = false;
         }
 
         if (!alive && acc->second.available.load()) {
             acc->second.available.store(false);
-            log.info("Capability marked unavailable (probe_ok={}, has_services={}, timed_out={}): {}",
-                     probe_ok, has_services, status_timed_out, it->first);
+            log.info("Capability marked unavailable (has_services={}, timed_out={}): {}",
+                     has_services, status_timed_out, it->first);
             changes++;
         } else if (alive && !acc->second.available.load()) {
             acc->second.available.store(true);
-            log.info("Capability available again (probe_ok={}, has_services={}): {}",
-                     probe_ok, has_services, it->first);
+            log.info("Capability available again (has_services={}): {}",
+                     has_services, it->first);
             changes++;
         }
     }
@@ -810,109 +679,6 @@ std::optional<bool> CapabilityScanner::get_status_publisher_alive(
     return it->second;
 }
 
-void CapabilityScanner::ensure_cancel_client(const std::string& server_name) {
-    std::lock_guard<std::mutex> lock(status_mutex_);
-    if (cancel_clients_.find(server_name) != cancel_clients_.end()) {
-        return;
-    }
-
-    std::string service = server_name + "/_action/cancel_goal";
-    auto client = node_->create_client<action_msgs::srv::CancelGoal>(service);
-    cancel_clients_[server_name] = client;
-    cancel_probe_failures_[server_name] = 0;
-    log.info("Created cancel goal client: {}", service);
-}
-
-std::optional<bool> CapabilityScanner::probe_cancel_alive(const std::string& server_name) {
-    const auto now = std::chrono::steady_clock::now();
-    rclcpp::Client<action_msgs::srv::CancelGoal>::SharedPtr client;
-
-    {
-        std::lock_guard<std::mutex> lock(status_mutex_);
-        auto it = cancel_clients_.find(server_name);
-        if (it == cancel_clients_.end()) {
-            return std::nullopt;
-        }
-        client = it->second;
-
-        auto last_it = cancel_probe_last_.find(server_name);
-        if (last_it != cancel_probe_last_.end()) {
-            if (now - last_it->second < kProbeInterval) {
-                auto alive_it = cancel_probe_alive_.find(server_name);
-                if (alive_it != cancel_probe_alive_.end()) {
-                    return alive_it->second;
-                }
-                return std::nullopt;
-            }
-        }
-        cancel_probe_last_[server_name] = now;
-    }
-
-    if (!client) {
-        return std::nullopt;
-    }
-
-    bool ok = false;
-    std::string fail_reason;
-    try {
-        auto req = std::make_shared<action_msgs::srv::CancelGoal::Request>();
-        auto future = client->async_send_request(req);
-        auto status = future.wait_for(kProbeTimeout);
-        if (status == std::future_status::ready) {
-            auto response = future.get();
-            ok = static_cast<bool>(response);
-        } else {
-            client->remove_pending_request(future);
-            ok = false;
-            fail_reason = "timeout";
-        }
-    } catch (const std::exception& e) {
-        log.warn("CancelGoal probe failed for {}: {}", server_name, e.what());
-        ok = false;
-        fail_reason = e.what();
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(status_mutex_);
-        int failures = cancel_probe_failures_[server_name];
-        bool previous = false;
-        bool had_previous = false;
-        auto prev_it = cancel_probe_alive_.find(server_name);
-        if (prev_it != cancel_probe_alive_.end()) {
-            previous = prev_it->second;
-            had_previous = true;
-        }
-
-        if (ok) {
-            cancel_probe_failures_[server_name] = 0;
-            cancel_probe_alive_[server_name] = true;
-        } else {
-            failures += 1;
-            cancel_probe_failures_[server_name] = failures;
-            if (failures >= kProbeFailThreshold) {
-                cancel_probe_alive_[server_name] = false;
-            }
-        }
-
-        auto alive_it = cancel_probe_alive_.find(server_name);
-        if (alive_it != cancel_probe_alive_.end()) {
-            if (!ok) {
-                log.info("Action server {} cancel probe failed: {} (failures={})",
-                         server_name,
-                         fail_reason.empty() ? "no_response" : fail_reason,
-                         cancel_probe_failures_[server_name]);
-            }
-            if (!had_previous || previous != alive_it->second) {
-                log.info("Action server {} cancel probe: {}",
-                         server_name, alive_it->second ? "ALIVE" : "DEAD");
-            }
-            return alive_it->second;
-        }
-    }
-
-    return std::nullopt;
-}
-
 void CapabilityScanner::set_executing(const std::string& action_type_or_server, bool executing) {
     // First try direct lookup (if it's an action_server key)
     CapabilityStore::accessor acc;
@@ -961,6 +727,193 @@ void CapabilityScanner::set_unavailable(const std::string& action_type_or_server
 
 size_t CapabilityScanner::count() const {
     return store_.size();
+}
+
+// ============================================================
+// Lifecycle State Management
+// ============================================================
+
+LifecycleState CapabilityScanner::query_lifecycle_state(const std::string& node_name) {
+    // Check cache first
+    {
+        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+
+        // If we already know this node is NOT a lifecycle node, skip
+        auto is_lifecycle_it = node_is_lifecycle_.find(node_name);
+        if (is_lifecycle_it != node_is_lifecycle_.end() && !is_lifecycle_it->second) {
+            return LifecycleState::UNKNOWN;
+        }
+    }
+
+    // Construct the /get_state service name
+    std::string service_name = node_name + "/get_state";
+
+    // Get or create client
+    rclcpp::Client<lifecycle_msgs::srv::GetState>::SharedPtr client;
+    {
+        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+
+        auto it = lifecycle_clients_.find(node_name);
+        if (it == lifecycle_clients_.end()) {
+            // Create new client
+            client = node_->create_client<lifecycle_msgs::srv::GetState>(service_name);
+            lifecycle_clients_[node_name] = client;
+        } else {
+            client = it->second;
+        }
+    }
+
+    // Wait for service (short timeout)
+    if (!client->wait_for_service(std::chrono::milliseconds(100))) {
+        // Service not available - not a lifecycle node or node not responsive
+        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+        node_is_lifecycle_[node_name] = false;
+        node_lifecycle_state_[node_name] = LifecycleState::UNKNOWN;
+        log.debug("Node {} does not have /get_state service (not a lifecycle node)", node_name);
+        return LifecycleState::UNKNOWN;
+    }
+
+    // Mark as lifecycle node
+    {
+        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+        node_is_lifecycle_[node_name] = true;
+    }
+
+    // Send request
+    auto request = std::make_shared<lifecycle_msgs::srv::GetState::Request>();
+    auto future = client->async_send_request(request);
+
+    // Wait for response with timeout
+    if (future.wait_for(std::chrono::milliseconds(500)) != std::future_status::ready) {
+        log.warn("Lifecycle state query timed out for node: {}", node_name);
+        return LifecycleState::UNKNOWN;
+    }
+
+    try {
+        auto response = future.get();
+
+        // Map ROS2 lifecycle state ID to our enum
+        LifecycleState state = LifecycleState::UNKNOWN;
+        switch (response->current_state.id) {
+            case lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED:
+                state = LifecycleState::UNCONFIGURED;
+                break;
+            case lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE:
+                state = LifecycleState::INACTIVE;
+                break;
+            case lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE:
+                state = LifecycleState::ACTIVE;
+                break;
+            case lifecycle_msgs::msg::State::PRIMARY_STATE_FINALIZED:
+                state = LifecycleState::FINALIZED;
+                break;
+            default:
+                log.debug("Unknown lifecycle state id {} for node {}", response->current_state.id, node_name);
+                state = LifecycleState::UNKNOWN;
+                break;
+        }
+
+        // Cache the state
+        {
+            std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+            node_lifecycle_state_[node_name] = state;
+        }
+
+        log.debug("Node {} lifecycle state: {} (id={})",
+                  node_name, lifecycle_state_to_string(state), response->current_state.id);
+
+        return state;
+
+    } catch (const std::exception& e) {
+        log.warn("Failed to get lifecycle state for {}: {}", node_name, e.what());
+        return LifecycleState::UNKNOWN;
+    }
+}
+
+bool CapabilityScanner::is_lifecycle_node(const std::string& node_name) {
+    // Check cache first
+    {
+        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+        auto it = node_is_lifecycle_.find(node_name);
+        if (it != node_is_lifecycle_.end()) {
+            return it->second;
+        }
+    }
+
+    // Query state to determine if it's a lifecycle node
+    // (this will populate the cache as a side effect)
+    query_lifecycle_state(node_name);
+
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    auto it = node_is_lifecycle_.find(node_name);
+    return it != node_is_lifecycle_.end() && it->second;
+}
+
+void CapabilityScanner::update_lifecycle_states() {
+    log.debug("Updating lifecycle states for {} capabilities", store_.size());
+
+    // Collect all unique node names
+    std::unordered_set<std::string> node_names;
+    for (auto it = store_.begin(); it != store_.end(); ++it) {
+        // Try to extract node name from action server path
+        // Action server path format: /namespace/action_server_name
+        // Node name is typically derived from the action server
+
+        // For now, we assume node name is the action server without the action suffix
+        // This is a heuristic - in practice, the node name should be discovered
+        // or configured explicitly
+
+        std::string server = it->second.action_server;
+        if (!server.empty()) {
+            // Common pattern: node name = action server path (they're often the same)
+            // For lifecycle nodes, we need the node name, not the action server name
+            // This might need adjustment based on actual naming conventions
+
+            // Try direct query using action server path as node name
+            // (works when node has same name as its action server)
+            node_names.insert(server);
+
+            // Also check the capability's node_name field if set
+            if (!it->second.node_name.empty()) {
+                node_names.insert(it->second.node_name);
+            }
+        }
+    }
+
+    // Query lifecycle state for each node
+    for (const auto& node_name : node_names) {
+        auto state = query_lifecycle_state(node_name);
+
+        // Update capabilities that match this node
+        for (auto it = store_.begin(); it != store_.end(); ++it) {
+            if (it->second.action_server == node_name || it->second.node_name == node_name) {
+                CapabilityStore::accessor acc;
+                if (store_.find(acc, it->first)) {
+                    LifecycleState prev_state = acc->second.lifecycle_state.load();
+                    acc->second.lifecycle_state.store(state);
+
+                    // Update availability based on lifecycle state
+                    if (state == LifecycleState::ACTIVE) {
+                        // Lifecycle node is active - mark as available
+                        acc->second.available.store(true);
+                        if (prev_state != LifecycleState::ACTIVE) {
+                            log.info("Capability {} now ACTIVE (lifecycle node)", it->first);
+                        }
+                    } else if (state == LifecycleState::INACTIVE ||
+                               state == LifecycleState::UNCONFIGURED ||
+                               state == LifecycleState::FINALIZED) {
+                        // Lifecycle node is not active - mark as unavailable
+                        if (acc->second.available.load()) {
+                            acc->second.available.store(false);
+                            log.info("Capability {} marked unavailable (lifecycle state: {})",
+                                     it->first, lifecycle_state_to_string(state));
+                        }
+                    }
+                    // UNKNOWN state: don't change availability (fall back to existing detection)
+                }
+            }
+        }
+    }
 }
 
 }  // namespace capability

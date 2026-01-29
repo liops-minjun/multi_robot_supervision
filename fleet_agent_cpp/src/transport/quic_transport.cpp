@@ -157,8 +157,8 @@ void QUICStream::close(uint64_t error_code) {
         return;
     }
 
-    if (handle_) {
-        // msquic->StreamClose(handle_);
+    if (handle_ && msquic_) {
+        msquic_->StreamClose(handle_);
         handle_ = nullptr;
     }
 
@@ -168,6 +168,11 @@ void QUICStream::close(uint64_t error_code) {
     if (close_callback_) {
         close_callback_(error_code);
     }
+
+    // Notify connection to remove from stream map
+    if (cleanup_callback_) {
+        cleanup_callback_(stream_id_);
+    }
 }
 
 void QUICStream::set_data_callback(DataCallback cb) {
@@ -176,6 +181,10 @@ void QUICStream::set_data_callback(DataCallback cb) {
 
 void QUICStream::set_close_callback(CloseCallback cb) {
     close_callback_ = std::move(cb);
+}
+
+void QUICStream::set_cleanup_callback(CleanupCallback cb) {
+    cleanup_callback_ = std::move(cb);
 }
 
 void QUICStream::on_data_received(const uint8_t* data, size_t len, bool fin) {
@@ -323,6 +332,17 @@ void QUICConnection::disconnect(uint64_t error_code) {
     }
 }
 
+bool QUICConnection::wait_shutdown(std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lock(connect_mutex_);
+
+    bool result = connect_cv_.wait_for(lock, timeout, [this] {
+        State s = state_.load();
+        return s == State::CLOSED || s == State::SHUTDOWN_COMPLETE;
+    });
+
+    return result;
+}
+
 std::shared_ptr<QUICStream> QUICConnection::open_stream() {
     if (!is_connected() || !handle_) {
         return nullptr;
@@ -366,6 +386,13 @@ std::shared_ptr<QUICStream> QUICConnection::open_stream() {
         msquic_->StreamClose(stream_handle);
         return nullptr;
     }
+
+    // Set cleanup callback to remove stream from map when it closes
+    stream->set_cleanup_callback([this, stream_id](uint64_t) {
+        std::lock_guard<std::mutex> lock(streams_mutex_);
+        streams_.erase(stream_id);
+        log.debug("Stream {} removed from map", stream_id);
+    });
 
     // Store stream
     {
@@ -814,6 +841,9 @@ bool QUICClient::connect(const std::string& server_addr, uint16_t server_port) {
 void QUICClient::disconnect() {
     if (connection_) {
         connection_->disconnect();
+        // Wait for shutdown to complete before resetting to avoid use-after-free
+        // The callback on_shutdown_complete may still fire and access the connection
+        connection_->wait_shutdown(config_.disconnect_timeout);
         connection_.reset();
     }
 }

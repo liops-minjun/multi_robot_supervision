@@ -95,6 +95,13 @@ func main() {
 	scheduler.Start()
 	defer scheduler.Stop()
 
+	// Set task completion callback for agent-driven execution
+	if rawQUICHandler != nil {
+		rawQUICHandler.SetTaskCompleteCallback(func(taskID, status, errorMsg string) {
+			scheduler.NotifyTaskComplete(taskID, executor.TaskStatus(status), errorMsg)
+		})
+	}
+
 	// Create REST API server (with rawQUICHandler for QUIC-based deployments)
 	apiServer := api.NewServer(repo, stateManager, scheduler, rawQUICHandler, definitionsPath)
 

@@ -287,13 +287,11 @@ void validate_config(const AgentConfig& config) {
 }
 
 void apply_defaults(AgentConfig& config) {
-    // Generate default agent name if not set
+    // Agent name fallback - server will auto-generate unique name if empty or "Fleet Agent"
+    // The server generates names like "Agent-001", "Agent-002", etc.
+    // This fallback ensures backward compatibility with older servers
     if (config.agent_name.empty()) {
-        if (!config.agent_id.empty()) {
-            config.agent_name = "Fleet Agent " + config.agent_id;
-        } else {
-            config.agent_name = "Fleet Agent";  // Will be updated after server assigns ID
-        }
+        config.agent_name = "";  // Server will assign a unique name
     }
 
     // Apply robot defaults

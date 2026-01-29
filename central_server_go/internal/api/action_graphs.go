@@ -3,6 +3,8 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -291,6 +293,39 @@ func (s *Server) DeleteActionGraph(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// CheckExecutability validates if an action graph can be executed on an agent
+// This is a safety check that verifies all required capabilities are available
+func (s *Server) CheckExecutability(w http.ResponseWriter, r *http.Request) {
+	graphID := chi.URLParam(r, "graphID")
+	agentID := r.URL.Query().Get("agent_id")
+
+	if agentID == "" {
+		writeError(w, http.StatusBadRequest, "agent_id query parameter is required")
+		return
+	}
+
+	// Validate capabilities
+	result, err := s.scheduler.ValidateCapabilities(graphID, agentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Check if agent is online
+	isOnline := s.stateManager.IsAgentOnline(agentID)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"action_graph_id":       graphID,
+		"agent_id":              agentID,
+		"can_execute":           result.Valid && isOnline,
+		"capabilities_valid":    result.Valid,
+		"agent_online":          isOnline,
+		"missing_capabilities":  result.MissingCapabilities,
+		"unavailable_servers":   result.UnavailableServers,
+		"message":               result.Message,
+	})
+}
+
 // ExecuteActionGraph starts executing an action graph on a robot
 func (s *Server) ExecuteActionGraph(w http.ResponseWriter, r *http.Request) {
 	graphID := chi.URLParam(r, "graphID")
@@ -306,6 +341,25 @@ func (s *Server) ExecuteActionGraph(w http.ResponseWriter, r *http.Request) {
 
 	if req.AgentID == "" {
 		writeError(w, http.StatusBadRequest, "agent_id is required (in body or query param)")
+		return
+	}
+
+	// Validate that the graph is assigned and deployed to this agent
+	aag, err := s.repo.GetAgentActionGraph(req.AgentID, graphID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check graph assignment: "+err.Error())
+		return
+	}
+	if aag == nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("action graph '%s' is not assigned to agent '%s'. Please assign the graph first.", graphID, req.AgentID))
+		return
+	}
+	if aag.DeploymentStatus != "deployed" {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("action graph '%s' is not deployed to agent '%s' (status: %s). Please deploy the graph first.", graphID, req.AgentID, aag.DeploymentStatus))
+		return
+	}
+	if aag.DeployedVersion == 0 {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("action graph '%s' has never been successfully deployed to agent '%s'", graphID, req.AgentID))
 		return
 	}
 
@@ -832,5 +886,102 @@ func (s *Server) DeployActionGraphToAgent(w http.ResponseWriter, r *http.Request
 		"checksum":         canonicalGraph.Checksum,
 		"error":            result.Error,
 		"deployment_status": aag.DeploymentStatus,
+	})
+}
+
+// ExportActionGraph exports an action graph in canonical JSON format
+// GET /api/action-graphs/{graphID}/export
+func (s *Server) ExportActionGraph(w http.ResponseWriter, r *http.Request) {
+	graphID := chi.URLParam(r, "graphID")
+	if graphID == "" {
+		writeError(w, http.StatusBadRequest, "Graph ID is required")
+		return
+	}
+
+	// Fetch the action graph from DB
+	dbGraph, err := s.repo.GetActionGraph(graphID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "Action graph not found")
+		return
+	}
+
+	// Convert to canonical format
+	canonicalGraph, err := graphpkg.FromDBModel(dbGraph)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to convert graph: %v", err))
+		return
+	}
+
+	// Compute fresh checksum
+	canonicalGraph.Checksum = canonicalGraph.ComputeChecksum()
+
+	// Set headers for file download
+	filename := fmt.Sprintf("%s_v%d.json", graphID, dbGraph.Version)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+
+	// Write JSON response
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ") // Pretty print for readability
+	if err := encoder.Encode(canonicalGraph); err != nil {
+		log.Printf("Failed to encode export: %v", err)
+	}
+}
+
+// ImportActionGraph imports an action graph from canonical JSON format
+// POST /api/action-graphs/import
+func (s *Server) ImportActionGraph(w http.ResponseWriter, r *http.Request) {
+	var canonicalGraph graphpkg.CanonicalGraph
+	if err := json.NewDecoder(r.Body).Decode(&canonicalGraph); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %v", err))
+		return
+	}
+
+	// Validate basic structure
+	if err := canonicalGraph.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid graph structure: %v", err))
+		return
+	}
+
+	// Verify checksum if provided
+	if canonicalGraph.Checksum != "" {
+		expectedChecksum := canonicalGraph.ComputeChecksum()
+		if canonicalGraph.Checksum != expectedChecksum {
+			writeError(w, http.StatusBadRequest, "Checksum mismatch: graph may have been modified")
+			return
+		}
+	}
+
+	// Check if graph already exists
+	existingGraph, _ := s.repo.GetActionGraph(canonicalGraph.ActionGraph.ID)
+	if existingGraph != nil {
+		writeError(w, http.StatusConflict, fmt.Sprintf("Action graph '%s' already exists. Use update endpoint or delete first.", canonicalGraph.ActionGraph.ID))
+		return
+	}
+
+	// Convert to DB model
+	dbModel, err := graphpkg.ToDBModel(&canonicalGraph)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to convert graph: %v", err))
+		return
+	}
+
+	// Set timestamps
+	now := time.Now()
+	dbModel.CreatedAt = now
+	dbModel.UpdatedAt = now
+
+	// Save to database
+	if err := s.repo.CreateActionGraph(dbModel); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to save graph: %v", err))
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"id":       dbModel.ID,
+		"name":     dbModel.Name,
+		"version":  dbModel.Version,
+		"message":  "Action graph imported successfully",
+		"checksum": canonicalGraph.Checksum,
 	})
 }

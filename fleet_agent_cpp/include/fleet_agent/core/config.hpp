@@ -123,6 +123,32 @@ struct RosConfig {
 };
 
 // ============================================================
+// Telemetry Configuration
+// ============================================================
+
+struct TelemetryConfig {
+    // Topic suffixes to subscribe to (relative to robot namespace)
+    std::string odom_topic{"odom"};
+    std::string joint_state_topic{"joint_states"};
+    std::string battery_topic{"battery_state"};
+    std::string velocity_topic{"cmd_vel"};
+
+    // Rate limiting
+    double pose_rate_hz{10.0};
+    double joint_state_rate_hz{10.0};
+    double battery_rate_hz{1.0};
+    double velocity_rate_hz{10.0};
+
+    // TF settings
+    bool subscribe_tf{true};
+    std::vector<std::string> tf_frames;  // Frames to track (empty = all)
+
+    // Telemetry transmission
+    int transmission_interval_ms{100};
+    bool delta_encoding{true};
+};
+
+// ============================================================
 // Logging Configuration
 // ============================================================
 

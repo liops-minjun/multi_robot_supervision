@@ -1,3 +1,34 @@
+// ============================================
+// Lifecycle State Types (ROS2 Lifecycle Node)
+// ============================================
+
+export type LifecycleState = 'unknown' | 'unconfigured' | 'inactive' | 'active' | 'finalized'
+
+// Helper to check if lifecycle state indicates availability
+export function isLifecycleAvailable(state: LifecycleState): boolean {
+  return state === 'active'
+}
+
+// Helper to get lifecycle state display info
+export function getLifecycleStateInfo(state: LifecycleState): {
+  label: string
+  color: string
+  description: string
+} {
+  switch (state) {
+    case 'active':
+      return { label: 'ACTIVE', color: 'green', description: 'Action server is running and accepting goals' }
+    case 'inactive':
+      return { label: 'INACTIVE', color: 'yellow', description: 'Configured but not accepting goals' }
+    case 'unconfigured':
+      return { label: 'UNCONFIGURED', color: 'gray', description: 'Node created but not configured' }
+    case 'finalized':
+      return { label: 'FINALIZED', color: 'red', description: 'Node is shutting down' }
+    default:
+      return { label: 'UNKNOWN', color: 'gray', description: 'Lifecycle state not available (non-lifecycle node)' }
+  }
+}
+
 // Agent Types
 export interface Agent {
   id: string
@@ -188,16 +219,442 @@ export interface Precondition {
   message?: string
 }
 
+// ============================================
+// Canonical Data Type System (for parameter binding)
+// ============================================
+
+/**
+ * Canonical data types shared across frontend, backend, and agent.
+ * Maps to ROS2 types and supports cross-step parameter binding.
+ */
+export type CanonicalDataType =
+  // Primitive types
+  | 'bool'
+  | 'int8' | 'int16' | 'int32' | 'int64'
+  | 'uint8' | 'uint16' | 'uint32' | 'uint64'
+  | 'float32' | 'float64'
+  | 'string'
+  // Complex types
+  | 'object'
+  | 'array'
+  // Any type (for dynamic/expression sources)
+  | 'any'
+
+/**
+ * Type category for compatibility grouping
+ */
+export type TypeCategory = 'boolean' | 'integer' | 'float' | 'string' | 'object' | 'array' | 'any'
+
+/**
+ * Type metadata including array info and nested structure
+ */
+export interface DataTypeInfo {
+  type: CanonicalDataType
+  category: TypeCategory
+  isArray: boolean
+  arrayElementType?: DataTypeInfo  // For arrays: type of elements
+  objectFields?: Record<string, DataTypeInfo>  // For objects: field types
+  rosType?: string  // Original ROS2 type (e.g., "geometry_msgs/msg/Pose")
+}
+
+/**
+ * Type compatibility rules:
+ * - Same type: always compatible
+ * - Integer types: compatible with each other (implicit conversion)
+ * - Float types: compatible with each other and integers (implicit conversion)
+ * - String: only compatible with string
+ * - Bool: only compatible with bool
+ * - Object: compatible if fields match
+ * - Array: compatible if element types match
+ * - Any: compatible with everything
+ */
+export interface TypeCompatibilityResult {
+  compatible: boolean
+  requiresConversion: boolean
+  conversionType?: 'implicit' | 'explicit' | 'lossy'
+  warningMessage?: string
+}
+
+/**
+ * Get category for a canonical type
+ */
+export function getTypeCategory(type: CanonicalDataType): TypeCategory {
+  if (type === 'bool') return 'boolean'
+  if (type.startsWith('int') || type.startsWith('uint')) return 'integer'
+  if (type.startsWith('float')) return 'float'
+  if (type === 'string') return 'string'
+  if (type === 'object') return 'object'
+  if (type === 'array') return 'array'
+  return 'any'
+}
+
+/**
+ * Check if two types are compatible for parameter binding
+ */
+export function checkTypeCompatibility(
+  sourceType: DataTypeInfo,
+  targetType: DataTypeInfo
+): TypeCompatibilityResult {
+  // Any type is always compatible
+  if (sourceType.type === 'any' || targetType.type === 'any') {
+    return { compatible: true, requiresConversion: false }
+  }
+
+  // Exact type match
+  if (sourceType.type === targetType.type && sourceType.isArray === targetType.isArray) {
+    return { compatible: true, requiresConversion: false }
+  }
+
+  // Array compatibility
+  if (sourceType.isArray !== targetType.isArray) {
+    // Array to non-array: need index access
+    if (sourceType.isArray && !targetType.isArray && sourceType.arrayElementType) {
+      // Check if element type is compatible
+      const elementCompat = checkTypeCompatibility(sourceType.arrayElementType, targetType)
+      if (elementCompat.compatible) {
+        return {
+          compatible: true,
+          requiresConversion: true,
+          conversionType: 'explicit',
+          warningMessage: 'Array access required - use [index] syntax'
+        }
+      }
+    }
+    return { compatible: false, requiresConversion: false }
+  }
+
+  // Same category compatibility with conversion
+  const sourceCategory = getTypeCategory(sourceType.type)
+  const targetCategory = getTypeCategory(targetType.type)
+
+  // Boolean only with boolean
+  if (sourceCategory === 'boolean' || targetCategory === 'boolean') {
+    return { compatible: sourceCategory === targetCategory, requiresConversion: false }
+  }
+
+  // Integer to float (implicit, safe)
+  if (sourceCategory === 'integer' && targetCategory === 'float') {
+    return { compatible: true, requiresConversion: true, conversionType: 'implicit' }
+  }
+
+  // Float to integer (lossy, requires explicit)
+  if (sourceCategory === 'float' && targetCategory === 'integer') {
+    return {
+      compatible: true,
+      requiresConversion: true,
+      conversionType: 'lossy',
+      warningMessage: 'Float to integer conversion may lose precision'
+    }
+  }
+
+  // Integer type widening/narrowing
+  if (sourceCategory === 'integer' && targetCategory === 'integer') {
+    const sourceWidth = getIntegerWidth(sourceType.type)
+    const targetWidth = getIntegerWidth(targetType.type)
+    if (sourceWidth <= targetWidth) {
+      return { compatible: true, requiresConversion: true, conversionType: 'implicit' }
+    } else {
+      return {
+        compatible: true,
+        requiresConversion: true,
+        conversionType: 'lossy',
+        warningMessage: `Narrowing from ${sourceType.type} to ${targetType.type}`
+      }
+    }
+  }
+
+  // Float type precision
+  if (sourceCategory === 'float' && targetCategory === 'float') {
+    const isNarrowing = sourceType.type === 'float64' && targetType.type === 'float32'
+    return {
+      compatible: true,
+      requiresConversion: true,
+      conversionType: isNarrowing ? 'lossy' : 'implicit',
+      warningMessage: isNarrowing ? 'float64 to float32 may lose precision' : undefined
+    }
+  }
+
+  // String only with string
+  if (sourceCategory === 'string' || targetCategory === 'string') {
+    return { compatible: sourceCategory === targetCategory, requiresConversion: false }
+  }
+
+  // Object compatibility - check fields
+  if (sourceCategory === 'object' && targetCategory === 'object') {
+    // If both have field definitions, check them
+    if (sourceType.objectFields && targetType.objectFields) {
+      // Target's required fields must exist in source
+      for (const [fieldName, fieldType] of Object.entries(targetType.objectFields)) {
+        const sourceField = sourceType.objectFields[fieldName]
+        if (!sourceField) {
+          return {
+            compatible: false,
+            requiresConversion: false,
+            warningMessage: `Missing field: ${fieldName}`
+          }
+        }
+        const fieldCompat = checkTypeCompatibility(sourceField, fieldType)
+        if (!fieldCompat.compatible) {
+          return {
+            compatible: false,
+            requiresConversion: false,
+            warningMessage: `Field '${fieldName}' type mismatch`
+          }
+        }
+      }
+      return { compatible: true, requiresConversion: false }
+    }
+    // If no field info, assume compatible (runtime check)
+    return { compatible: true, requiresConversion: false }
+  }
+
+  return { compatible: false, requiresConversion: false }
+}
+
+/**
+ * Get bit width of integer type
+ */
+function getIntegerWidth(type: CanonicalDataType): number {
+  const match = type.match(/\d+/)
+  return match ? parseInt(match[0], 10) : 32
+}
+
+/**
+ * Parse a field path with array access (e.g., "poses[0].position.x")
+ */
+export interface FieldPathSegment {
+  field: string
+  arrayIndex?: number  // undefined if not array access
+}
+
+export function parseFieldPath(path: string): FieldPathSegment[] {
+  const segments: FieldPathSegment[] = []
+  const regex = /([a-zA-Z_][a-zA-Z0-9_]*)(?:\[(\d+)\])?/g
+  let match
+
+  while ((match = regex.exec(path)) !== null) {
+    segments.push({
+      field: match[1],
+      arrayIndex: match[2] !== undefined ? parseInt(match[2], 10) : undefined
+    })
+  }
+
+  return segments
+}
+
+/**
+ * Resolve type from a field path (e.g., "pose.position.x" from Pose type)
+ */
+export function resolveFieldType(
+  rootType: DataTypeInfo,
+  fieldPath: string
+): DataTypeInfo | null {
+  const segments = parseFieldPath(fieldPath)
+  let currentType = rootType
+
+  for (const segment of segments) {
+    // Handle array access
+    if (segment.arrayIndex !== undefined) {
+      if (!currentType.isArray || !currentType.arrayElementType) {
+        return null  // Not an array
+      }
+      currentType = currentType.arrayElementType
+    }
+
+    // Handle field access
+    if (segment.field && currentType.objectFields) {
+      const fieldType = currentType.objectFields[segment.field]
+      if (!fieldType) {
+        return null  // Field not found
+      }
+      currentType = fieldType
+    } else if (segment.field && currentType.type !== 'any') {
+      // Can't access field on non-object
+      if (segment.field !== segments[0].field) {
+        return null
+      }
+    }
+  }
+
+  return currentType
+}
+
+/**
+ * Map ROS2 type string to canonical type
+ */
+export function rosTypeToCanonical(rosType: string): DataTypeInfo {
+  // Handle array types
+  const isArray = rosType.includes('[]') || rosType.includes('[')
+  const baseType = rosType.replace(/\[\d*\]/, '').trim()
+
+  // Primitive mappings
+  const primitiveMap: Record<string, CanonicalDataType> = {
+    'bool': 'bool',
+    'boolean': 'bool',
+    'int8': 'int8',
+    'int16': 'int16',
+    'int32': 'int32',
+    'int': 'int32',
+    'int64': 'int64',
+    'uint8': 'uint8',
+    'byte': 'uint8',
+    'uint16': 'uint16',
+    'uint32': 'uint32',
+    'uint64': 'uint64',
+    'float32': 'float32',
+    'float': 'float32',
+    'float64': 'float64',
+    'double': 'float64',
+    'string': 'string',
+  }
+
+  const canonicalType = primitiveMap[baseType.toLowerCase()] || 'object'
+
+  const typeInfo: DataTypeInfo = {
+    type: canonicalType,
+    category: getTypeCategory(canonicalType),
+    isArray,
+    rosType
+  }
+
+  if (isArray) {
+    typeInfo.arrayElementType = {
+      type: canonicalType,
+      category: getTypeCategory(canonicalType),
+      isArray: false,
+      rosType: baseType
+    }
+  }
+
+  return typeInfo
+}
+
+/**
+ * Common ROS2 message type schemas
+ */
+export const ROS2_COMMON_TYPES: Record<string, DataTypeInfo> = {
+  'geometry_msgs/msg/Vector3': {
+    type: 'object',
+    category: 'object',
+    isArray: false,
+    rosType: 'geometry_msgs/msg/Vector3',
+    objectFields: {
+      'x': { type: 'float64', category: 'float', isArray: false },
+      'y': { type: 'float64', category: 'float', isArray: false },
+      'z': { type: 'float64', category: 'float', isArray: false },
+    }
+  },
+  'geometry_msgs/msg/Point': {
+    type: 'object',
+    category: 'object',
+    isArray: false,
+    rosType: 'geometry_msgs/msg/Point',
+    objectFields: {
+      'x': { type: 'float64', category: 'float', isArray: false },
+      'y': { type: 'float64', category: 'float', isArray: false },
+      'z': { type: 'float64', category: 'float', isArray: false },
+    }
+  },
+  'geometry_msgs/msg/Quaternion': {
+    type: 'object',
+    category: 'object',
+    isArray: false,
+    rosType: 'geometry_msgs/msg/Quaternion',
+    objectFields: {
+      'x': { type: 'float64', category: 'float', isArray: false },
+      'y': { type: 'float64', category: 'float', isArray: false },
+      'z': { type: 'float64', category: 'float', isArray: false },
+      'w': { type: 'float64', category: 'float', isArray: false },
+    }
+  },
+  'geometry_msgs/msg/Pose': {
+    type: 'object',
+    category: 'object',
+    isArray: false,
+    rosType: 'geometry_msgs/msg/Pose',
+    objectFields: {
+      'position': {
+        type: 'object',
+        category: 'object',
+        isArray: false,
+        objectFields: {
+          'x': { type: 'float64', category: 'float', isArray: false },
+          'y': { type: 'float64', category: 'float', isArray: false },
+          'z': { type: 'float64', category: 'float', isArray: false },
+        }
+      },
+      'orientation': {
+        type: 'object',
+        category: 'object',
+        isArray: false,
+        objectFields: {
+          'x': { type: 'float64', category: 'float', isArray: false },
+          'y': { type: 'float64', category: 'float', isArray: false },
+          'z': { type: 'float64', category: 'float', isArray: false },
+          'w': { type: 'float64', category: 'float', isArray: false },
+        }
+      }
+    }
+  },
+}
+
+// ============================================
+// Parameter Source Types (for step_result referencing)
+// ============================================
+
+export type ParameterSourceType = 'constant' | 'step_result' | 'dynamic' | 'expression'
+
+// Defines how a single parameter field gets its value
+export interface ParameterFieldSource {
+  source: ParameterSourceType
+
+  // source='constant': Fixed value
+  value?: unknown
+
+  // source='step_result': Reference to previous step's result
+  step_id?: string           // Step ID to reference
+  result_field?: string      // Field path in result (e.g., "pose.position.x", "poses[0].position")
+
+  // source='expression': Variable expression (e.g., "${pick_step.result.pose}")
+  expression?: string
+
+  // Type information (for validation and UI)
+  source_type?: DataTypeInfo   // Type of the source value
+  target_type?: DataTypeInfo   // Expected type of target parameter
+  conversion?: TypeConversionConfig  // Optional conversion config
+}
+
+// Type conversion configuration
+export interface TypeConversionConfig {
+  enabled: boolean
+  mode: 'implicit' | 'explicit' | 'custom'
+  customExpression?: string  // For custom conversion (e.g., "Math.round(value)")
+}
+
+// Result schema for a step (used by other steps to reference)
+export interface StepResultSchema {
+  fields: Array<{
+    name: string
+    type: string
+    description?: string
+    typeInfo?: DataTypeInfo  // Parsed type information for validation
+  }>
+}
+
 export interface StepAction {
   type: string
   server?: string
   params: {
-    source: 'waypoint' | 'inline' | 'dynamic'
+    source: 'waypoint' | 'inline' | 'dynamic' | 'mapped'
     waypoint_id?: string
     data?: Record<string, unknown>
     fields?: Array<{ name: string; type: string; label: string }>
+    // NEW: Per-field source mapping (when source='mapped')
+    field_sources?: Record<string, ParameterFieldSource>
   }
   timeout_sec?: number
+  // NEW: Expected result schema (for other steps to reference)
+  result_schema?: StepResultSchema
 }
 
 export interface WaitFor {
@@ -365,11 +822,29 @@ export interface AssignmentInfo {
   deployed_at: string | null
 }
 
+// Agent action graph assignment info (from GET /agents/{id}/action-graphs)
+export interface AgentActionGraphInfo {
+  id: string
+  agent_id: string
+  action_graph_id: string
+  action_graph_name?: string
+  server_version: number
+  deployed_version: number
+  deployment_status: string
+  deployment_error?: string
+  deployed_at?: string
+  enabled: boolean
+  priority: number
+  created_at: string
+  updated_at: string
+}
+
 // Action server in agent overview
 export interface AgentOverviewActionServer {
   action_server: string  // e.g., "/test_A_action"
   action_type: string    // e.g., "test_msgs/TestAction"
   is_available: boolean
+  lifecycle_state?: LifecycleState  // ROS2 lifecycle state
   status: string
 }
 
@@ -534,6 +1009,7 @@ export interface AgentCapabilityInfo {
   success_criteria?: Record<string, unknown>
   status: string
   is_available: boolean
+  lifecycle_state?: LifecycleState  // ROS2 lifecycle state
   discovered_at: string
 }
 
@@ -559,6 +1035,7 @@ export interface ActionServerInfo {
   agent_id: string
   agent_name?: string
   is_available: boolean
+  lifecycle_state: LifecycleState  // ROS2 lifecycle state
   status: string
 }
 
@@ -740,4 +1217,69 @@ export interface MultiAgentExecuteErrorResponse {
   message: string
   failed_agents: MultiAgentFailedAgent[]
   passed_agents?: string[]
+}
+
+// ============================================
+// Telemetry Types (for parameter loading)
+// ============================================
+
+export interface Vector3 {
+  x: number
+  y: number
+  z: number
+}
+
+export interface Quaternion {
+  x: number
+  y: number
+  z: number
+  w: number
+}
+
+export interface Pose {
+  position: Vector3
+  orientation: Quaternion
+}
+
+export interface Twist {
+  linear: Vector3
+  angular: Vector3
+}
+
+// JointState telemetry data
+export interface JointStateData {
+  name: string[]
+  position: number[]
+  velocity: number[]
+  effort: number[]
+  topic_name?: string  // ROS2 topic name for visualization
+  timestamp_ns?: number  // ROS2 message timestamp in nanoseconds
+}
+
+// Odometry telemetry data
+export interface OdometryData {
+  frame_id: string
+  child_frame_id: string
+  pose: Pose
+  twist: Twist
+  topic_name?: string  // ROS2 topic name for visualization
+  timestamp_ns?: number  // ROS2 message timestamp in nanoseconds
+}
+
+// Transform telemetry data
+export interface TransformData {
+  frame_id: string
+  child_frame_id: string
+  translation: Vector3
+  rotation: Quaternion
+  timestamp_ns?: number  // ROS2 message timestamp in nanoseconds
+}
+
+// Combined robot telemetry
+export interface RobotTelemetry {
+  joint_state?: JointStateData
+  odometry?: OdometryData
+  transforms?: TransformData[]
+  updated_at: string
+  is_stale?: boolean  // True if telemetry data is older than staleness threshold
 }

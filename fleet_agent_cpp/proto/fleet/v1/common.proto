@@ -17,6 +17,18 @@ message Timestamp {
 }
 
 // ============================================================
+// Lifecycle State (ROS2 Lifecycle Node)
+// ============================================================
+
+enum LifecycleState {
+  LIFECYCLE_STATE_UNKNOWN = 0;
+  LIFECYCLE_STATE_UNCONFIGURED = 1;
+  LIFECYCLE_STATE_INACTIVE = 2;
+  LIFECYCLE_STATE_ACTIVE = 3;
+  LIFECYCLE_STATE_FINALIZED = 4;
+}
+
+// ============================================================
 // Start Conditions
 // ============================================================
 
@@ -87,6 +99,21 @@ enum GraphExecutionState {
 }
 
 // ============================================================
+// Task State (Agent-driven execution)
+// ============================================================
+
+enum TaskState {
+  TASK_STATE_UNKNOWN = 0;
+  TASK_STATE_PENDING = 1;
+  TASK_STATE_RUNNING = 2;
+  TASK_STATE_WAITING_PRECONDITION = 3;
+  TASK_STATE_EXECUTING_ACTION = 4;
+  TASK_STATE_COMPLETED = 5;
+  TASK_STATE_FAILED = 6;
+  TASK_STATE_CANCELLED = 7;
+}
+
+// ============================================================
 // Generic Acknowledgement
 // ============================================================
 
@@ -94,4 +121,73 @@ message Ack {
   bool success = 1;
   string message_id = 2;
   string error = 3;
+}
+
+// ============================================================
+// Telemetry Types for Parameter Loading
+// ============================================================
+
+// 3D Vector
+message Vector3 {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+// Quaternion orientation
+message Quaternion {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+  double w = 4;
+}
+
+// Pose (position + orientation)
+message Pose {
+  Vector3 position = 1;
+  Quaternion orientation = 2;
+}
+
+// Twist (linear + angular velocity)
+message Twist {
+  Vector3 linear = 1;
+  Vector3 angular = 2;
+}
+
+// JointState telemetry
+message JointStateData {
+  repeated string name = 1;
+  repeated double position = 2;
+  repeated double velocity = 3;
+  repeated double effort = 4;
+  int64 timestamp_ns = 5;
+  string topic_name = 6;  // ROS2 topic name (e.g., "/robot_001/joint_states")
+}
+
+// Transform telemetry
+message TransformData {
+  string frame_id = 1;
+  string child_frame_id = 2;
+  Vector3 translation = 3;
+  Quaternion rotation = 4;
+  int64 timestamp_ns = 5;
+}
+
+// Odometry telemetry
+message OdometryData {
+  string frame_id = 1;
+  string child_frame_id = 2;
+  Pose pose = 3;
+  Twist twist = 4;
+  int64 timestamp_ns = 5;
+  string topic_name = 6;  // ROS2 topic name (e.g., "/robot_001/odom")
+}
+
+// Combined telemetry payload per robot
+message TelemetryPayload {
+  string robot_id = 1;
+  JointStateData joint_state = 2;
+  repeated TransformData transforms = 3;
+  OdometryData odometry = 4;
+  int64 collected_at_ns = 5;
 }

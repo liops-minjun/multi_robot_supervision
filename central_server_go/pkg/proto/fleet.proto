@@ -39,6 +39,7 @@ message AgentMessage {
     AgentStatusUpdate status_update = 12;
     AgentStateUpdate state_update = 13; // Enhanced state update
     TaskLog task_log = 14;              // Task execution logs
+    TaskStateUpdate task_state = 15;    // Agent-driven task state update
   }
 }
 
@@ -74,6 +75,9 @@ message AgentHeartbeat {
   string current_graph_id = 9;     // Currently executing action graph ID
   string current_task_id = 10;
   string current_step_id = 11;
+
+  // Telemetry payload for parameter loading
+  TelemetryPayload telemetry = 12;
 }
 
 message AgentStatusUpdate {
@@ -87,6 +91,18 @@ enum AgentState {
   AGENT_ONLINE = 1;
   AGENT_OFFLINE = 2;
   AGENT_RECONNECTING = 3;
+}
+
+// ============================================================
+// Lifecycle State (ROS2 Lifecycle Node)
+// ============================================================
+
+enum LifecycleState {
+  LIFECYCLE_STATE_UNKNOWN = 0;
+  LIFECYCLE_STATE_UNCONFIGURED = 1;
+  LIFECYCLE_STATE_INACTIVE = 2;
+  LIFECYCLE_STATE_ACTIVE = 3;
+  LIFECYCLE_STATE_FINALIZED = 4;
 }
 
 // ============================================================
@@ -105,6 +121,7 @@ message ServerMessage {
     ConfigUpdate config_update = 13;
     FleetStateUpdate fleet_state_update = 14; // Broadcast fleet state changes
     DeployGraphCommand deploy_graph = 15;     // Deploy action graph with states
+    StartTaskCommand start_task = 16;         // Agent-driven task execution
   }
 }
 
@@ -311,6 +328,75 @@ message Ack {
 }
 
 // ============================================================
+// Telemetry Types for Parameter Loading
+// ============================================================
+
+// 3D Vector
+message Vector3 {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+// Quaternion orientation
+message Quaternion {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+  double w = 4;
+}
+
+// Pose (position + orientation)
+message Pose {
+  Vector3 position = 1;
+  Quaternion orientation = 2;
+}
+
+// Twist (linear + angular velocity)
+message Twist {
+  Vector3 linear = 1;
+  Vector3 angular = 2;
+}
+
+// JointState telemetry
+message JointStateData {
+  repeated string name = 1;
+  repeated double position = 2;
+  repeated double velocity = 3;
+  repeated double effort = 4;
+  int64 timestamp_ns = 5;
+  string topic_name = 6;  // ROS2 topic name (e.g., "/robot_001/joint_states")
+}
+
+// Transform telemetry
+message TransformData {
+  string frame_id = 1;
+  string child_frame_id = 2;
+  Vector3 translation = 3;
+  Quaternion rotation = 4;
+  int64 timestamp_ns = 5;
+}
+
+// Odometry telemetry
+message OdometryData {
+  string frame_id = 1;
+  string child_frame_id = 2;
+  Pose pose = 3;
+  Twist twist = 4;
+  int64 timestamp_ns = 5;
+  string topic_name = 6;  // ROS2 topic name (e.g., "/robot_001/odom")
+}
+
+// Combined telemetry payload per robot
+message TelemetryPayload {
+  string robot_id = 1;
+  JointStateData joint_state = 2;
+  repeated TransformData transforms = 3;
+  OdometryData odometry = 4;
+  int64 collected_at_ns = 5;
+}
+
+// ============================================================
 // Enhanced Preconditions for Cross-Agent State Checking
 // ============================================================
 
@@ -375,4 +461,51 @@ message TaskLog {
   int64 timestamp_ms = 7;
   string component = 8;            // e.g., "CommandProcessor", "ActionExecutor"
   map<string, string> metadata = 9; // Additional context
+}
+
+// ============================================================
+// Agent-Driven Task Execution
+// ============================================================
+
+enum TaskState {
+  TASK_STATE_UNKNOWN = 0;
+  TASK_STATE_PENDING = 1;
+  TASK_STATE_RUNNING = 2;
+  TASK_STATE_WAITING_PRECONDITION = 3;
+  TASK_STATE_EXECUTING_ACTION = 4;
+  TASK_STATE_COMPLETED = 5;
+  TASK_STATE_FAILED = 6;
+  TASK_STATE_CANCELLED = 7;
+}
+
+// Server → Agent: Start task command (agent-driven execution)
+message StartTaskCommand {
+  string task_id = 1;
+  string graph_id = 2;
+  string robot_id = 3;
+  map<string, string> params = 4;
+}
+
+// Agent → Server: Task state update (agent-driven execution)
+message TaskStateUpdate {
+  string task_id = 1;
+  string current_step_id = 2;
+  TaskState state = 3;
+  float progress = 4;                   // 0.0 - 1.0
+  string blocking_reason = 5;           // Why task is waiting
+  map<string, string> variables = 6;    // Step result variables
+
+  // Step completion info (when a step finishes)
+  StepResultInfo step_result = 7;
+
+  int64 timestamp_ms = 8;
+}
+
+// Step result info (included in TaskStateUpdate)
+message StepResultInfo {
+  string step_id = 1;
+  ActionStatus status = 2;
+  bytes result_json = 3;               // JSON-encoded result data
+  string error = 4;
+  int64 duration_ms = 5;
 }

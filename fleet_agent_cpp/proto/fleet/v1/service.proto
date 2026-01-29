@@ -69,6 +69,9 @@ message AgentMessage {
 
     // Task execution logs
     TaskLog task_log = 19;
+
+    // Agent-driven task state update
+    TaskStateUpdate task_state = 20;
   }
 }
 
@@ -87,6 +90,8 @@ message AgentHeartbeat {
   reserved 7, 8, 9;
   string current_task_id = 10;
   string current_step_id = 11;
+  // Telemetry payload for parameter loading
+  TelemetryPayload telemetry = 12;
 }
 
 message AgentStatusUpdate {
@@ -133,6 +138,9 @@ message ServerMessage {
 
     // Fleet state broadcast (for cross-agent coordination)
     FleetStateBroadcast fleet_state = 17;
+
+    // Agent-driven task execution
+    StartTaskCommand start_task = 18;
   }
 }
 
@@ -176,6 +184,9 @@ message ActionCapability {
 
   // Availability status (true if action server is currently running)
   bool is_available = 9;
+
+  // Lifecycle state (for ROS2 Lifecycle Node action servers)
+  LifecycleState lifecycle_state = 10;
 }
 
 message SuccessCriteria {

@@ -1,8 +1,9 @@
 import { memo, useState, useEffect, useMemo } from 'react'
-import { Handle, Position, NodeProps, useReactFlow, useUpdateNodeInternals } from 'reactflow'
-import { ChevronDown, ChevronUp, Plus, X, Filter, Settings, Loader2, Sparkles } from 'lucide-react'
-import type { StartStateConfig, EndStateConfig, ActionField, ActionOutcome, DuringStateTarget, GraphState } from '../../../types'
-import { capabilityApi } from '../../../api/client'
+import { Handle, Position, NodeProps, useReactFlow, useUpdateNodeInternals, useNodes } from 'reactflow'
+import { ChevronDown, ChevronUp, Plus, X, Filter, Settings, Loader2, Sparkles, Download } from 'lucide-react'
+import type { StartStateConfig, EndStateConfig, ActionField, ActionOutcome, DuringStateTarget, GraphState, ParameterFieldSource } from '../../../types'
+import { capabilityApi, telemetryApi } from '../../../api/client'
+import ParameterSourceSelector from '../../../components/ParameterSourceSelector'
 
 // Auto-generated state suffixes
 const AUTO_STATE_SUFFIXES = {
@@ -151,6 +152,33 @@ const canUseWaypoint = (rosType: string): boolean => {
   return lowerType.includes('pose') || lowerType.includes('point') || lowerType.includes('transform')
 }
 
+// Extract robot ID from action server path (e.g., "/robot_001/navigate_to_pose" -> "robot_001")
+const extractRobotFromServer = (server: string | undefined): string | null => {
+  if (!server) return null
+  // Match pattern like /robot_001/... or /robot001/... or /amr_1/...
+  const match = server.match(/^\/([a-zA-Z0-9_-]+)\//)
+  if (match) {
+    return match[1]
+  }
+  return null
+}
+
+// Detect if a field type is telemetry-compatible
+type TelemetryType = 'joint_state' | 'odometry' | 'transform' | null
+const getTelemetryType = (rosType: string): TelemetryType => {
+  const type = rosType.toLowerCase()
+  if (type.includes('jointstate') || type.includes('joint_state') || type.includes('jointtrajectory') || type.includes('joint_trajectory')) {
+    return 'joint_state'
+  }
+  if (type.includes('odometry') || type.includes('odom') || type === 'nav_msgs/msg/odometry') {
+    return 'odometry'
+  }
+  if (type.includes('transform') || type.includes('tf')) {
+    return 'transform'
+  }
+  return null
+}
+
 // Color palette for end states
 const OUTCOME_COLORS: Record<ActionOutcome, string> = {
   success: '#22c55e',
@@ -245,6 +273,9 @@ interface StateActionNodeData {
   // Job configuration
   jobName?: string
   params?: Record<string, unknown>
+  fieldSources?: Record<string, ParameterFieldSource>  // Per-field source configuration
+  // Result fields from this action (for other nodes to reference)
+  resultFields?: Array<{ name: string; type: string }>
   // Auto-generate states toggle
   autoGenerateStates?: boolean
   generatedStates?: GraphState[]  // Stores the auto-generated states
@@ -265,10 +296,203 @@ type NormalizedDuringStateTarget = {
   agent_id?: string
 }
 
+// Load Telemetry Button component for loading current robot values
+interface LoadTelemetryButtonProps {
+  robotId: string
+  telemetryType: 'joint_state' | 'odometry' | 'transform'
+  onLoad: (value: unknown) => void
+  fieldType: string
+}
+
+const LoadTelemetryButton = ({ robotId, telemetryType, onLoad, fieldType }: LoadTelemetryButtonProps) => {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleLoad = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setLoading(true)
+    setError(null)
+    try {
+      let data: unknown
+      switch (telemetryType) {
+        case 'joint_state':
+          const jointData = await telemetryApi.getJointState(robotId)
+          // For JointTrajectory types, convert JointState to trajectory format
+          if (fieldType.toLowerCase().includes('trajectory')) {
+            data = {
+              joint_names: jointData.name || [],
+              points: [{
+                positions: jointData.position || [],
+                velocities: jointData.velocity || [],
+                effort: jointData.effort || [],
+                time_from_start: { sec: 0, nanosec: 0 }
+              }]
+            }
+          } else {
+            data = jointData
+          }
+          break
+        case 'odometry':
+          data = await telemetryApi.getOdometry(robotId)
+          break
+        case 'transform':
+          const transforms = await telemetryApi.getTransforms(robotId)
+          // Return first transform or full array based on field type
+          data = fieldType.toLowerCase().includes('array') ? transforms : transforms?.[0]
+          break
+      }
+      onLoad(data)
+    } catch (err) {
+      console.error('Failed to load telemetry:', err)
+      setError('Failed to load')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <button
+      onClick={handleLoad}
+      disabled={loading}
+      title={error || `Load current ${telemetryType.replace('_', ' ')} from ${robotId}`}
+      className={`flex items-center justify-center p-1 rounded transition-colors ${
+        error
+          ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+          : 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30'
+      } disabled:opacity-50`}
+    >
+      {loading ? (
+        <Loader2 className="w-3 h-3 animate-spin" />
+      ) : (
+        <Download className="w-3 h-3" />
+      )}
+    </button>
+  )
+}
+
+// Manual Parameter Editor - for when API doesn't return goal schema
+interface ManualParameterEditorProps {
+  params: Record<string, unknown>
+  fieldSources: Record<string, ParameterFieldSource>
+  availableSteps: Array<{ id: string; name: string; resultFields?: Array<{ name: string; type: string }> }>
+  onUpdateParam: (key: string, value: unknown) => void
+  onUpdateFieldSource: (key: string, source: ParameterFieldSource | undefined) => void
+}
+
+function ManualParameterEditor({
+  params,
+  fieldSources,
+  availableSteps,
+  onUpdateParam,
+  onUpdateFieldSource,
+}: ManualParameterEditorProps) {
+  const [newParamName, setNewParamName] = useState('')
+
+  // Get all parameter names (from params and fieldSources)
+  const allParamNames = Array.from(new Set([
+    ...Object.keys(params),
+    ...Object.keys(fieldSources),
+  ]))
+
+  const addParameter = () => {
+    if (!newParamName.trim()) return
+    if (allParamNames.includes(newParamName)) return
+    onUpdateParam(newParamName, '')
+    setNewParamName('')
+  }
+
+  const removeParameter = (name: string) => {
+    // Remove from params
+    const newParams = { ...params }
+    delete newParams[name]
+    // This will trigger a full update, but we need to handle it through the parent
+    onUpdateParam(name, undefined)
+    onUpdateFieldSource(name, undefined)
+  }
+
+  const getSourceType = (name: string): 'constant' | 'step_result' | 'expression' | 'dynamic' => {
+    return fieldSources[name]?.source || 'constant'
+  }
+
+  return (
+    <div className="space-y-2">
+      {/* Existing parameters */}
+      {allParamNames.map((name) => {
+        const sourceType = getSourceType(name)
+        return (
+          <div key={name} className="space-y-1 p-2 bg-[#16162a] rounded border border-gray-700">
+            <div className="flex items-center justify-between">
+              <span className="text-[9px] text-gray-400 font-medium">{name}</span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  removeParameter(name)
+                }}
+                className="text-gray-600 hover:text-red-400 transition-colors"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+
+            {/* Parameter Source Selector */}
+            <ParameterSourceSelector
+              fieldSource={fieldSources[name]}
+              availableSteps={availableSteps}
+              onChange={(source) => onUpdateFieldSource(name, source)}
+            />
+
+            {/* Value input for constant source */}
+            {sourceType === 'constant' && (
+              <input
+                type="text"
+                value={String(params[name] ?? '')}
+                onChange={(e) => {
+                  e.stopPropagation()
+                  onUpdateParam(name, e.target.value)
+                }}
+                onClick={(e) => e.stopPropagation()}
+                placeholder="Enter value..."
+                className="w-full px-2 py-1 bg-[#0d0d1a] border border-gray-700 rounded text-[9px] text-white focus:outline-none focus:border-amber-500"
+              />
+            )}
+          </div>
+        )
+      })}
+
+      {/* Add new parameter */}
+      <div className="flex gap-1">
+        <input
+          type="text"
+          value={newParamName}
+          onChange={(e) => setNewParamName(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === 'Enter') addParameter()
+          }}
+          placeholder="New parameter name..."
+          className="flex-1 px-2 py-1 bg-[#16162a] border border-gray-700 rounded text-[9px] text-white focus:outline-none focus:border-amber-500"
+        />
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            addParameter()
+          }}
+          disabled={!newParamName.trim()}
+          className="px-2 py-1 bg-amber-500/20 text-amber-400 rounded text-[9px] hover:bg-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <Plus className="w-3 h-3" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
 const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeData>) => {
   const color = data.color || '#3b82f6'
   const { setNodes, setEdges } = useReactFlow()
   const updateNodeInternals = useUpdateNodeInternals()
+  const allNodes = useNodes()
   const baseStates = data.availableStates || []
   const [expandedSection, setExpandedSection] = useState<string | null>(null)
 
@@ -392,22 +616,34 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
           const firstAgent = capData.agents[0]
           const goalFields = schemaToFields(firstAgent.goal_schema)
           setGoalFields(goalFields)
-          setResultFields([])
+
+          // Parse result_schema and store in both state and node data
+          const resultFieldsParsed = schemaToFields(firstAgent.result_schema)
+          setResultFields(resultFieldsParsed)
+
+          // Store resultFields in node data so other nodes can access them
+          const resultFieldsForData = resultFieldsParsed.map(f => ({
+            name: f.name,
+            type: f.type + (f.is_array ? '[]' : '')
+          }))
+          updateData('resultFields', resultFieldsForData)
 
           // Auto-generate basic End States
           if (!data.endStates || data.endStates.length === 0) {
-            const autoEndStates = generateEndStatesFromResults([])
+            const autoEndStates = generateEndStatesFromResults(resultFieldsParsed)
             updateData('endStates', autoEndStates)
           }
         } else {
           setGoalFields([])
           setResultFields([])
+          updateData('resultFields', [])
         }
       })
       .catch((err) => {
         console.error('Failed to fetch capability schema:', err)
         setGoalFields([])
         setResultFields([])
+        updateData('resultFields', [])
       })
       .finally(() => {
         setIsLoadingFields(false)
@@ -538,10 +774,47 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
 
   // Job parameters
   const params = data.params || {}
+  const fieldSources = data.fieldSources || {}
+
+  // Get available steps (other action nodes that could provide results)
+  const availableSteps = useMemo(() => {
+    return allNodes
+      .filter(node =>
+        node.type === 'action' &&
+        node.id !== id &&
+        (node.data as StateActionNodeData)?.jobName
+      )
+      .map(node => {
+        const nodeData = node.data as StateActionNodeData
+        return {
+          id: node.id,
+          name: nodeData?.jobName || node.id,
+          // Read resultFields from the other node's data (populated when their actionType is fetched)
+          resultFields: nodeData?.resultFields || [],
+        }
+      })
+  }, [allNodes, id])
 
   // Update job parameter
   const updateParam = (key: string, value: unknown) => {
     updateData('params', { ...params, [key]: value })
+  }
+
+  // Update field source configuration
+  const updateFieldSource = (key: string, source: ParameterFieldSource | undefined) => {
+    if (source === undefined) {
+      // Remove field source (use constant value from params)
+      const newFieldSources = { ...fieldSources }
+      delete newFieldSources[key]
+      updateData('fieldSources', Object.keys(newFieldSources).length > 0 ? newFieldSources : undefined)
+    } else {
+      updateData('fieldSources', { ...fieldSources, [key]: source })
+    }
+  }
+
+  // Get effective source type for a field
+  const getFieldSourceType = (key: string): 'constant' | 'step_result' | 'expression' | 'dynamic' => {
+    return fieldSources[key]?.source || 'constant'
   }
 
   // Add new start state
@@ -741,53 +1014,84 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
       </div>
 
       {/* Job Parameters Section - from ROS2 Action interface */}
-      {(goalFields.length > 0 || isLoadingFields) && (
-        <div className="border-b border-[#2a2a4a]">
-          <button
-            onClick={(e) => { e.stopPropagation(); setExpandedSection(expandedSection === 'params' ? null : 'params') }}
-            className="w-full px-3 py-1.5 flex items-center justify-between hover:bg-[#2a2a4a]/50 transition-colors"
-          >
-            <div className="flex items-center gap-2">
-              <Settings className="w-3 h-3 text-amber-500" />
-              <span className="text-[10px] text-amber-400 uppercase tracking-wider font-medium">Parameters</span>
-              {isLoadingFields ? (
+      <div className="border-b border-[#2a2a4a]">
+        <button
+          onClick={(e) => { e.stopPropagation(); setExpandedSection(expandedSection === 'params' ? null : 'params') }}
+          className="w-full px-3 py-1.5 flex items-center justify-between hover:bg-[#2a2a4a]/50 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <Settings className="w-3 h-3 text-amber-500" />
+            <span className="text-[10px] text-amber-400 uppercase tracking-wider font-medium">Parameters</span>
+            {isLoadingFields ? (
+              <Loader2 className="w-3 h-3 text-amber-500 animate-spin" />
+            ) : goalFields.length > 0 ? (
+              <span className="text-[9px] text-gray-600">({goalFields.length})</span>
+            ) : Object.keys(fieldSources).length > 0 ? (
+              <span className="text-[9px] text-purple-500">({Object.keys(fieldSources).length} mapped)</span>
+            ) : null}
+          </div>
+          {expandedSection === 'params' ? (
+            <ChevronUp className="w-3 h-3 text-gray-500" />
+          ) : (
+            <ChevronDown className="w-3 h-3 text-gray-500" />
+          )}
+        </button>
+        {expandedSection === 'params' && (
+          <div className="px-3 pb-2 space-y-2">
+            {isLoadingFields ? (
+              <div className="flex items-center gap-2 py-2">
                 <Loader2 className="w-3 h-3 text-amber-500 animate-spin" />
-              ) : (
-                <span className="text-[9px] text-gray-600">({goalFields.length})</span>
-              )}
-            </div>
-            {expandedSection === 'params' ? (
-              <ChevronUp className="w-3 h-3 text-gray-500" />
+                <span className="text-[9px] text-gray-500">Loading action interface...</span>
+              </div>
+            ) : goalFields.length === 0 ? (
+              <div className="space-y-2">
+                <p className="text-[9px] text-gray-500 italic">No schema from capability API. Add manual parameters:</p>
+                <ManualParameterEditor
+                  params={params}
+                  fieldSources={fieldSources}
+                  availableSteps={availableSteps}
+                  onUpdateParam={updateParam}
+                  onUpdateFieldSource={updateFieldSource}
+                />
+              </div>
             ) : (
-              <ChevronDown className="w-3 h-3 text-gray-500" />
-            )}
-          </button>
-          {expandedSection === 'params' && (
-            <div className="px-3 pb-2 space-y-2">
-              {isLoadingFields ? (
-                <div className="flex items-center gap-2 py-2">
-                  <Loader2 className="w-3 h-3 text-amber-500 animate-spin" />
-                  <span className="text-[9px] text-gray-500">Loading action interface...</span>
-                </div>
-              ) : goalFields.length === 0 ? (
-                <p className="text-[9px] text-gray-600 italic">No parameters required</p>
-              ) : (
                 goalFields.map((field) => {
                   const inputType = getInputType(field.type, field.is_array)
                   const useWaypoint = canUseWaypoint(field.type)
+                  const telemetryType = getTelemetryType(field.type)
+                  const robotId = extractRobotFromServer(data.server)
+                  const sourceType = getFieldSourceType(field.name)
 
                   return (
                     <div key={field.name} className="space-y-1">
-                      {/* Field header */}
+                      {/* Field header with source selector */}
                       <div className="flex items-center gap-2">
                         <label className="text-[9px] text-gray-400 font-medium">{field.name}</label>
                         <span className="text-[8px] text-gray-600 font-mono px-1 py-0.5 bg-gray-800 rounded">
                           {field.type}{field.is_array ? '[]' : ''}
                         </span>
+                        {/* Load Telemetry Button for compatible types - only for constant source */}
+                        {telemetryType && robotId && sourceType === 'constant' && (
+                          <LoadTelemetryButton
+                            robotId={robotId}
+                            telemetryType={telemetryType}
+                            fieldType={field.type}
+                            onLoad={(value) => updateParam(field.name, value)}
+                          />
+                        )}
                       </div>
 
-                      {/* Input based on type */}
-                      {inputType === 'checkbox' ? (
+                      {/* Parameter Source Selector */}
+                      <ParameterSourceSelector
+                        fieldSource={fieldSources[field.name]}
+                        availableSteps={availableSteps}
+                        onChange={(source) => updateFieldSource(field.name, source)}
+                        targetFieldType={field.type}
+                        targetFieldName={field.name}
+                      />
+
+                      {/* Input based on type - only shown for constant source */}
+                      {sourceType === 'constant' && (inputType === 'checkbox' ? (
                         <div className="flex items-center gap-2">
                           <input
                             type="checkbox"
@@ -950,7 +1254,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
                           className="w-full px-2 py-1.5 bg-[#16162a] border border-amber-500/30 rounded text-[10px] text-white focus:outline-none focus:border-amber-500"
                           placeholder={field.default || ''}
                         />
-                      )}
+                      ))}
                     </div>
                   )
                 })
@@ -958,7 +1262,6 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
             </div>
           )}
         </div>
-      )}
 
       {/* Start Conditions Section */}
       <div className="border-b border-[#2a2a4a]">

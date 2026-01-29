@@ -9,6 +9,7 @@
 
 #include <google/protobuf/util/json_util.h>
 #include <openssl/sha.h>
+#include <nlohmann/json.hpp>
 
 // Include generated proto header
 #include "fleet/v1/graphs.pb.h"
@@ -129,6 +130,135 @@ std::optional<fleet::v1::ActionGraph> GraphStorage::read_from_file(
     return graph;
 }
 
+// Parse graph_json and populate protobuf fields
+void populate_from_graph_json(fleet::v1::ActionGraph& graph) {
+    const std::string& json_str = graph.graph_json();
+    if (json_str.empty()) return;
+    if (graph.vertices_size() > 0) return;  // Already populated
+
+    try {
+        auto j = nlohmann::json::parse(json_str);
+
+        // Extract entry_point
+        if (j.contains("entry_point") && j["entry_point"].is_string()) {
+            graph.set_entry_point(j["entry_point"].get<std::string>());
+        }
+
+        // Extract vertices
+        if (j.contains("vertices") && j["vertices"].is_array()) {
+            for (const auto& vj : j["vertices"]) {
+                auto* v = graph.add_vertices();
+                if (vj.contains("id")) v->set_id(vj["id"].get<std::string>());
+
+                // Set vertex type
+                std::string type_str = vj.value("type", "step");
+                if (type_str == "terminal") {
+                    v->set_type(fleet::v1::VERTEX_TYPE_TERMINAL);
+                    if (vj.contains("terminal")) {
+                        auto* term = v->mutable_terminal();
+                        const auto& tj = vj["terminal"];
+                        std::string term_type = tj.value("terminal_type", "success");
+                        if (term_type == "success") {
+                            term->set_terminal_type(fleet::v1::TERMINAL_TYPE_SUCCESS);
+                        } else if (term_type == "failure") {
+                            term->set_terminal_type(fleet::v1::TERMINAL_TYPE_FAILURE);
+                        }
+                    }
+                } else {
+                    v->set_type(fleet::v1::VERTEX_TYPE_STEP);
+
+                    // Parse step data
+                    if (vj.contains("step")) {
+                        auto* step = v->mutable_step();
+                        const auto& sj = vj["step"];
+
+                        std::string step_type = sj.value("step_type", "action");
+                        if (step_type == "action") {
+                            step->set_step_type(fleet::v1::STEP_TYPE_ACTION);
+
+                            if (sj.contains("action")) {
+                                auto* action = step->mutable_action();
+                                const auto& aj = sj["action"];
+                                if (aj.contains("type")) {
+                                    action->set_action_type(aj["type"].get<std::string>());
+                                }
+                                if (aj.contains("server")) {
+                                    action->set_action_server(aj["server"].get<std::string>());
+                                }
+                                if (aj.contains("timeout_sec")) {
+                                    action->set_timeout_sec(aj["timeout_sec"].get<float>());
+                                }
+                                if (aj.contains("params") && aj["params"].is_object()) {
+                                    std::string params_str = aj["params"].dump();
+                                    action->set_goal_params(params_str);
+                                }
+                            }
+                        } else if (step_type == "wait") {
+                            step->set_step_type(fleet::v1::STEP_TYPE_WAIT);
+                            if (sj.contains("wait")) {
+                                auto* wait = step->mutable_wait();
+                                if (sj["wait"].contains("duration_sec")) {
+                                    wait->set_duration_sec(sj["wait"]["duration_sec"].get<float>());
+                                }
+                            }
+                        }
+
+                        // Parse state management
+                        if (sj.contains("states")) {
+                            const auto& states = sj["states"];
+                            if (states.contains("during") && states["during"].is_array()) {
+                                for (const auto& s : states["during"]) {
+                                    step->add_during_states(s.get<std::string>());
+                                }
+                            }
+                            if (states.contains("success") && states["success"].is_array()) {
+                                for (const auto& s : states["success"]) {
+                                    step->add_success_states(s.get<std::string>());
+                                }
+                            }
+                            if (states.contains("failure") && states["failure"].is_array()) {
+                                for (const auto& s : states["failure"]) {
+                                    step->add_failure_states(s.get<std::string>());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Extract edges
+        if (j.contains("edges") && j["edges"].is_array()) {
+            for (const auto& ej : j["edges"]) {
+                auto* e = graph.add_edges();
+                if (ej.contains("from")) e->set_from_vertex(ej["from"].get<std::string>());
+                if (ej.contains("to")) e->set_to_vertex(ej["to"].get<std::string>());
+
+                std::string edge_type = ej.value("type", "on_success");
+                if (edge_type == "on_success") {
+                    e->set_type(fleet::v1::EDGE_TYPE_ON_SUCCESS);
+                } else if (edge_type == "on_failure") {
+                    e->set_type(fleet::v1::EDGE_TYPE_ON_FAILURE);
+                } else if (edge_type == "on_timeout") {
+                    e->set_type(fleet::v1::EDGE_TYPE_ON_TIMEOUT);
+                } else if (edge_type == "conditional") {
+                    e->set_type(fleet::v1::EDGE_TYPE_CONDITIONAL);
+                }
+
+                if (ej.contains("condition")) {
+                    e->set_condition(ej["condition"].get<std::string>());
+                }
+            }
+        }
+
+        log.info("Populated graph from graph_json: {} vertices, {} edges, entry={}",
+                 graph.vertices_size(), graph.edges_size(), graph.entry_point());
+
+    } catch (const std::exception& ex) {
+        log.error("Failed to parse graph_json: {}", ex.what());
+    }
+}
+
 bool GraphStorage::store(const fleet::v1::ActionGraph& graph) {
     std::string graph_id = graph.metadata().id();
     if (graph_id.empty()) {
@@ -141,6 +271,9 @@ bool GraphStorage::store(const fleet::v1::ActionGraph& graph) {
     if (graph_copy.checksum().empty()) {
         graph_copy.set_checksum(compute_checksum(graph_copy));
     }
+
+    // Parse graph_json to populate vertices/edges/entry_point if needed
+    populate_from_graph_json(graph_copy);
 
     // Write to file
     auto path = get_graph_path(graph_id);
@@ -165,7 +298,10 @@ std::optional<fleet::v1::ActionGraph> GraphStorage::load(const std::string& grap
     {
         tbb::concurrent_hash_map<std::string, fleet::v1::ActionGraph>::const_accessor acc;
         if (cache_.find(acc, graph_id)) {
-            return acc->second;
+            // Check if already populated
+            if (acc->second.vertices_size() > 0 || acc->second.entry_point().empty() == false) {
+                return acc->second;
+            }
         }
     }
 
@@ -174,7 +310,10 @@ std::optional<fleet::v1::ActionGraph> GraphStorage::load(const std::string& grap
     auto graph = read_from_file(path);
 
     if (graph) {
-        // Update cache
+        // Parse graph_json if vertices are empty (legacy format)
+        populate_from_graph_json(*graph);
+
+        // Update cache with populated graph
         tbb::concurrent_hash_map<std::string, fleet::v1::ActionGraph>::accessor acc;
         cache_.insert(acc, graph_id);
         acc->second = *graph;

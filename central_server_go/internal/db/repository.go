@@ -74,6 +74,20 @@ func getInt64(props map[string]any, key string) int64 {
 	return 0
 }
 
+func getFloat64(props map[string]any, key string) float64 {
+	if v, ok := props[key]; ok {
+		switch t := v.(type) {
+		case float64:
+			return t
+		case int64:
+			return float64(t)
+		case int:
+			return float64(t)
+		}
+	}
+	return 0
+}
+
 func getStringSlice(props map[string]any, key string) []string {
 	if v, ok := props[key]; ok {
 		switch t := v.(type) {
@@ -342,6 +356,55 @@ func decodeStateDefinition(node neo4j.Node) StateDefinition {
 // Agent Operations
 // =============================================================================
 
+// CountAgents returns the total number of agents in the database
+func (r *Repository) CountAgents() (int64, error) {
+	ctx := context.Background()
+	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
+		res, err := tx.Run(ctx, `MATCH (a:Agent) RETURN count(a) AS cnt`, nil)
+		if err != nil {
+			return int64(0), err
+		}
+		if res.Next(ctx) {
+			if cnt, ok := res.Record().Get("cnt"); ok {
+				return cnt.(int64), nil
+			}
+		}
+		return int64(0), nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return result.(int64), nil
+}
+
+// GetNextAgentNumber returns the next sequential number for agent naming
+// It finds the highest existing "Agent-NNN" number and returns N+1
+func (r *Repository) GetNextAgentNumber() (int, error) {
+	ctx := context.Background()
+	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
+		// Find the maximum number from names like "Agent-001", "Agent-123", etc.
+		res, err := tx.Run(ctx, `
+			MATCH (a:Agent)
+			WHERE a.name =~ 'Agent-[0-9]+'
+			WITH a, toInteger(substring(a.name, 6)) AS num
+			RETURN max(num) AS maxNum
+		`, nil)
+		if err != nil {
+			return 1, err
+		}
+		if res.Next(ctx) {
+			if maxNum, ok := res.Record().Get("maxNum"); ok && maxNum != nil {
+				return int(maxNum.(int64)) + 1, nil
+			}
+		}
+		return 1, nil
+	})
+	if err != nil {
+		return 1, err
+	}
+	return result.(int), nil
+}
+
 func (r *Repository) GetAgent(id string) (*Agent, error) {
 	ctx := context.Background()
 	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
@@ -455,6 +518,33 @@ func (r *Repository) CreateOrUpdateAgent(agent *Agent) error {
 			    a.last_seen_ms = $last_seen_ms
 		`, props)
 		return nil, err
+	})
+	return err
+}
+
+// UpdateAgent updates an existing agent's mutable fields (like name)
+func (r *Repository) UpdateAgent(agent *Agent) error {
+	if agent == nil {
+		return fmt.Errorf("agent is nil")
+	}
+	ctx := context.Background()
+	props := map[string]any{
+		"id":   agent.ID,
+		"name": agent.Name,
+	}
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		result, err := tx.Run(ctx, `
+			MATCH (a:Agent {id: $id})
+			SET a.name = $name
+			RETURN a.id
+		`, props)
+		if err != nil {
+			return nil, err
+		}
+		if !result.Next(ctx) {
+			return nil, fmt.Errorf("agent not found: %s", agent.ID)
+		}
+		return nil, nil
 	})
 	return err
 }
@@ -2385,28 +2475,66 @@ func (r *Repository) DeleteTemplateAssignments(templateID string) {
 
 func (r *Repository) SyncAgentCapabilities(agentID string, capabilities []AgentCapability) error {
 	ctx := context.Background()
+
+	// First, get existing capabilities to preserve user-editable metadata
+	existingCaps, _ := r.GetAgentCapabilities(agentID)
+	existingMetadata := make(map[string]AgentCapability)
+	for _, cap := range existingCaps {
+		existingMetadata[cap.ID] = cap
+	}
+
 	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
-		_, err := tx.Run(ctx, `MATCH (c:AgentCapability {agent_id:$agent_id}) DETACH DELETE c`, map[string]any{"agent_id": agentID})
+		// Mark existing capabilities as deleted (soft delete for sync tracking)
+		_, err := tx.Run(ctx, `
+			MATCH (c:AgentCapability {agent_id:$agent_id})
+			WHERE c.deleted_at_ms IS NULL OR c.deleted_at_ms = 0
+			SET c.deleted_at_ms = $deleted_at_ms
+		`, map[string]any{"agent_id": agentID, "deleted_at_ms": time.Now().UnixMilli()})
 		if err != nil {
 			return nil, err
 		}
+
 		for _, cap := range capabilities {
+			// Preserve user-editable metadata from existing capability
+			description := ""
+			category := ""
+			defaultTimeout := 30.0
+			schemaVersion := 1
+			if existing, ok := existingMetadata[cap.ID]; ok {
+				if existing.Description.Valid {
+					description = existing.Description.String
+				}
+				if existing.Category.Valid {
+					category = existing.Category.String
+				}
+				if existing.DefaultTimeout > 0 {
+					defaultTimeout = existing.DefaultTimeout
+				}
+				if existing.SchemaVersion > 0 {
+					schemaVersion = existing.SchemaVersion
+				}
+			}
+
+			// Upsert: merge existing or create new
 			_, err := tx.Run(ctx, `
-				CREATE (c:AgentCapability {
-					id: $id,
-					agent_id: $agent_id,
-					action_type: $action_type,
-					action_server: $action_server,
-					goal_schema_json: $goal_schema_json,
-					result_schema_json: $result_schema_json,
-					feedback_schema_json: $feedback_schema_json,
-					success_criteria_json: $success_criteria_json,
-					status: $status,
-					is_available: $is_available,
-					last_used_at_ms: $last_used_at_ms,
-					discovered_at_ms: $discovered_at_ms,
-					updated_at_ms: $updated_at_ms
-				})
+				MERGE (c:AgentCapability {id: $id})
+				SET c.agent_id = $agent_id,
+					c.action_type = $action_type,
+					c.action_server = $action_server,
+					c.goal_schema_json = $goal_schema_json,
+					c.result_schema_json = $result_schema_json,
+					c.feedback_schema_json = $feedback_schema_json,
+					c.success_criteria_json = $success_criteria_json,
+					c.description = $description,
+					c.category = $category,
+					c.default_timeout = $default_timeout,
+					c.schema_version = $schema_version,
+					c.status = $status,
+					c.is_available = $is_available,
+					c.last_used_at_ms = $last_used_at_ms,
+					c.discovered_at_ms = $discovered_at_ms,
+					c.updated_at_ms = $updated_at_ms,
+					c.deleted_at_ms = 0
 			`, map[string]any{
 				"id":                    cap.ID,
 				"agent_id":              agentID,
@@ -2416,6 +2544,10 @@ func (r *Repository) SyncAgentCapabilities(agentID string, capabilities []AgentC
 				"result_schema_json":    string(cap.ResultSchema),
 				"feedback_schema_json":  string(cap.FeedbackSchema),
 				"success_criteria_json": string(cap.SuccessCriteria),
+				"description":           description,
+				"category":              category,
+				"default_timeout":       defaultTimeout,
+				"schema_version":        schemaVersion,
 				"status":                cap.Status,
 				"is_available":          cap.IsAvailable,
 				"last_used_at_ms":       timeToMillis(cap.LastUsedAt.Time),
@@ -2434,7 +2566,11 @@ func (r *Repository) SyncAgentCapabilities(agentID string, capabilities []AgentC
 func (r *Repository) GetAgentCapabilities(agentID string) ([]AgentCapability, error) {
 	ctx := context.Background()
 	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
-		res, err := tx.Run(ctx, `MATCH (c:AgentCapability {agent_id:$agent_id}) RETURN c`, map[string]any{"agent_id": agentID})
+		res, err := tx.Run(ctx, `
+			MATCH (c:AgentCapability {agent_id:$agent_id})
+			WHERE c.deleted_at_ms IS NULL OR c.deleted_at_ms = 0
+			RETURN c
+		`, map[string]any{"agent_id": agentID})
 		if err != nil {
 			return nil, err
 		}
@@ -2442,22 +2578,7 @@ func (r *Repository) GetAgentCapabilities(agentID string) ([]AgentCapability, er
 		for res.Next(ctx) {
 			node, _ := res.Record().Get("c")
 			if cNode, ok := node.(neo4j.Node); ok {
-				props := cNode.Props
-				caps = append(caps, AgentCapability{
-					ID:              getString(props, "id"),
-					AgentID:         getString(props, "agent_id"),
-					ActionType:      getString(props, "action_type"),
-					ActionServer:    getString(props, "action_server"),
-					GoalSchema:      datatypes.JSON([]byte(getString(props, "goal_schema_json"))),
-					ResultSchema:    datatypes.JSON([]byte(getString(props, "result_schema_json"))),
-					FeedbackSchema:  datatypes.JSON([]byte(getString(props, "feedback_schema_json"))),
-					SuccessCriteria: datatypes.JSON([]byte(getString(props, "success_criteria_json"))),
-					Status:          getString(props, "status"),
-					IsAvailable:     getBool(props, "is_available"),
-					LastUsedAt:      toNullTimeMillis(getInt64(props, "last_used_at_ms")),
-					DiscoveredAt:    time.UnixMilli(getInt64(props, "discovered_at_ms")).UTC(),
-					UpdatedAt:       time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
-				})
+				caps = append(caps, capabilityFromNeo4jNode(cNode.Props))
 			}
 		}
 		return caps, res.Err()
@@ -2466,12 +2587,51 @@ func (r *Repository) GetAgentCapabilities(agentID string) ([]AgentCapability, er
 		return nil, err
 	}
 	return result.([]AgentCapability), nil
+}
+
+// capabilityFromNeo4jNode converts Neo4j node properties to AgentCapability
+func capabilityFromNeo4jNode(props map[string]any) AgentCapability {
+	cap := AgentCapability{
+		ID:              getString(props, "id"),
+		AgentID:         getString(props, "agent_id"),
+		ActionType:      getString(props, "action_type"),
+		ActionServer:    getString(props, "action_server"),
+		GoalSchema:      datatypes.JSON([]byte(getString(props, "goal_schema_json"))),
+		ResultSchema:    datatypes.JSON([]byte(getString(props, "result_schema_json"))),
+		FeedbackSchema:  datatypes.JSON([]byte(getString(props, "feedback_schema_json"))),
+		SuccessCriteria: datatypes.JSON([]byte(getString(props, "success_criteria_json"))),
+		DefaultTimeout:  getFloat64(props, "default_timeout"),
+		SchemaVersion:   int(getInt64(props, "schema_version")),
+		Status:          getString(props, "status"),
+		IsAvailable:     getBool(props, "is_available"),
+		LastUsedAt:      toNullTimeMillis(getInt64(props, "last_used_at_ms")),
+		DiscoveredAt:    time.UnixMilli(getInt64(props, "discovered_at_ms")).UTC(),
+		UpdatedAt:       time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
+		DeletedAt:       toNullTimeMillis(getInt64(props, "deleted_at_ms")),
+	}
+	if desc := getString(props, "description"); desc != "" {
+		cap.Description = toNullString(desc)
+	}
+	if cat := getString(props, "category"); cat != "" {
+		cap.Category = toNullString(cat)
+	}
+	if cap.DefaultTimeout == 0 {
+		cap.DefaultTimeout = 30.0
+	}
+	if cap.SchemaVersion == 0 {
+		cap.SchemaVersion = 1
+	}
+	return cap
 }
 
 func (r *Repository) GetAllAgentCapabilities() ([]AgentCapability, error) {
 	ctx := context.Background()
 	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
-		res, err := tx.Run(ctx, `MATCH (c:AgentCapability) RETURN c`, nil)
+		res, err := tx.Run(ctx, `
+			MATCH (c:AgentCapability)
+			WHERE c.deleted_at_ms IS NULL OR c.deleted_at_ms = 0
+			RETURN c
+		`, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -2479,22 +2639,7 @@ func (r *Repository) GetAllAgentCapabilities() ([]AgentCapability, error) {
 		for res.Next(ctx) {
 			node, _ := res.Record().Get("c")
 			if cNode, ok := node.(neo4j.Node); ok {
-				props := cNode.Props
-				caps = append(caps, AgentCapability{
-					ID:              getString(props, "id"),
-					AgentID:         getString(props, "agent_id"),
-					ActionType:      getString(props, "action_type"),
-					ActionServer:    getString(props, "action_server"),
-					GoalSchema:      datatypes.JSON([]byte(getString(props, "goal_schema_json"))),
-					ResultSchema:    datatypes.JSON([]byte(getString(props, "result_schema_json"))),
-					FeedbackSchema:  datatypes.JSON([]byte(getString(props, "feedback_schema_json"))),
-					SuccessCriteria: datatypes.JSON([]byte(getString(props, "success_criteria_json"))),
-					Status:          getString(props, "status"),
-					IsAvailable:     getBool(props, "is_available"),
-					LastUsedAt:      toNullTimeMillis(getInt64(props, "last_used_at_ms")),
-					DiscoveredAt:    time.UnixMilli(getInt64(props, "discovered_at_ms")).UTC(),
-					UpdatedAt:       time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
-				})
+				caps = append(caps, capabilityFromNeo4jNode(cNode.Props))
 			}
 		}
 		return caps, res.Err()
@@ -2505,23 +2650,174 @@ func (r *Repository) GetAllAgentCapabilities() ([]AgentCapability, error) {
 	return result.([]AgentCapability), nil
 }
 
-// UpdateAgentCapabilityStatus updates the status and availability of an agent capability
-func (r *Repository) UpdateAgentCapabilityStatus(agentID, actionType, status string, available bool) error {
+// UpdateAgentCapabilityStatus updates the status, availability, and lifecycle state of an agent capability
+func (r *Repository) UpdateAgentCapabilityStatus(agentID, actionType, status string, available bool, lifecycleState string) error {
 	ctx := context.Background()
 	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
-		_, err := tx.Run(ctx, `
+		// Build dynamic SET clause based on provided values
+		query := `
 			MATCH (c:AgentCapability {agent_id: $agent_id, action_type: $action_type})
-			SET c.status = $status, c.is_available = $available, c.updated_at_ms = $updated_at_ms
-		`, map[string]any{
+			SET c.status = $status, c.is_available = $available, c.updated_at_ms = $updated_at_ms`
+
+		params := map[string]any{
 			"agent_id":      agentID,
 			"action_type":   actionType,
 			"status":        status,
 			"available":     available,
 			"updated_at_ms": time.Now().UnixMilli(),
-		})
+		}
+
+		// Add lifecycle_state if provided
+		if lifecycleState != "" {
+			query += `, c.lifecycle_state = $lifecycle_state`
+			params["lifecycle_state"] = lifecycleState
+		}
+
+		_, err := tx.Run(ctx, query, params)
 		return nil, err
 	})
 	return err
+}
+
+// GetCapabilityByID retrieves a single capability by its ID
+func (r *Repository) GetCapabilityByID(id string) (*AgentCapability, error) {
+	ctx := context.Background()
+	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
+		res, err := tx.Run(ctx, `
+			MATCH (c:AgentCapability {id: $id})
+			RETURN c
+		`, map[string]any{"id": id})
+		if err != nil {
+			return nil, err
+		}
+		if res.Next(ctx) {
+			node, _ := res.Record().Get("c")
+			if cNode, ok := node.(neo4j.Node); ok {
+				cap := capabilityFromNeo4jNode(cNode.Props)
+				return &cap, nil
+			}
+		}
+		return nil, res.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, nil
+	}
+	return result.(*AgentCapability), nil
+}
+
+// CapabilityMetadataUpdate contains fields that can be updated via API
+type CapabilityMetadataUpdate struct {
+	Description    *string  `json:"description,omitempty"`
+	Category       *string  `json:"category,omitempty"`
+	DefaultTimeout *float64 `json:"default_timeout,omitempty"`
+	SchemaVersion  *int     `json:"schema_version,omitempty"`
+}
+
+// UpdateCapabilityMetadata updates user-editable metadata for a capability
+func (r *Repository) UpdateCapabilityMetadata(id string, update CapabilityMetadataUpdate) error {
+	ctx := context.Background()
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		// Build dynamic SET clause
+		setClauses := []string{"c.updated_at_ms = $updated_at_ms"}
+		params := map[string]any{
+			"id":            id,
+			"updated_at_ms": time.Now().UnixMilli(),
+		}
+
+		if update.Description != nil {
+			setClauses = append(setClauses, "c.description = $description")
+			params["description"] = *update.Description
+		}
+		if update.Category != nil {
+			setClauses = append(setClauses, "c.category = $category")
+			params["category"] = *update.Category
+		}
+		if update.DefaultTimeout != nil {
+			setClauses = append(setClauses, "c.default_timeout = $default_timeout")
+			params["default_timeout"] = *update.DefaultTimeout
+		}
+		if update.SchemaVersion != nil {
+			setClauses = append(setClauses, "c.schema_version = $schema_version")
+			params["schema_version"] = *update.SchemaVersion
+		}
+
+		query := fmt.Sprintf(`
+			MATCH (c:AgentCapability {id: $id})
+			SET %s
+			RETURN c
+		`, strings.Join(setClauses, ", "))
+
+		res, err := tx.Run(ctx, query, params)
+		if err != nil {
+			return nil, err
+		}
+		if !res.Next(ctx) {
+			return nil, fmt.Errorf("capability not found: %s", id)
+		}
+		return nil, res.Err()
+	})
+	return err
+}
+
+// GetCapabilitiesChangedSince returns capabilities changed since the given timestamp
+// Includes both updated and soft-deleted capabilities for incremental sync
+func (r *Repository) GetCapabilitiesChangedSince(since time.Time) ([]AgentCapability, error) {
+	ctx := context.Background()
+	sinceMs := since.UnixMilli()
+	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
+		res, err := tx.Run(ctx, `
+			MATCH (c:AgentCapability)
+			WHERE c.updated_at_ms > $since_ms
+			   OR (c.deleted_at_ms IS NOT NULL AND c.deleted_at_ms > 0 AND c.deleted_at_ms > $since_ms)
+			RETURN c
+			ORDER BY c.updated_at_ms ASC
+		`, map[string]any{"since_ms": sinceMs})
+		if err != nil {
+			return nil, err
+		}
+		var caps []AgentCapability
+		for res.Next(ctx) {
+			node, _ := res.Record().Get("c")
+			if cNode, ok := node.(neo4j.Node); ok {
+				caps = append(caps, capabilityFromNeo4jNode(cNode.Props))
+			}
+		}
+		return caps, res.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.([]AgentCapability), nil
+}
+
+// GetCapabilitiesByCategory returns all capabilities in a specific category
+func (r *Repository) GetCapabilitiesByCategory(category string) ([]AgentCapability, error) {
+	ctx := context.Background()
+	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
+		res, err := tx.Run(ctx, `
+			MATCH (c:AgentCapability {category: $category})
+			WHERE c.deleted_at_ms IS NULL OR c.deleted_at_ms = 0
+			RETURN c
+		`, map[string]any{"category": category})
+		if err != nil {
+			return nil, err
+		}
+		var caps []AgentCapability
+		for res.Next(ctx) {
+			node, _ := res.Record().Get("c")
+			if cNode, ok := node.(neo4j.Node); ok {
+				caps = append(caps, capabilityFromNeo4jNode(cNode.Props))
+			}
+		}
+		return caps, res.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.([]AgentCapability), nil
 }
 
 func (r *Repository) GetAgentActionTypes(agentID string) ([]string, error) {

@@ -156,9 +156,10 @@ void StateTracker::clear_error() {
 bool StateTracker::force_state(const std::string& state, const std::string& trigger) {
     std::lock_guard<std::mutex> lock(mutex_);
 
+    // Auto-register graph-defined states (e.g., "run1_during", "pick_success")
     if (!is_valid_state(state)) {
-        log.warn("Invalid state for robot {}: {}", agent_id_, state);
-        return false;
+        log.info("Auto-registering graph-defined state: {}", state);
+        available_states_.push_back(state);
     }
 
     return transition_to(state, trigger);

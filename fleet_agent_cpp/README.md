@@ -382,6 +382,103 @@ openssl rsa -noout -modulus -in client.key | openssl md5
              └─────────────────────────────────────┘
 ```
 
+---
+
+## Development Principles (개발 원칙)
+
+### 1. Interface-First Design (인터페이스 우선 설계)
+
+모든 주요 컴포넌트는 인터페이스(IXxx)를 먼저 정의하고 구현합니다.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Agent (Orchestrator)                     │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────┐  │
+│  │   ITransport*    │  │ICapabilityScanner*│  │IActionExecutor*│ │
+│  └────────┬─────────┘  └────────┬─────────┘  └───────┬───────┘  │
+│  ┌────────▼─────────┐  ┌───────▼──────────┐  ┌──────▼────────┐  │
+│  │QUICTransport     │  │CapabilityScanner │  │ROS2Action     │  │
+│  │Adapter           │  │Adapter           │  │Executor       │  │
+│  └──────────────────┘  └──────────────────┘  └───────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**핵심 인터페이스:**
+- `interfaces/transport.hpp` - ITransport
+- `interfaces/capability_scanner.hpp` - ICapabilityScanner
+- `interfaces/action_executor.hpp` - IActionExecutor
+
+### 2. Dependency Injection (의존성 주입)
+
+```cpp
+// Production
+auto agent = AgentFactory::create_agent("config.yaml");
+
+// Testing (mock 주입)
+AgentComponents components;
+components.transport = std::make_unique<MockTransport>();
+auto agent = AgentFactory::create_agent_with_components(config, std::move(components));
+```
+
+### 3. Single Responsibility (단일 책임)
+
+| 클래스 | 책임 | 목표 라인 수 |
+|--------|------|-------------|
+| Agent | 오케스트레이션 | ~500 lines |
+| GraphExecutor | 그래프 탐색 | ~300 lines |
+| IActionExecutor | 액션 실행 | ~200 lines |
+
+### 4. Adapter Pattern (어댑터 패턴)
+
+기존 구현체 수정 없이 인터페이스 적용:
+
+```cpp
+class QUICTransportAdapter : public ITransport {
+    std::shared_ptr<QUICClient> client_;
+public:
+    bool connect(const std::string& addr, uint16_t port) override {
+        return client_->connect(addr, port);
+    }
+};
+```
+
+### 5. File Organization (파일 구성)
+
+```
+include/fleet_agent/
+├── interfaces/              # 인터페이스 (순수 가상 클래스)
+│   ├── transport.hpp
+│   ├── capability_scanner.hpp
+│   └── action_executor.hpp
+├── factory/                 # 팩토리
+│   └── agent_factory.hpp
+├── transport/               # Transport 구현
+│   ├── quic_transport.hpp   # 구체 클래스
+│   └── quic_transport_adapter.hpp # 어댑터
+├── capability/              # Capability 구현
+└── executor/                # Executor 구현
+```
+
+### 6. When Adding New Components (새 컴포넌트 추가)
+
+1. 인터페이스 정의 (`interfaces/i_xxx.hpp`)
+2. 구현체/어댑터 생성
+3. 팩토리 메서드 추가 (`AgentFactory::create_default_xxx()`)
+4. CMakeLists.txt 업데이트
+5. 테스트 작성 (Mock 사용)
+
+### 7. Naming Conventions (네이밍 규칙)
+
+| 타입 | 패턴 | 예시 |
+|------|------|------|
+| 인터페이스 | `I` + PascalCase | `ITransport` |
+| 어댑터 | Concrete + `Adapter` | `QUICTransportAdapter` |
+| 팩토리 메서드 | `create_` + snake_case | `create_default_transport()` |
+| 콜백 타입 | PascalCase + `Callback` | `ResultCallback` |
+
+---
+
 ## 라이선스
 
 Apache-2.0

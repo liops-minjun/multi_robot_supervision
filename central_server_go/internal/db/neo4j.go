@@ -91,10 +91,14 @@ func (d *Database) EnsureIndexes() error {
 		// Agent indexes
 		"CREATE INDEX agent_id IF NOT EXISTS FOR (a:Agent) ON (a.id)",
 		"CREATE INDEX agent_status IF NOT EXISTS FOR (a:Agent) ON (a.status)",
+		"CREATE INDEX agent_hardware_fingerprint IF NOT EXISTS FOR (a:Agent) ON (a.hardware_fingerprint)",
 
 		// AgentCapability indexes for N+1 query optimization
 		"CREATE INDEX capability_agent_id IF NOT EXISTS FOR (c:AgentCapability) ON (c.agent_id)",
 		"CREATE INDEX capability_action_type IF NOT EXISTS FOR (c:AgentCapability) ON (c.action_type)",
+		"CREATE INDEX capability_category IF NOT EXISTS FOR (c:AgentCapability) ON (c.category)",
+		"CREATE INDEX capability_updated_at IF NOT EXISTS FOR (c:AgentCapability) ON (c.updated_at_ms)",
+		"CREATE INDEX capability_deleted_at IF NOT EXISTS FOR (c:AgentCapability) ON (c.deleted_at_ms)",
 
 		// AgentActionGraph indexes for assignment lookups
 		"CREATE INDEX aag_agent_id IF NOT EXISTS FOR (aag:AgentActionGraph) ON (aag.agent_id)",

@@ -34,11 +34,16 @@ import type {
 import StateActionNode from './nodes/StateActionNode'
 import StateEventNode from './nodes/StateEventNode'
 import StateTransitionNode from './nodes/StateTransitionNode'
+import DeletableEdge from './edges/DeletableEdge'
 
 const nodeTypes = {
   action: StateActionNode,
   event: StateEventNode,
   transition: StateTransitionNode,
+}
+
+const edgeTypes = {
+  deletable: DeletableEdge,
 }
 
 const START_NODE_ID = '__action_graph_start__'
@@ -546,24 +551,43 @@ function ActionGraphEditor() {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)
   const [edges, setEdges, defaultOnEdgesChange] = useEdgesState(initialEdges)
 
+  // Track edges that user has explicitly requested to delete (via UI button)
+  const pendingDeletionsRef = useRef<Set<string>>(new Set())
+
+  // Delete edge function - called from custom edge component
+  const deleteEdge = useCallback((edgeId: string) => {
+    console.log('[deleteEdge] User requested deletion of edge:', edgeId)
+    pendingDeletionsRef.current.add(edgeId)
+    setEdges((eds) => eds.filter((e) => e.id !== edgeId))
+  }, [setEdges])
+
   // Custom onEdgesChange that prevents automatic edge removal when nodes are re-rendering
   // ReactFlow can try to remove edges when handles temporarily unmount during re-render
   const onEdgesChange = useCallback((changes: import('reactflow').EdgeChange[]) => {
-    // Filter out 'remove' changes that happen due to handle re-registration
-    // Only allow explicit user deletions (via backspace/delete key or UI)
+    // Filter out spurious 'remove' changes that happen due to handle re-registration
+    // Allow: 1) User-initiated deletions (tracked in pendingDeletions)
+    //        2) Deletions where source or target node no longer exists
+    //        3) Selection changes, position changes, etc.
     const filteredChanges = changes.filter(change => {
       if (change.type === 'remove') {
+        // Check if this was a user-initiated deletion
+        if (pendingDeletionsRef.current.has(change.id)) {
+          pendingDeletionsRef.current.delete(change.id)
+          return true // Allow user-initiated deletion
+        }
         // Check if the source and target nodes still exist
-        // If they do, this is likely a spurious removal from re-render, not user action
         const edge = edges.find(e => e.id === change.id)
         if (edge) {
           const sourceExists = nodes.some(n => n.id === edge.source)
           const targetExists = nodes.some(n => n.id === edge.target)
           if (sourceExists && targetExists) {
+            // Both nodes exist - this is likely spurious removal from re-render
             console.log('[onEdgesChange] Blocking spurious edge removal:', change.id)
-            return false // Block this removal
+            return false
           }
         }
+        // One of the nodes was deleted, allow edge removal
+        return true
       }
       return true
     })
@@ -572,6 +596,18 @@ function ActionGraphEditor() {
       defaultOnEdgesChange(filteredChanges)
     }
   }, [defaultOnEdgesChange, edges, nodes])
+
+  // Wrap edges with onDelete callback and set type to 'deletable'
+  const edgesWithDelete = useMemo(() => {
+    return edges.map(edge => ({
+      ...edge,
+      type: 'deletable',
+      data: {
+        ...edge.data,
+        onDelete: deleteEdge,
+      },
+    }))
+  }, [edges, deleteEdge])
 
   // Only reset graph when template changes (by ID), not when state definition loads
   // This prevents newly added nodes from being lost when async data loads
@@ -726,10 +762,16 @@ function ActionGraphEditor() {
         action: {
           type: node.data.actionType || node.data.subtype,
           server: node.data.server,
-          params: {
-            source: 'inline' as const,
-            data: node.data.params || {},
-          },
+          params: node.data.fieldSources && Object.keys(node.data.fieldSources).length > 0
+            ? {
+                source: 'mapped' as const,
+                data: node.data.params || {},
+                field_sources: node.data.fieldSources,
+              }
+            : {
+                source: 'inline' as const,
+                data: node.data.params || {},
+              },
         },
         start_conditions: mapStartStatesToConditions(node.data.startStates || []),
         pre_states: preStates,
@@ -1570,7 +1612,7 @@ function ActionGraphEditor() {
           {selectedTemplate ? (
             <ReactFlow
               nodes={nodes}
-              edges={edges}
+              edges={edgesWithDelete}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
@@ -1579,11 +1621,12 @@ function ActionGraphEditor() {
               onDrop={onDrop}
               onDragOver={onDragOver}
               nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
               fitView
               snapToGrid
               snapGrid={[16, 16]}
               defaultEdgeOptions={{
-                type: 'smoothstep',
+                type: 'deletable',
                 animated: false,
                 markerEnd: { type: MarkerType.ArrowClosed, color: '#22c55e' },
                 style: { stroke: '#22c55e', strokeWidth: 2 },
@@ -1798,6 +1841,7 @@ function convertActionGraphToGraph(
         successState: stepSuccessStates[0] || defaultState,
         failureState: stepFailureStates[0] || errorState,
         params: step.action?.params?.data || {},
+        fieldSources: step.action?.params?.field_sources,
         waypointId: step.action?.params?.waypoint_id,
         jobName: step.job_name || '',
         autoGenerateStates: step.auto_generate_states ?? true,

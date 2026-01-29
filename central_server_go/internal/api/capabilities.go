@@ -63,6 +63,18 @@ func (s *Server) RegisterCapabilities(w http.ResponseWriter, r *http.Request) {
 			successCriteria, _ = json.Marshal(cap.SuccessCriteria)
 		}
 
+		// Determine is_available: use request value if provided, default to true
+		isAvailable := true
+		if cap.IsAvailable != nil {
+			isAvailable = *cap.IsAvailable
+		}
+
+		// Determine lifecycle_state: use request value if provided, default to "unknown"
+		lifecycleState := "unknown"
+		if cap.LifecycleState != "" {
+			lifecycleState = cap.LifecycleState
+		}
+
 		capabilities[i] = db.AgentCapability{
 			ID:              capID,
 			AgentID:         agentID,
@@ -73,7 +85,8 @@ func (s *Server) RegisterCapabilities(w http.ResponseWriter, r *http.Request) {
 			FeedbackSchema:  feedbackSchema,
 			SuccessCriteria: successCriteria,
 			Status:          "idle",
-			IsAvailable:     true,
+			IsAvailable:     isAvailable,
+			LifecycleState:  lifecycleState,
 			DiscoveredAt:    time.Now().UTC(),
 			UpdatedAt:       time.Now().UTC(),
 		}
@@ -149,6 +162,7 @@ func (s *Server) GetRobotCapabilities(w http.ResponseWriter, r *http.Request) {
 			SuccessCriteria: successCriteria,
 			Status:          cap.Status,
 			IsAvailable:     cap.IsAvailable,
+			LifecycleState:  cap.LifecycleState,
 			DiscoveredAt:    cap.DiscoveredAt,
 		}
 
@@ -188,7 +202,7 @@ func (s *Server) UpdateCapabilityStatus(w http.ResponseWriter, r *http.Request) 
 
 	// Update each capability status
 	for actionType, status := range req.Status {
-		if err := s.repo.UpdateAgentCapabilityStatus(agentID, actionType, status.Status, status.Available); err != nil {
+		if err := s.repo.UpdateAgentCapabilityStatus(agentID, actionType, status.Status, status.Available, status.LifecycleState); err != nil {
 			// Log but don't fail - capability might not exist yet
 			continue
 		}
@@ -229,8 +243,9 @@ func (s *Server) ListAllCapabilities(w http.ResponseWriter, r *http.Request) {
 
 	// Group capabilities by action type (for backward compatibility)
 	actionTypeMap := make(map[string]*ActionTypeInfo)
-	// Also collect individual action servers
-	actionServers := make([]ActionServerInfo, 0, len(allCaps))
+	// Deduplicate action servers by action_type (keep first available, or first if none available)
+	// This prevents showing duplicate actions when multiple agents have the same capability
+	actionServerMap := make(map[string]ActionServerInfo)
 
 	for _, cap := range allCaps {
 		// Group by action type (existing behavior)
@@ -248,15 +263,28 @@ func (s *Server) ListAllCapabilities(w http.ResponseWriter, r *http.Request) {
 			info.AvailableCount++
 		}
 
-		// Add individual action server (NEW)
-		actionServers = append(actionServers, ActionServerInfo{
-			ActionType:   cap.ActionType,
-			ActionServer: cap.ActionServer,
-			AgentID:      cap.AgentID,
-			AgentName:    agentNameMap[cap.AgentID],
-			IsAvailable:  cap.IsAvailable,
-			Status:       cap.Status,
-		})
+		// Deduplicate by action_type + action_server: only true duplicates are removed
+		// Different servers with the same action type should all be shown
+		dedupeKey := cap.ActionType + "|" + cap.ActionServer
+		existing, hasExisting := actionServerMap[dedupeKey]
+		shouldAdd := !hasExisting || (!existing.IsAvailable && cap.IsAvailable)
+		if shouldAdd {
+			actionServerMap[dedupeKey] = ActionServerInfo{
+				ActionType:     cap.ActionType,
+				ActionServer:   cap.ActionServer,
+				AgentID:        cap.AgentID,
+				AgentName:      agentNameMap[cap.AgentID],
+				IsAvailable:    cap.IsAvailable,
+				LifecycleState: cap.LifecycleState,
+				Status:         cap.Status,
+			}
+		}
+	}
+
+	// Convert map to slice
+	actionServers := make([]ActionServerInfo, 0, len(actionServerMap))
+	for _, info := range actionServerMap {
+		actionServers = append(actionServers, info)
 	}
 
 	actionTypeInfos := make([]ActionTypeInfo, 0, len(actionTypeMap))
@@ -303,12 +331,14 @@ func (s *Server) GetCapabilitiesByActionType(w http.ResponseWriter, r *http.Requ
 	}
 
 	responses := make([]struct {
-		AgentID      string                 `json:"agent_id"`
-		AgentName    string                 `json:"agent_name,omitempty"`
-		ActionServer string                 `json:"action_server"`
-		Status       string                 `json:"status"`
-		IsAvailable  bool                   `json:"is_available"`
-		GoalSchema   map[string]interface{} `json:"goal_schema,omitempty"`
+		AgentID        string                 `json:"agent_id"`
+		AgentName      string                 `json:"agent_name,omitempty"`
+		ActionServer   string                 `json:"action_server"`
+		Status         string                 `json:"status"`
+		IsAvailable    bool                   `json:"is_available"`
+		LifecycleState string                 `json:"lifecycle_state"`
+		GoalSchema     map[string]interface{} `json:"goal_schema,omitempty"`
+		ResultSchema   map[string]interface{} `json:"result_schema,omitempty"`
 	}, len(caps))
 
 	for i, cap := range caps {
@@ -316,13 +346,19 @@ func (s *Server) GetCapabilitiesByActionType(w http.ResponseWriter, r *http.Requ
 		if cap.GoalSchema != nil {
 			json.Unmarshal(cap.GoalSchema, &goalSchema)
 		}
+		var resultSchema map[string]interface{}
+		if cap.ResultSchema != nil {
+			json.Unmarshal(cap.ResultSchema, &resultSchema)
+		}
 
 		responses[i].AgentID = cap.AgentID
 		responses[i].AgentName = agentNameMap[cap.AgentID]
 		responses[i].ActionServer = cap.ActionServer
 		responses[i].Status = cap.Status
 		responses[i].IsAvailable = cap.IsAvailable
+		responses[i].LifecycleState = cap.LifecycleState
 		responses[i].GoalSchema = goalSchema
+		responses[i].ResultSchema = resultSchema
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -423,6 +459,18 @@ func (s *Server) RegisterRobot(w http.ResponseWriter, r *http.Request) {
 				successCriteria, _ = json.Marshal(cap.SuccessCriteria)
 			}
 
+			// Determine is_available: use request value if provided, default to true
+			isAvailable := true
+			if cap.IsAvailable != nil {
+				isAvailable = *cap.IsAvailable
+			}
+
+			// Determine lifecycle_state: use request value if provided, default to "unknown"
+			lifecycleState := "unknown"
+			if cap.LifecycleState != "" {
+				lifecycleState = cap.LifecycleState
+			}
+
 			capabilities[i] = db.AgentCapability{
 				ID:              capID,
 				AgentID:         agentID,
@@ -433,7 +481,8 @@ func (s *Server) RegisterRobot(w http.ResponseWriter, r *http.Request) {
 				FeedbackSchema:  feedbackSchema,
 				SuccessCriteria: successCriteria,
 				Status:          "idle",
-				IsAvailable:     true,
+				IsAvailable:     isAvailable,
+				LifecycleState:  lifecycleState,
 				DiscoveredAt:    time.Now().UTC(),
 				UpdatedAt:       time.Now().UTC(),
 			}
@@ -503,6 +552,7 @@ func (s *Server) GetAgentCapabilities(w http.ResponseWriter, r *http.Request) {
 			SuccessCriteria: successCriteria,
 			Status:          cap.Status,
 			IsAvailable:     cap.IsAvailable,
+			LifecycleState:  cap.LifecycleState,
 			DiscoveredAt:    cap.DiscoveredAt,
 		}
 	}
@@ -584,4 +634,216 @@ func (s *Server) UpdateRobot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, agentToResponse(agent, s.stateManager))
+}
+
+// ============================================================
+// Individual Capability API (Incremental Sync Support)
+// ============================================================
+
+// GetCapabilityByID returns a single capability by its ID
+// GET /api/capabilities/{capabilityID}
+func (s *Server) GetCapabilityByID(w http.ResponseWriter, r *http.Request) {
+	capabilityID := chi.URLParam(r, "capabilityID")
+
+	cap, err := s.repo.GetCapabilityByID(capabilityID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if cap == nil {
+		writeError(w, http.StatusNotFound, "Capability not found")
+		return
+	}
+
+	// Get agent name for response
+	var agentName string
+	if agent, _ := s.repo.GetAgent(cap.AgentID); agent != nil {
+		agentName = agent.Name
+	}
+
+	response := capabilityToDetailResponse(cap, agentName)
+	writeJSON(w, http.StatusOK, response)
+}
+
+// UpdateCapabilityMetadata updates user-editable metadata for a capability
+// PATCH /api/capabilities/{capabilityID}
+func (s *Server) UpdateCapabilityMetadata(w http.ResponseWriter, r *http.Request) {
+	capabilityID := chi.URLParam(r, "capabilityID")
+
+	// Check capability exists
+	cap, err := s.repo.GetCapabilityByID(capabilityID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if cap == nil {
+		writeError(w, http.StatusNotFound, "Capability not found")
+		return
+	}
+
+	var req db.CapabilityMetadataUpdate
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	// Update metadata
+	if err := s.repo.UpdateCapabilityMetadata(capabilityID, req); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Fetch updated capability
+	updatedCap, err := s.repo.GetCapabilityByID(capabilityID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Get agent name for response
+	var agentName string
+	if agent, _ := s.repo.GetAgent(updatedCap.AgentID); agent != nil {
+		agentName = agent.Name
+	}
+
+	response := capabilityToDetailResponse(updatedCap, agentName)
+	writeJSON(w, http.StatusOK, response)
+}
+
+// GetCapabilitiesChangedSince returns capabilities changed since a timestamp
+// GET /api/capabilities/changed?since=<ISO8601>
+func (s *Server) GetCapabilitiesChangedSince(w http.ResponseWriter, r *http.Request) {
+	sinceStr := r.URL.Query().Get("since")
+	if sinceStr == "" {
+		writeError(w, http.StatusBadRequest, "since parameter is required (ISO8601 format)")
+		return
+	}
+
+	since, err := time.Parse(time.RFC3339, sinceStr)
+	if err != nil {
+		// Try parsing as Unix milliseconds
+		var ms int64
+		if err2 := json.Unmarshal([]byte(sinceStr), &ms); err2 == nil {
+			since = time.UnixMilli(ms)
+		} else {
+			writeError(w, http.StatusBadRequest, "Invalid since format. Use ISO8601 (e.g., 2024-01-01T00:00:00Z)")
+			return
+		}
+	}
+
+	caps, err := s.repo.GetCapabilitiesChangedSince(since)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Get agent names for response
+	agents, _ := s.repo.GetAllAgents()
+	agentNameMap := make(map[string]string)
+	for _, agent := range agents {
+		agentNameMap[agent.ID] = agent.Name
+	}
+
+	// Build response with change info
+	changes := make([]CapabilityChangeInfo, len(caps))
+	for i, cap := range caps {
+		changeType := "updated"
+		if cap.DeletedAt.Valid && !cap.DeletedAt.Time.IsZero() {
+			changeType = "deleted"
+		}
+
+		changes[i] = CapabilityChangeInfo{
+			ChangeType:  changeType,
+			ChangedAt:   cap.UpdatedAt,
+			Capability:  capabilityToDetailResponse(&cap, agentNameMap[cap.AgentID]),
+		}
+	}
+
+	writeJSON(w, http.StatusOK, CapabilitiesChangedResponse{
+		Since:       since,
+		Changes:     changes,
+		TotalCount:  len(changes),
+		ServerTime:  time.Now().UTC(),
+	})
+}
+
+// GetCapabilitiesByCategoryAPI returns capabilities by category
+// GET /api/capabilities/by-category/{category}
+func (s *Server) GetCapabilitiesByCategoryAPI(w http.ResponseWriter, r *http.Request) {
+	category := chi.URLParam(r, "category")
+
+	caps, err := s.repo.GetCapabilitiesByCategory(category)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Get agent names for response
+	agents, _ := s.repo.GetAllAgents()
+	agentNameMap := make(map[string]string)
+	for _, agent := range agents {
+		agentNameMap[agent.ID] = agent.Name
+	}
+
+	responses := make([]CapabilityDetailResponse, len(caps))
+	for i, cap := range caps {
+		responses[i] = capabilityToDetailResponse(&cap, agentNameMap[cap.AgentID])
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"category":     category,
+		"capabilities": responses,
+		"total":        len(responses),
+	})
+}
+
+// Helper: convert capability to detailed response
+func capabilityToDetailResponse(cap *db.AgentCapability, agentName string) CapabilityDetailResponse {
+	var goalSchema, resultSchema, feedbackSchema, successCriteria map[string]interface{}
+	if cap.GoalSchema != nil {
+		json.Unmarshal(cap.GoalSchema, &goalSchema)
+	}
+	if cap.ResultSchema != nil {
+		json.Unmarshal(cap.ResultSchema, &resultSchema)
+	}
+	if cap.FeedbackSchema != nil {
+		json.Unmarshal(cap.FeedbackSchema, &feedbackSchema)
+	}
+	if cap.SuccessCriteria != nil {
+		json.Unmarshal(cap.SuccessCriteria, &successCriteria)
+	}
+
+	resp := CapabilityDetailResponse{
+		ID:              cap.ID,
+		AgentID:         cap.AgentID,
+		AgentName:       agentName,
+		ActionType:      cap.ActionType,
+		ActionServer:    cap.ActionServer,
+		GoalSchema:      goalSchema,
+		ResultSchema:    resultSchema,
+		FeedbackSchema:  feedbackSchema,
+		SuccessCriteria: successCriteria,
+		DefaultTimeout:  cap.DefaultTimeout,
+		SchemaVersion:   cap.SchemaVersion,
+		Status:          cap.Status,
+		IsAvailable:     cap.IsAvailable,
+		LifecycleState:  cap.LifecycleState,
+		DiscoveredAt:    cap.DiscoveredAt,
+		UpdatedAt:       cap.UpdatedAt,
+	}
+
+	if cap.Description.Valid {
+		resp.Description = cap.Description.String
+	}
+	if cap.Category.Valid {
+		resp.Category = cap.Category.String
+	}
+	if cap.LastUsedAt.Valid {
+		resp.LastUsedAt = &cap.LastUsedAt.Time
+	}
+	if cap.DeletedAt.Valid && !cap.DeletedAt.Time.IsZero() {
+		resp.DeletedAt = &cap.DeletedAt.Time
+	}
+
+	return resp
 }

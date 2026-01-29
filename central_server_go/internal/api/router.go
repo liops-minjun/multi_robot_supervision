@@ -62,7 +62,7 @@ func (s *Server) setupRouter() {
 	// CORS
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: true,
@@ -98,19 +98,26 @@ func (s *Server) setupRouter() {
 		r.Route("/capabilities", func(r chi.Router) {
 			r.Get("/", s.ListAllCapabilities)
 			r.Get("/action-types", s.GetAllActionTypesWithStats)
-			r.Get("/*", s.GetCapabilitiesByActionType)
+			r.Get("/changed", s.GetCapabilitiesChangedSince) // Incremental sync endpoint
+			r.Get("/by-category/{category}", s.GetCapabilitiesByCategoryAPI)
+			r.Get("/{capabilityID}", s.GetCapabilityByID)    // Get single capability
+			r.Patch("/{capabilityID}", s.UpdateCapabilityMetadata) // Update capability metadata
+			r.Get("/action-type/*", s.GetCapabilitiesByActionType) // Moved to explicit path
 		})
 
 		// Action Graphs
 		r.Route("/action-graphs", func(r chi.Router) {
 			r.Get("/", s.ListActionGraphs)
 			r.Post("/", s.CreateActionGraph)
+			r.Post("/import", s.ImportActionGraph) // Import canonical graph (before {graphID} routes)
 			r.Get("/{graphID}", s.GetActionGraph)
 			r.Put("/{graphID}", s.UpdateActionGraph)
 			r.Delete("/{graphID}", s.DeleteActionGraph)
+			r.Get("/{graphID}/check-executability", s.CheckExecutability) // Safety check before execution
 			r.Post("/{graphID}/execute", s.ExecuteActionGraph)
 			r.Post("/{graphID}/execute-multi", s.ExecuteMultiActionGraph) // Multi-agent simultaneous execution
 			r.Post("/{graphID}/validate", s.ValidateActionGraph)
+			r.Get("/{graphID}/export", s.ExportActionGraph) // Export canonical graph
 
 			// Canonical Graph endpoints (new graph-optimized format)
 			r.Get("/{graphID}/canonical", s.GetCanonicalGraph)
@@ -124,6 +131,7 @@ func (s *Server) setupRouter() {
 			r.Post("/", s.CreateAgent)
 			r.Get("/connection-status", s.GetAgentConnectionStatus) // Heartbeat monitoring for all agents
 			r.Get("/{agentID}", s.GetAgent)
+			r.Patch("/{agentID}", s.UpdateAgent)   // Update agent (rename)
 			r.Delete("/{agentID}", s.DeleteAgent)
 			r.Get("/{agentID}/capabilities", s.GetAgentCapabilities)
 			r.Get("/{agentID}/connection-status", s.GetSingleAgentConnectionStatus) // Heartbeat monitoring for single agent
@@ -181,6 +189,10 @@ func (s *Server) setupRouter() {
 			r.Get("/state", s.GetFleetState)
 			r.Get("/summary", s.GetFleetSummary)
 			r.Get("/robots/{robotID}", s.GetRobotState)
+			r.Get("/robots/{robotID}/telemetry", s.GetRobotTelemetry)
+			r.Get("/robots/{robotID}/telemetry/joint-state", s.GetRobotJointState)
+			r.Get("/robots/{robotID}/telemetry/odometry", s.GetRobotOdometry)
+			r.Get("/robots/{robotID}/telemetry/transforms", s.GetRobotTransforms)
 			r.Get("/agents/{agentID}/robots", s.GetAgentRobotsState)
 			r.Post("/validate", s.ValidatePreconditions)
 		})

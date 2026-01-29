@@ -5,6 +5,9 @@
 
 #include <memory>
 #include <string>
+#include <chrono>
+#include <unordered_map>
+#include <mutex>
 
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -160,5 +163,151 @@ private:
 #define LOG_WARN(...)  SPDLOG_WARN(__VA_ARGS__)
 #define LOG_ERROR(...) SPDLOG_ERROR(__VA_ARGS__)
 #define LOG_CRITICAL(...) SPDLOG_CRITICAL(__VA_ARGS__)
+
+// ============================================================
+// Rate-Limited Logging Macros
+// ============================================================
+
+/**
+ * LOG_INFO_THROTTLE(seconds, ...) - Log at most once per interval
+ * LOG_INFO_EVERY_N(n, ...) - Log every N-th call
+ *
+ * Usage:
+ *   LOG_INFO_THROTTLE(5.0, "Heartbeat sent");  // Every 5 seconds max
+ *   LOG_INFO_EVERY_N(100, "Tick count={}", tick_count);  // Every 100 calls
+ */
+
+// Throttle by time interval (seconds)
+#define LOG_TRACE_THROTTLE(interval_sec, ...) \
+    do { \
+        static auto last_log_time = std::chrono::steady_clock::time_point{}; \
+        auto now = std::chrono::steady_clock::now(); \
+        if (std::chrono::duration<double>(now - last_log_time).count() >= (interval_sec)) { \
+            last_log_time = now; \
+            SPDLOG_TRACE(__VA_ARGS__); \
+        } \
+    } while(0)
+
+#define LOG_DEBUG_THROTTLE(interval_sec, ...) \
+    do { \
+        static auto last_log_time = std::chrono::steady_clock::time_point{}; \
+        auto now = std::chrono::steady_clock::now(); \
+        if (std::chrono::duration<double>(now - last_log_time).count() >= (interval_sec)) { \
+            last_log_time = now; \
+            SPDLOG_DEBUG(__VA_ARGS__); \
+        } \
+    } while(0)
+
+#define LOG_INFO_THROTTLE(interval_sec, ...) \
+    do { \
+        static auto last_log_time = std::chrono::steady_clock::time_point{}; \
+        auto now = std::chrono::steady_clock::now(); \
+        if (std::chrono::duration<double>(now - last_log_time).count() >= (interval_sec)) { \
+            last_log_time = now; \
+            SPDLOG_INFO(__VA_ARGS__); \
+        } \
+    } while(0)
+
+#define LOG_WARN_THROTTLE(interval_sec, ...) \
+    do { \
+        static auto last_log_time = std::chrono::steady_clock::time_point{}; \
+        auto now = std::chrono::steady_clock::now(); \
+        if (std::chrono::duration<double>(now - last_log_time).count() >= (interval_sec)) { \
+            last_log_time = now; \
+            SPDLOG_WARN(__VA_ARGS__); \
+        } \
+    } while(0)
+
+// Log every N-th call
+#define LOG_TRACE_EVERY_N(n, ...) \
+    do { \
+        static uint64_t log_count = 0; \
+        if (++log_count % (n) == 1) { \
+            SPDLOG_TRACE(__VA_ARGS__); \
+        } \
+    } while(0)
+
+#define LOG_DEBUG_EVERY_N(n, ...) \
+    do { \
+        static uint64_t log_count = 0; \
+        if (++log_count % (n) == 1) { \
+            SPDLOG_DEBUG(__VA_ARGS__); \
+        } \
+    } while(0)
+
+#define LOG_INFO_EVERY_N(n, ...) \
+    do { \
+        static uint64_t log_count = 0; \
+        if (++log_count % (n) == 1) { \
+            SPDLOG_INFO(__VA_ARGS__); \
+        } \
+    } while(0)
+
+#define LOG_WARN_EVERY_N(n, ...) \
+    do { \
+        static uint64_t log_count = 0; \
+        if (++log_count % (n) == 1) { \
+            SPDLOG_WARN(__VA_ARGS__); \
+        } \
+    } while(0)
+
+// ============================================================
+// ComponentLogger Rate-Limited Macros
+// ============================================================
+
+/**
+ * CLOG_INFO_THROTTLE(logger, secs, ...) - ComponentLogger throttle
+ * CLOG_INFO_EVERY_N(logger, n, ...)     - ComponentLogger every N
+ *
+ * Usage:
+ *   CLOG_INFO_THROTTLE(log, 10.0, "[Heartbeat] state={}", state);
+ *   CLOG_DEBUG_EVERY_N(log, 100, "[tick] count={}", count);
+ */
+
+#define CLOG_DEBUG_THROTTLE(logger, interval_sec, ...) \
+    do { \
+        static auto _clog_last_ = std::chrono::steady_clock::time_point{}; \
+        auto _clog_now_ = std::chrono::steady_clock::now(); \
+        if (std::chrono::duration<double>(_clog_now_ - _clog_last_).count() >= (interval_sec)) { \
+            _clog_last_ = _clog_now_; \
+            (logger).debug(__VA_ARGS__); \
+        } \
+    } while(0)
+
+#define CLOG_INFO_THROTTLE(logger, interval_sec, ...) \
+    do { \
+        static auto _clog_last_ = std::chrono::steady_clock::time_point{}; \
+        auto _clog_now_ = std::chrono::steady_clock::now(); \
+        if (std::chrono::duration<double>(_clog_now_ - _clog_last_).count() >= (interval_sec)) { \
+            _clog_last_ = _clog_now_; \
+            (logger).info(__VA_ARGS__); \
+        } \
+    } while(0)
+
+#define CLOG_WARN_THROTTLE(logger, interval_sec, ...) \
+    do { \
+        static auto _clog_last_ = std::chrono::steady_clock::time_point{}; \
+        auto _clog_now_ = std::chrono::steady_clock::now(); \
+        if (std::chrono::duration<double>(_clog_now_ - _clog_last_).count() >= (interval_sec)) { \
+            _clog_last_ = _clog_now_; \
+            (logger).warn(__VA_ARGS__); \
+        } \
+    } while(0)
+
+#define CLOG_DEBUG_EVERY_N(logger, n, ...) \
+    do { \
+        static uint64_t _clog_cnt_ = 0; \
+        if (++_clog_cnt_ % (n) == 1) { \
+            (logger).debug(__VA_ARGS__); \
+        } \
+    } while(0)
+
+#define CLOG_INFO_EVERY_N(logger, n, ...) \
+    do { \
+        static uint64_t _clog_cnt_ = 0; \
+        if (++_clog_cnt_ % (n) == 1) { \
+            (logger).info(__VA_ARGS__); \
+        } \
+    } while(0)
 
 }  // namespace fleet_agent

@@ -68,16 +68,29 @@ func (h *WebSocketHub) Run() {
 			log.Printf("WebSocket client disconnected. Total: %d", len(h.clients))
 
 		case message := <-h.broadcast:
+			// Collect slow clients to delete (defer deletion to avoid modifying map during iteration)
+			var slowClients []*WebSocketClient
 			h.mu.RLock()
 			for client := range h.clients {
 				select {
 				case client.send <- message:
 				default:
-					close(client.send)
-					delete(h.clients, client)
+					slowClients = append(slowClients, client)
 				}
 			}
 			h.mu.RUnlock()
+
+			// Delete slow clients with write lock (after releasing RLock)
+			if len(slowClients) > 0 {
+				h.mu.Lock()
+				for _, client := range slowClients {
+					if _, ok := h.clients[client]; ok {
+						close(client.send)
+						delete(h.clients, client)
+					}
+				}
+				h.mu.Unlock()
+			}
 		}
 	}
 }
@@ -480,6 +493,23 @@ func (h *WebSocketHub) BroadcastCapabilityUpdate(agentID string, capabilities in
 		Timestamp:    time.Now().UnixMilli(),
 		AgentID:      agentID,
 		Capabilities: capabilities,
+	}
+	h.Broadcast(msg)
+}
+
+// TaskStateUpdateMessage represents an agent-driven task state update
+type TaskStateUpdateMessage struct {
+	Type      string      `json:"type"`
+	Timestamp int64       `json:"timestamp"`
+	Update    interface{} `json:"update"`
+}
+
+// BroadcastTaskStateUpdate sends a task state update to all clients (agent-driven execution)
+func (h *WebSocketHub) BroadcastTaskStateUpdate(update interface{}) {
+	msg := TaskStateUpdateMessage{
+		Type:      "task_state_update",
+		Timestamp: time.Now().UnixMilli(),
+		Update:    update,
 	}
 	h.Broadcast(msg)
 }

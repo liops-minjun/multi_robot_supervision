@@ -1,319 +1,190 @@
 // Copyright 2026 Multi-Robot Supervision System
-// Main Agent Implementation
+// Fleet Agent - Tick-based implementation
 
 #include "fleet_agent/agent.hpp"
 #include "fleet_agent/core/logger.hpp"
 
 #include "fleet_agent/capability/scanner.hpp"
-#include "fleet_agent/executor/command_processor.hpp"
 #include "fleet_agent/graph/storage.hpp"
-#include "fleet_agent/transport/tls_credentials.hpp"
 #include "fleet_agent/transport/quic_transport.hpp"
-#include "fleet_agent/transport/quic_outbound_sender.hpp"
 #include "fleet_agent/state/state_definition.hpp"
 #include "fleet_agent/state/state_tracker.hpp"
 #include "fleet_agent/state/graph_state.hpp"
-#include "fleet_agent/protocol/message_handler.hpp"
+#include "fleet_agent/telemetry/collector.hpp"
+#include "fleet_agent/telemetry/snapshot.hpp"
 
 #include "fleet/v1/service.pb.h"
+#include "fleet/v1/common.pb.h"
 #include "fleet/v1/commands.pb.h"
+#include "fleet/v1/graphs.pb.h"
 
-#include <rclcpp/rclcpp.hpp>
 #include <nlohmann/json.hpp>
-#include <unistd.h>  // for getpid()
-#include <algorithm>
-#include <cctype>
-#include <thread>
-#include <chrono>
-#include <cstdint>
-#include <functional>
 
 namespace fleet_agent {
 
 namespace {
 logging::ComponentLogger log("Agent");
-constexpr size_t kMaxInboundMessageBytes = 16 * 1024 * 1024;
-
-std::string state_to_string(Agent::State state) {
-    switch (state) {
-        case Agent::State::CREATED: return "CREATED";
-        case Agent::State::INITIALIZING: return "INITIALIZING";
-        case Agent::State::RUNNING: return "RUNNING";
-        case Agent::State::STOPPING: return "STOPPING";
-        case Agent::State::STOPPED: return "STOPPED";
-        case Agent::State::ERROR: return "ERROR";
-        default: return "UNKNOWN";
-    }
+constexpr size_t kMaxMessageBytes = 16 * 1024 * 1024;
 }
 
-class InboundMessageFramer {
-public:
-    using MessageCallback = std::function<void(const uint8_t*, size_t)>;
+// ============================================================
+// Constructor / Destructor
+// ============================================================
 
-    explicit InboundMessageFramer(MessageCallback cb)
-        : callback_(std::move(cb)) {}
-
-    void on_data(const uint8_t* data, size_t len, bool fin) {
-        if (data && len > 0) {
-            buffer_.insert(buffer_.end(), data, data + len);
-        }
-
-        while (true) {
-            if (expected_len_ == 0) {
-                if (buffer_.size() < 4) {
-                    break;
-                }
-
-                expected_len_ = (static_cast<uint32_t>(buffer_[0]) << 24) |
-                                (static_cast<uint32_t>(buffer_[1]) << 16) |
-                                (static_cast<uint32_t>(buffer_[2]) << 8) |
-                                static_cast<uint32_t>(buffer_[3]);
-
-                buffer_.erase(buffer_.begin(), buffer_.begin() + 4);
-
-                if (expected_len_ == 0) {
-                    continue;
-                }
-
-                if (expected_len_ > kMaxInboundMessageBytes) {
-                    log.error("Inbound message too large: {} bytes", expected_len_);
-                    buffer_.clear();
-                    expected_len_ = 0;
-                    break;
-                }
-            }
-
-            if (buffer_.size() < expected_len_) {
-                break;
-            }
-
-            if (callback_) {
-                callback_(buffer_.data(), expected_len_);
-            }
-
-            buffer_.erase(buffer_.begin(), buffer_.begin() + expected_len_);
-            expected_len_ = 0;
-        }
-
-        if (fin && (!buffer_.empty() || expected_len_ != 0)) {
-            log.warn("Stream closed with partial message (buffer={}, expected={})",
-                     buffer_.size(), expected_len_);
-            buffer_.clear();
-            expected_len_ = 0;
-        }
-    }
-
-private:
-    MessageCallback callback_;
-    std::vector<uint8_t> buffer_;
-    uint32_t expected_len_{0};
-};
-}  // namespace
-
-Agent::Agent(const AgentConfig& config)
-    : config_(config) {
-
-    // Initialize AgentIdStorage for server-assigned ID support
+Agent::Agent(const AgentConfig& config) : config_(config) {
     agent_id_storage_ = std::make_unique<AgentIdStorage>(config_.storage.agent_id_path);
-
-    // Generate hardware fingerprint for ID recovery
     hardware_fingerprint_ = AgentIdStorage::generate_hardware_fingerprint();
-    log.debug("Hardware fingerprint: {}", hardware_fingerprint_);
 
-    // Resolve effective agent ID with priority:
-    // 1. Config file ID (if set)
-    // 2. Stored server-assigned ID
-    // 3. Temporary ID using hardware fingerprint (will request real ID from server)
+    // Resolve effective agent ID
     if (!config_.agent_id.empty()) {
         effective_agent_id_ = config_.agent_id;
-        log.info("Using configured agent ID: {}", effective_agent_id_);
     } else if (config_.use_server_assigned_id) {
-        auto stored_id = agent_id_storage_->load();
-        if (stored_id) {
-            effective_agent_id_ = *stored_id;
-            log.info("Using stored server-assigned ID: {}", effective_agent_id_);
+        if (auto stored = agent_id_storage_->load()) {
+            effective_agent_id_ = *stored;
         } else {
-            // Use temporary ID based on hardware fingerprint for initialization
-            // Will be replaced with server-assigned ID on registration
             effective_agent_id_ = "agent_" + hardware_fingerprint_.substr(0, 8);
-            log.info("Using temporary ID {} - will request permanent ID from server", effective_agent_id_);
         }
     }
 
-    log.info("Creating agent: {}", effective_agent_id_);
+    log.info("Agent created: {} (fingerprint: {})", effective_agent_id_, hardware_fingerprint_);
+}
+
+Agent::Agent(const AgentConfig& config,
+             std::unique_ptr<interfaces::ITransport> transport,
+             std::unique_ptr<interfaces::ICapabilityScanner> scanner,
+             std::unique_ptr<interfaces::IActionExecutor> executor)
+    : config_(config)
+    , transport_interface_(std::move(transport))
+    , scanner_interface_(std::move(scanner))
+    , executor_interface_(std::move(executor))
+    , using_injected_components_(true)
+{
+    agent_id_storage_ = std::make_unique<AgentIdStorage>(config_.storage.agent_id_path);
+    hardware_fingerprint_ = AgentIdStorage::generate_hardware_fingerprint();
+
+    // Resolve effective agent ID
+    if (!config_.agent_id.empty()) {
+        effective_agent_id_ = config_.agent_id;
+    } else if (config_.use_server_assigned_id) {
+        if (auto stored = agent_id_storage_->load()) {
+            effective_agent_id_ = *stored;
+        } else {
+            effective_agent_id_ = "agent_" + hardware_fingerprint_.substr(0, 8);
+        }
+    }
+
+    log.info("Agent created (DI): {} (fingerprint: {})", effective_agent_id_, hardware_fingerprint_);
+    log.info("  Using injected components: transport={}, scanner={}, executor={}",
+             transport_interface_ ? "yes" : "no",
+             scanner_interface_ ? "yes" : "no",
+             executor_interface_ ? "yes" : "no");
 }
 
 Agent::~Agent() {
     stop();
 }
 
+// ============================================================
+// Lifecycle
+// ============================================================
+
 bool Agent::initialize() {
     State expected = State::CREATED;
     if (!state_.compare_exchange_strong(expected, State::INITIALIZING)) {
-        log.error("Cannot initialize from state: {}", state_to_string(expected));
+        log.error("Cannot initialize from state");
         return false;
     }
 
     log.info("Initializing agent...");
 
-    // Initialize logger
-    log.info("[1/7] Initializing logging...");
-    logging::init(config_.logging.level, config_.logging.file);
-    log.info("[1/7] Logging initialized");
-
-    // Initialize components in order
-    log.info("[2/7] Initializing ROS2...");
-    if (!init_ros2()) {
-        log.error("[2/7] ROS2 initialization FAILED");
-        state_ = State::ERROR;
-        return false;
-    }
-    log.info("[2/7] ROS2 initialized");
-
-    log.info("[3/7] Initializing shared state...");
-    if (!init_state()) {
-        log.error("[3/7] State initialization FAILED");
-        state_ = State::ERROR;
-        return false;
-    }
-    log.info("[3/7] Shared state initialized");
-
-    log.info("[4/7] Initializing transport (QUIC)...");
-    if (!init_transport()) {
-        log.error("[4/7] Transport initialization FAILED");
-        state_ = State::ERROR;
-        return false;
-    }
-    log.info("[4/7] Transport initialized");
-
-    log.info("[5/7] Initializing state management...");
-    if (!init_state_management()) {
-        log.error("[5/7] State management initialization FAILED");
-        state_ = State::ERROR;
-        return false;
-    }
-    log.info("[5/7] State management initialized");
-
-    log.info("[6/7] Initializing components...");
-    if (!init_components()) {
-        log.error("[6/7] Components initialization FAILED");
-        state_ = State::ERROR;
-        return false;
-    }
-    log.info("[6/7] Components initialized");
-
-    log.info("[7/7] Initializing protocol handlers...");
-    if (!init_protocol()) {
-        log.error("[7/7] Protocol initialization FAILED");
-        state_ = State::ERROR;
-        return false;
-    }
-    log.info("[7/7] Protocol handlers initialized");
+    if (!init_ros2()) return false;
+    if (!init_transport()) return false;
+    if (!init_state_management()) return false;
+    if (!init_components()) return false;
+    if (!init_telemetry()) return false;
 
     setup_shutdown_handler();
 
-    log.info("=== Agent initialization complete ===");
+    log.info("Agent initialization complete");
     return true;
 }
 
 bool Agent::start() {
     State expected = State::INITIALIZING;
     if (!state_.compare_exchange_strong(expected, State::RUNNING)) {
-        log.error("Cannot start from state: {}", state_to_string(expected));
+        log.error("Cannot start from current state");
         return false;
     }
 
     log.info("Starting agent...");
 
-    // Start ROS2 executor thread
-    start_ros2();
+    // Start telemetry collectors
+    for (auto& collector : telemetry_collectors_) {
+        collector->start();
+    }
 
-    // Start transport (QUIC - optional)
+    // Initial connection attempt
     if (quic_client_) {
-        if (quic_client_->is_connected()) {
-            log.info("QUIC transport connected");
-            // Register agent with central server via QUIC
-            if (!register_with_server()) {
-                log.warn("Agent QUIC registration failed - continuing anyway");
-            }
+        log.info("Attempting initial QUIC connection...");
+        if (try_connect()) {
+            log.info("QUIC connection successful, connected_={}", connected_.load());
+            register_with_server();
         } else {
-            log.warn("QUIC client not connected - running without QUIC transport");
-            connection_lost_.store(true);
+            log.warn("Initial QUIC connection failed, will retry in slow_tick");
         }
     } else {
-        log.info("Running without QUIC transport");
+        log.error("QUIC client not initialized!");
     }
 
-    // Start QUIC outbound sender (must start before heartbeat sender)
-    if (quic_outbound_sender_) {
-        quic_outbound_sender_->start();
-    }
-
-    // Start heartbeat sender
-    start_heartbeat_thread();
-
-    // Start command processor
-    if (command_processor_) {
-        command_processor_->start();
-    }
-
-    // Discover capabilities for all robots
+    // Discover capabilities
     discover_capabilities();
 
-    // Start periodic capability scanning (every 1 second)
-    start_capability_scan_thread();
+    // Create timers (ALL processing happens here)
+    main_timer_ = node_->create_wall_timer(
+        std::chrono::milliseconds(10),
+        [this]() { tick(); });
 
-    // Start auto-reconnection thread
-    start_reconnect_thread();
+    heartbeat_timer_ = node_->create_wall_timer(
+        std::chrono::milliseconds(config_.communication.heartbeat_interval_ms),
+        [this]() { send_heartbeat(); });
 
-    log.info("Agent started: {} robots managed",
-             config_.robots.size());
+    slow_timer_ = node_->create_wall_timer(
+        std::chrono::milliseconds(1000),
+        [this]() { slow_tick(); });
 
+    // Sender thread disabled - using direct flush in tick() instead
+    // start_sender_thread();
+
+    log.info("Agent started (tick-based architecture with direct flush)");
+    log.info("State summary: connected={} quic_client={}",
+             connected_.load(), quic_client_ != nullptr);
     return true;
 }
 
 void Agent::stop() {
     State expected = State::RUNNING;
     if (!state_.compare_exchange_strong(expected, State::STOPPING)) {
-        // Check if already stopped
-        if (state_ == State::STOPPED || state_ == State::CREATED) {
-            return;
-        }
-        log.warn("Stopping from unexpected state: {}", state_to_string(state_.load()));
+        if (state_ == State::STOPPED || state_ == State::CREATED) return;
     }
 
     log.info("Stopping agent...");
 
-    // Stop auto-reconnection thread first
-    stop_reconnect_thread();
+    // Cancel timers
+    if (main_timer_) main_timer_->cancel();
+    if (heartbeat_timer_) heartbeat_timer_->cancel();
+    if (slow_timer_) slow_timer_->cancel();
 
-    // Stop periodic capability scanning
-    stop_capability_scan_thread();
+    // Sender thread disabled
+    // stop_sender_thread();
 
-    // Stop command processor
-    if (command_processor_) {
-        command_processor_->stop();
+    // Stop telemetry
+    for (auto& collector : telemetry_collectors_) {
+        collector->stop();
     }
 
-    // Stop heartbeat sender
-    stop_heartbeat_thread();
-
-    // Stop QUIC outbound sender (after heartbeat sender stops queueing)
-    if (quic_outbound_sender_) {
-        quic_outbound_sender_->stop();
-    }
-
-    // Stop transport
+    // Disconnect QUIC
     if (quic_client_) {
         quic_client_->disconnect();
-    }
-
-    // Stop ROS2 executor
-    if (ros_executor_) {
-        ros_executor_->cancel();
-    }
-    if (ros_thread_.joinable()) {
-        ros_thread_.join();
     }
 
     state_ = State::STOPPED;
@@ -321,949 +192,1229 @@ void Agent::stop() {
 }
 
 int Agent::run() {
-    if (!initialize()) {
-        log.error("Initialization failed");
-        return 1;
-    }
+    if (!initialize()) return 1;
+    if (!start()) return 1;
 
-    if (!start()) {
-        log.error("Start failed");
-        return 1;
-    }
-
-    // Wait for shutdown signal
-    ShutdownHandler::instance().wait_for_shutdown();
+    // Blocking spin
+    executor_->spin();
 
     stop();
     return 0;
 }
 
-Agent::State Agent::get_state() const {
-    return state_;
-}
-
-bool Agent::is_running() const {
-    return state_ == State::RUNNING;
-}
-
-const std::string& Agent::agent_id() const {
-    return effective_agent_id_;
-}
-
-std::vector<std::string> Agent::agent_ids() const {
-    std::vector<std::string> ids;
-    ids.reserve(config_.robots.size());
-    for (const auto& robot : config_.robots) {
-        ids.push_back(robot.id);
-    }
-    return ids;
-}
-
-std::shared_ptr<rclcpp::Node> Agent::node() const {
-    return node_;
-}
+// ============================================================
+// Initialization
+// ============================================================
 
 bool Agent::init_ros2() {
-    log.info("  [ROS2] Checking ROS2 context...");
+    log.info("Initializing ROS2...");
 
-    // Initialize ROS2 if not already
     if (!rclcpp::ok()) {
-        log.info("  [ROS2] Calling rclcpp::init()...");
         rclcpp::init(0, nullptr);
     }
-    log.info("  [ROS2] ROS2 context ready");
 
-    // Create node
-    log.info("  [ROS2] Creating node: fleet_agent_{}", config_.agent_id);
     rclcpp::NodeOptions options;
     options.use_intra_process_comms(true);
-    node_ = std::make_shared<rclcpp::Node>(
-        "fleet_agent_" + config_.agent_id, options);
-    log.info("  [ROS2] Node created successfully");
+    node_ = std::make_shared<rclcpp::Node>("fleet_agent_" + config_.agent_id, options);
 
-    // Create executor
-    log.info("  [ROS2] Creating MultiThreadedExecutor...");
-    ros_executor_ = std::make_shared<rclcpp::executors::MultiThreadedExecutor>();
-    ros_executor_->add_node(node_);
-    log.info("  [ROS2] Executor ready with node attached");
+    // Use MultiThreadedExecutor for parallel subscriber processing
+    executor_ = std::make_unique<rclcpp::executors::MultiThreadedExecutor>();
+    executor_->add_node(node_);
 
-    return true;
-}
-
-bool Agent::init_state() {
-    log.debug("Initializing shared state...");
-
-    capability_store_ = std::make_unique<CapabilityStore>();
-    execution_contexts_ = std::make_unique<ExecutionContextMap>();
-    inbound_queue_ = std::make_unique<InboundQueue>();
-    quic_outbound_queue_ = std::make_unique<QuicOutboundQueue>();
-    command_queue_ = std::make_unique<CommandQueue>();
-
+    log.info("ROS2 initialized (MultiThreadedExecutor)");
     return true;
 }
 
 bool Agent::init_transport() {
-    log.debug("Initializing transport...");
+    log.info("Initializing QUIC transport...");
 
-    // QUIC client configuration
-    const auto& quic_cfg = config_.server.quic;
-    transport::QUICConfig quic_config;
-    quic_config.idle_timeout = std::chrono::milliseconds(quic_cfg.idle_timeout_ms);
-    quic_config.keepalive_interval = std::chrono::milliseconds(quic_cfg.keepalive_interval_ms);
-    quic_config.handshake_timeout = std::chrono::milliseconds(quic_cfg.handshake_timeout_ms);
-    quic_config.enable_resumption = quic_cfg.enable_0rtt;
-    quic_config.enable_datagrams = quic_cfg.enable_datagrams;
-    quic_config.resumption_ticket_path = quic_cfg.resumption_ticket_path;
-    quic_config.max_bidi_streams = quic_cfg.max_bidi_streams;
-    quic_config.max_uni_streams = quic_cfg.max_uni_streams;
-    quic_config.alpn = quic_cfg.alpn;  // ALPN must match Go server
-
-    // QUIC is optional - try to initialize but don't fail if it doesn't work
-    quic_client_ = std::make_unique<transport::QUICClient>(quic_config);
-    quic_client_->set_connection_handler(
-        [this](bool connected) {
-            on_quic_connection_change(connected);
-        });
-
-    bool quic_ok = false;
-    if (!quic_cfg.ca_cert.empty() && !quic_cfg.client_cert.empty()) {
-        // Initialize with TLS certificates
-        if (quic_client_->initialize(
-                quic_cfg.ca_cert,
-                quic_cfg.client_cert,
-                quic_cfg.client_key)) {
-
-            // Try to connect (non-blocking attempt)
-            if (quic_client_->connect(quic_cfg.server_address, quic_cfg.server_port)) {
-                log.info("QUIC transport connected to {}:{}",
-                         quic_cfg.server_address, quic_cfg.server_port);
-                quic_ok = true;
-            } else {
-                log.warn("QUIC connection failed - running without QUIC transport");
-            }
-        } else {
-            log.warn("QUIC initialization failed - running without QUIC transport");
-        }
-    } else {
-        log.info("QUIC certificates not configured - skipping QUIC transport");
+    const auto& cfg = config_.server.quic;
+    if (cfg.ca_cert.empty()) {
+        log.info("QUIC certificates not configured - skipping");
+        return true;
     }
 
-    // Initialize QUIC outbound sender (handles sending queued messages to server)
-    if (quic_client_ && quic_outbound_queue_) {
-        transport::QUICOutboundSender::Config sender_config;
-        sender_config.poll_interval = std::chrono::milliseconds(10);
-        sender_config.max_retries = 3;
-        sender_config.retry_delay = std::chrono::milliseconds(100);
+    transport::QUICConfig quic_cfg;
+    quic_cfg.idle_timeout = std::chrono::milliseconds(cfg.idle_timeout_ms);
+    quic_cfg.keepalive_interval = std::chrono::milliseconds(cfg.keepalive_interval_ms);
+    quic_cfg.enable_resumption = cfg.enable_0rtt;
+    quic_cfg.alpn = cfg.alpn;
 
-        quic_outbound_sender_ = std::make_unique<transport::QUICOutboundSender>(
-            quic_client_.get(),
-            *quic_outbound_queue_,
-            effective_agent_id_,
-            sender_config);
+    quic_client_ = std::make_unique<transport::QUICClient>(quic_cfg);
+    quic_client_->set_connection_handler([this](bool c) { on_connection_change(c); });
 
-        // Set connection callback for outbound sender
-        quic_outbound_sender_->set_connection_callback(
-            [this](bool connected) {
-                on_quic_connection_change(connected);
-            });
-
-        // Notify sender if already connected
-        if (quic_ok) {
-            quic_outbound_sender_->notify_connected();
-        }
-
-        log.info("QUIC outbound sender initialized");
+    if (!quic_client_->initialize(cfg.ca_cert, cfg.client_cert, cfg.client_key)) {
+        log.warn("QUIC initialization failed");
+        quic_client_.reset();
+        return true;  // Continue without QUIC
     }
 
-    log.info("Transport initialized");
+    log.info("QUIC transport initialized");
+    return true;
+}
+
+bool Agent::init_state_management() {
+    log.info("Initializing state management...");
+
+    state_storage_ = std::make_unique<state::StateDefinitionStorage>(
+        config_.storage.state_definitions_path);
+    state_tracker_mgr_ = std::make_unique<state::StateTrackerManager>();
+    fleet_state_cache_ = std::make_unique<state::FleetStateCache>();
+
+    // Initialize tracker for this agent
+    auto tracker = state_tracker_mgr_->get_tracker(effective_agent_id_);
+    if (auto def = state_storage_->get_for_agent(effective_agent_id_)) {
+        tracker->configure(*def);
+    }
+
     return true;
 }
 
 bool Agent::init_components() {
-    log.debug("Initializing components...");
+    log.info("Initializing components...");
 
-    // Capability scanner - scan ALL action servers (no namespace filtering)
-    // This allows discovery of any action server in the ROS2 network
+    capability_store_ = std::make_unique<CapabilityStore>();
     capability_scanner_ = std::make_unique<capability::CapabilityScanner>(
         node_, "", *capability_store_);
 
-    // Graph storage
     graph_storage_ = std::make_unique<graph::GraphStorage>(
         config_.storage.action_graphs_path);
 
-    // Command processor (with state tracker integration)
-    command_processor_ = std::make_unique<executor::CommandProcessor>(
-        node_,
-        effective_agent_id_,
-        *inbound_queue_,
-        *quic_outbound_queue_,
-        *capability_store_,
-        *execution_contexts_,
-        *graph_storage_,
-        state_tracker_mgr_.get());
-
-    // Add robots to command processor
-    // In 1:1 model, agent is the robot - use effective_agent_id as robot_id
-    if (config_.robots.empty()) {
-        // 1:1 model: effective_agent_id is the robot_id
-        command_processor_->add_robot(effective_agent_id_, "");
-        log.info("1:1 model: registered agent {} as robot", effective_agent_id_);
-    } else {
-        for (const auto& robot : config_.robots) {
-            command_processor_->add_robot(robot.id, robot.ros_namespace);
-        }
-    }
-
-    log.info("Components initialized");
     return true;
 }
 
-void Agent::start_ros2() {
-    ros_thread_ = std::thread([this]() {
-        log.debug("ROS2 executor thread started");
-        ros_executor_->spin();
-        log.debug("ROS2 executor thread stopped");
-    });
-}
+bool Agent::init_telemetry() {
+    log.info("Initializing telemetry...");
 
-void Agent::start_heartbeat_thread() {
-    if (heartbeat_running_.load()) {
-        return;
-    }
+    telemetry_store_ = std::make_unique<telemetry::TelemetryStore>();
 
-    if (!quic_outbound_queue_) {
-        log.warn("Heartbeat sender disabled: outbound queue not initialized");
-        return;
-    }
+    TelemetryConfig tel_cfg;
+    tel_cfg.pose_rate_hz = 10.0;
+    tel_cfg.joint_state_rate_hz = 10.0;
+    tel_cfg.subscribe_tf = true;
 
-    heartbeat_running_.store(true);
-    heartbeat_thread_ = std::thread([this]() {
-        const auto interval = std::chrono::milliseconds(config_.communication.heartbeat_interval_ms);
-
-        while (heartbeat_running_.load() && FLEET_AGENT_RUNNING) {
-            auto loop_start = std::chrono::steady_clock::now();
-
-            auto msg = std::make_shared<fleet::v1::AgentMessage>();
-            msg->set_agent_id(effective_agent_id_);
-            msg->set_timestamp_ms(now_ms());
-
-            auto* heartbeat = msg->mutable_heartbeat();
-            heartbeat->set_agent_id(effective_agent_id_);
-
-            // Get execution state for this agent (1:1 model: agent_id = robot_id)
-            bool is_executing = false;
-            std::string current_action;
-            std::string current_task_id;
-            std::string current_step_id;
-
-            if (execution_contexts_) {
-                ExecutionContextMap::const_accessor acc;
-                if (execution_contexts_->find(acc, effective_agent_id_)) {
-                    const auto exec_state = acc->second.state.load();
-                    is_executing = (exec_state == RobotExecutionState::EXECUTING_ACTION ||
-                                    exec_state == RobotExecutionState::WAITING_RESULT);
-                    current_action = acc->second.current_action_type;
-                    current_task_id = acc->second.current_task_id;
-                    current_step_id = acc->second.current_step_id;
-                }
-            }
-
-            // Get state from tracker
-            std::string state_name = "idle";
-            if (state_tracker_mgr_) {
-                auto tracker = state_tracker_mgr_->get_tracker(effective_agent_id_);
-                if (tracker) {
-                    state_name = tracker->current_state();
-                }
-            }
-
-            log.debug("[Heartbeat] Agent {} state: {}, executing: {}",
-                     effective_agent_id_, state_name, is_executing);
-
-            heartbeat->set_state(state_name);
-            heartbeat->set_is_executing(is_executing);
-            if (!current_action.empty()) {
-                heartbeat->set_current_action(current_action);
-            }
-            if (!current_task_id.empty()) {
-                heartbeat->set_current_task_id(current_task_id);
-            }
-            if (!current_step_id.empty()) {
-                heartbeat->set_current_step_id(current_step_id);
-            }
-
-            OutboundMessage out;
-            out.message = msg;
-            out.created_at = std::chrono::steady_clock::now();
-            out.priority = 0;
-            quic_outbound_queue_->push(std::move(out));
-
-            auto elapsed = std::chrono::steady_clock::now() - loop_start;
-            auto sleep_time = interval - std::chrono::duration_cast<std::chrono::milliseconds>(elapsed);
-            if (sleep_time > std::chrono::milliseconds(0)) {
-                std::this_thread::sleep_for(sleep_time);
-            }
-        }
-    });
-}
-
-void Agent::stop_heartbeat_thread() {
-    if (!heartbeat_running_.load()) {
-        return;
-    }
-
-    heartbeat_running_.store(false);
-    if (heartbeat_thread_.joinable()) {
-        heartbeat_thread_.join();
-    }
-}
-
-void Agent::discover_capabilities() {
-    log.info("Discovering capabilities for {} robots...", config_.robots.size());
-
-    // Wait for ROS2 graph discovery to complete
-    // DDS discovery typically takes 1-3 seconds
-    log.info("Waiting for ROS2 graph discovery...");
-
-    const int max_wait_sec = 5;
-    const int poll_interval_ms = 500;
-    int waited_ms = 0;
-
-    while (waited_ms < max_wait_sec * 1000) {
-        // Check if any other nodes are discovered
-        auto node_names = node_->get_node_names();
-        // Exclude our own node
-        int other_nodes = 0;
-        for (const auto& name : node_names) {
-            if (name.find("fleet_agent") == std::string::npos) {
-                other_nodes++;
-            }
-        }
-
-        if (other_nodes > 0) {
-            log.info("ROS2 graph discovery complete: found {} other nodes after {}ms",
-                     other_nodes, waited_ms);
-            break;
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
-        waited_ms += poll_interval_ms;
-    }
-
-    if (waited_ms >= max_wait_sec * 1000) {
-        log.warn("ROS2 graph discovery timeout after {}s, proceeding anyway", max_wait_sec);
-    }
-
-    // Debug: Print what the node can see
-    log.info("=== DEBUG: ROS2 Graph State ===");
-
-    // List all nodes
-    auto all_nodes = node_->get_node_names();
-    log.info("Visible nodes ({}):", all_nodes.size());
-    for (const auto& n : all_nodes) {
-        log.info("  - {}", n);
-    }
-
-    // List all topics
-    auto all_topics = node_->get_topic_names_and_types();
-    log.info("Visible topics ({}):", all_topics.size());
-    for (const auto& [topic, types] : all_topics) {
-        for (const auto& t : types) {
-            log.info("  - {} [{}]", topic, t);
-        }
-    }
-
-    // List all services (including hidden)
-    auto all_services = node_->get_service_names_and_types();
-    log.info("Visible services ({}):", all_services.size());
-    int action_services = 0;
-    for (const auto& [service, types] : all_services) {
-        if (service.find("_action") != std::string::npos) {
-            action_services++;
-            for (const auto& t : types) {
-                log.info("  - {} [{}]", service, t);
-            }
-        }
-    }
-    log.info("Action-related services: {}", action_services);
-
-    log.info("=== END DEBUG ===");
-
-    robot_capabilities_.clear();
-
-    // Scan all action servers visible to this agent
-    int discovered = capability_scanner_->scan_all();
-    log.info("Discovered {} total capabilities", discovered);
-
-    // Get all discovered capabilities (no namespace filtering - agent-based)
-    auto all_caps = capability_scanner_->get_all();
-    auto available_caps = capability_scanner_->get_for_registration();
-
-    // Store capabilities for local use (keyed by first robot for backwards compatibility)
-    if (!config_.robots.empty()) {
-        robot_capabilities_[config_.robots[0].id] = all_caps;
-    }
-
-    log.info("Agent {} has {} capabilities (available: {})",
-             effective_agent_id_, all_caps.size(), available_caps.size());
-
-    // Register ALL capabilities under agent_id (not per-robot)
-    if (capability_registrar_ && quic_client_ && quic_client_->is_connected()) {
-        // Use effective_agent_id for registration (server will store in agent_capabilities table)
-        if (capability_registrar_->register_capabilities(effective_agent_id_, available_caps)) {
-            log.info("Registered {} capabilities for agent {} via QUIC",
-                     available_caps.size(), effective_agent_id_);
-        } else {
-            log.warn("Failed to register capabilities for agent {} via QUIC",
-                     effective_agent_id_);
-        }
-    }
-}
-
-bool Agent::register_with_server() {
-    if (!quic_client_ || !quic_client_->is_connected()) {
-        log.warn("QUIC not connected - skipping registration");
-        return false;
-    }
-
-    log.info("Registering agent with central server via QUIC");
-
-    // Build RegisterAgentRequest protobuf message (1:1 model: agent = robot)
-    fleet::v1::RegisterAgentRequest request;
-
-    // Send effective_agent_id (may be empty for server assignment)
-    request.set_agent_id(effective_agent_id_);
-    request.set_name(config_.agent_name);
-    request.set_client_version("1.0.0");
-
-    // Always send hardware fingerprint for ID recovery
-    if (!hardware_fingerprint_.empty()) {
-        request.set_hardware_fingerprint(hardware_fingerprint_);
-    }
-
-    // Set namespace (use agent's ros_namespace or fallback to first robot's namespace)
+    // Create collector (1:1 model - agent is the robot)
     std::string ns = config_.ros_namespace;
     if (ns.empty() && !config_.robots.empty()) {
         ns = config_.robots[0].ros_namespace;
     }
-    if (!ns.empty()) {
-        request.set_namespace_(ns);
+
+    auto collector = std::make_unique<telemetry::RobotTelemetryCollector>(
+        node_, effective_agent_id_, ns, tel_cfg, *telemetry_store_);
+    telemetry_collectors_.push_back(std::move(collector));
+
+    return true;
+}
+
+void Agent::setup_shutdown_handler() {
+    ShutdownHandler::instance().register_callback([this]() {
+        log.info("Shutdown signal received");
+        if (executor_) executor_->cancel();
+    });
+}
+
+// ============================================================
+// Timer Callbacks
+// ============================================================
+
+void Agent::tick() {
+    static int tick_count = 0;
+    tick_count++;
+    CLOG_INFO_THROTTLE(log, 30.0, "[tick] count={} connected={} queue_size={}",
+                       tick_count, connected_.load(), outbound_queue_.unsafe_size());
+
+    // 1. Poll QUIC for incoming data
+    poll_quic_receive();
+
+    // 2. Poll all action clients for responses
+    poll_all_clients();
+
+    // 3. Process current task (if any)
+    process_task();
+
+    // 4. Flush outbound messages directly (sender_thread disabled for debugging)
+    flush_outbound();
+}
+
+void Agent::send_heartbeat() {
+    auto msg = std::make_shared<fleet::v1::AgentMessage>();
+    msg->set_agent_id(effective_agent_id_);
+    msg->set_timestamp_ms(now_ms());
+
+    auto* hb = msg->mutable_heartbeat();
+    hb->set_agent_id(effective_agent_id_);
+
+    // Get state from tracker
+    std::string state_name = "idle";
+    if (state_tracker_mgr_) {
+        if (auto tracker = state_tracker_mgr_->get_tracker(effective_agent_id_)) {
+            state_name = tracker->current_state();
+        }
     }
 
-    // Serialize to bytes
-    std::string serialized;
-    if (!request.SerializeToString(&serialized)) {
-        log.error("Failed to serialize RegisterAgentRequest");
+    hb->set_state(state_name);
+
+    // Read exec_state atomically (lock-free)
+    bool is_exec = exec_state_.is_executing.load(std::memory_order_acquire);
+    auto action_type = std::atomic_load(&exec_state_.action_type);
+    auto task_id = std::atomic_load(&exec_state_.task_id);
+    auto step_id = std::atomic_load(&exec_state_.step_id);
+
+    hb->set_is_executing(is_exec);
+    if (!action_type->empty()) hb->set_current_action(*action_type);
+    if (!task_id->empty()) hb->set_current_task_id(*task_id);
+    if (!step_id->empty()) hb->set_current_step_id(*step_id);
+
+    // Add telemetry
+    bool has_tel = false;
+    if (telemetry_store_) {
+        auto snapshot = telemetry_store_->get(effective_agent_id_);
+        if (snapshot && snapshot->has_data()) {
+            has_tel = true;
+            auto* tel = hb->mutable_telemetry();
+            tel->set_robot_id(effective_agent_id_);
+
+            if (snapshot->joint_state) {
+                auto* js = tel->mutable_joint_state();
+                for (const auto& n : snapshot->joint_state->name) js->add_name(n);
+                for (auto p : snapshot->joint_state->position) js->add_position(p);
+                for (auto v : snapshot->joint_state->velocity) js->add_velocity(v);
+                for (auto e : snapshot->joint_state->effort) js->add_effort(e);
+            }
+
+            if (snapshot->odometry) {
+                auto* od = tel->mutable_odometry();
+                od->set_frame_id(snapshot->odometry->header.frame_id);
+                od->set_child_frame_id(snapshot->odometry->child_frame_id);
+                od->set_topic_name(snapshot->odometry_topic);
+
+                // Pose
+                auto* pose = od->mutable_pose();
+                pose->mutable_position()->set_x(snapshot->odometry->pose.pose.position.x);
+                pose->mutable_position()->set_y(snapshot->odometry->pose.pose.position.y);
+                pose->mutable_position()->set_z(snapshot->odometry->pose.pose.position.z);
+                pose->mutable_orientation()->set_x(snapshot->odometry->pose.pose.orientation.x);
+                pose->mutable_orientation()->set_y(snapshot->odometry->pose.pose.orientation.y);
+                pose->mutable_orientation()->set_z(snapshot->odometry->pose.pose.orientation.z);
+                pose->mutable_orientation()->set_w(snapshot->odometry->pose.pose.orientation.w);
+
+                // Twist (velocity)
+                auto* twist = od->mutable_twist();
+                twist->mutable_linear()->set_x(snapshot->odometry->twist.twist.linear.x);
+                twist->mutable_linear()->set_y(snapshot->odometry->twist.twist.linear.y);
+                twist->mutable_linear()->set_z(snapshot->odometry->twist.twist.linear.z);
+                twist->mutable_angular()->set_x(snapshot->odometry->twist.twist.angular.x);
+                twist->mutable_angular()->set_y(snapshot->odometry->twist.twist.angular.y);
+                twist->mutable_angular()->set_z(snapshot->odometry->twist.twist.angular.z);
+            }
+
+            // Transforms
+            for (const auto& [frame_id, tf] : snapshot->transforms) {
+                auto* tf_data = tel->add_transforms();
+                tf_data->set_frame_id(tf.header.frame_id);
+                tf_data->set_child_frame_id(tf.child_frame_id);
+                tf_data->mutable_translation()->set_x(tf.transform.translation.x);
+                tf_data->mutable_translation()->set_y(tf.transform.translation.y);
+                tf_data->mutable_translation()->set_z(tf.transform.translation.z);
+                tf_data->mutable_rotation()->set_x(tf.transform.rotation.x);
+                tf_data->mutable_rotation()->set_y(tf.transform.rotation.y);
+                tf_data->mutable_rotation()->set_z(tf.transform.rotation.z);
+                tf_data->mutable_rotation()->set_w(tf.transform.rotation.w);
+            }
+        }
+    }
+
+    // Log heartbeat summary (throttled: every 10 seconds)
+    CLOG_INFO_THROTTLE(log, 10.0, "[Heartbeat] state={} exec={} task={} step={} tel={}",
+                       state_name, is_exec,
+                       task_id->empty() ? "-" : task_id->substr(0, 8),
+                       step_id->empty() ? "-" : *step_id,
+                       has_tel);
+
+    queue_message(msg);
+}
+
+void Agent::slow_tick() {
+    // Update lifecycle states for all capabilities
+    if (capability_scanner_) {
+        capability_scanner_->update_lifecycle_states();
+    }
+
+    // Capability scan
+    if (capability_scanner_) {
+        int changes = capability_scanner_->refresh();
+        if (changes > 0) {
+            log.info("Detected {} capability changes", changes);
+            send_capabilities();
+        }
+    }
+
+    // Reconnection check
+    if (quic_client_ && !connected_) {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - last_reconnect_attempt_).count();
+
+        if (elapsed >= reconnect_delay_ms_) {
+            log.info("Attempting reconnection (delay: {}ms)", reconnect_delay_ms_);
+            last_reconnect_attempt_ = now;
+
+            if (try_connect()) {
+                register_with_server();
+                send_capabilities();
+                reconnect_delay_ms_ = 1000;  // Reset backoff
+            } else {
+                reconnect_delay_ms_ = std::min(reconnect_delay_ms_ * 2, 30000);
+            }
+        }
+    }
+}
+
+// ============================================================
+// QUIC Communication
+// ============================================================
+
+void Agent::poll_quic_receive() {
+    // MsQuic uses callback-based receiving - data arrives via on_quic_data()
+    // No manual polling needed; this function is a no-op for tick-based design
+    // The QUIC callbacks are processed by MsQuic's internal thread
+}
+
+void Agent::flush_outbound() {
+    static int flush_log_count = 0;
+    flush_log_count++;
+
+    if (!quic_client_ || !connected_) {
+        if (flush_log_count % 100 == 1) {
+            log.warn("[flush] Skip: quic={} connected={} queue_size=?",
+                     quic_client_ != nullptr, connected_.load());
+        }
+        return;
+    }
+
+    if (outbound_queue_.empty()) {
+        return;
+    }
+
+    // Get or create persistent stream for outbound messages
+    if (!outbound_stream_ || !outbound_stream_->is_open()) {
+        outbound_stream_ = quic_client_->get_stream();
+        if (!outbound_stream_) {
+            log.warn("[flush] Failed to get stream");
+            return;
+        }
+        log.info("[flush] Created outbound stream");
+    }
+
+    int sent_count = 0;
+    std::shared_ptr<fleet::v1::AgentMessage> msg;
+    while (outbound_queue_.try_pop(msg)) {
+        std::string serialized;
+        if (!msg->SerializeToString(&serialized)) {
+            log.warn("[flush] Failed to serialize message");
+            continue;
+        }
+
+        // Length-prefix framing
+        std::vector<uint8_t> data;
+        data.reserve(4 + serialized.size());
+        uint32_t len = static_cast<uint32_t>(serialized.size());
+        data.push_back((len >> 24) & 0xFF);
+        data.push_back((len >> 16) & 0xFF);
+        data.push_back((len >> 8) & 0xFF);
+        data.push_back(len & 0xFF);
+        data.insert(data.end(), serialized.begin(), serialized.end());
+
+        if (!outbound_stream_->write_async(data.data(), data.size(), false)) {
+            log.warn("[flush] Failed to write to stream, will recreate");
+            outbound_stream_.reset();
+            outbound_queue_.push(msg);
+            break;
+        }
+        sent_count++;
+    }
+
+    if (sent_count > 0) {
+        static int total_sent = 0;
+        total_sent += sent_count;
+        CLOG_INFO_THROTTLE(log, 30.0, "[flush] total_sent={} (last_batch={})",
+                           total_sent, sent_count);
+    }
+}
+
+void Agent::queue_message(std::shared_ptr<fleet::v1::AgentMessage> msg) {
+    outbound_queue_.push(std::move(msg));
+    // Wake up sender thread
+    sender_cv_.notify_one();
+}
+
+void Agent::start_sender_thread() {
+    sender_running_ = true;
+    sender_thread_ = std::thread(&Agent::sender_loop, this);
+    log.info("Sender thread started");
+}
+
+void Agent::stop_sender_thread() {
+    sender_running_ = false;
+    sender_cv_.notify_all();
+    if (sender_thread_.joinable()) {
+        sender_thread_.join();
+    }
+    log.info("Sender thread stopped");
+}
+
+void Agent::sender_loop() {
+    log.info("[SenderThread] ===== STARTED =====");
+
+    int loop_count = 0;
+    int skip_count = 0;
+    while (sender_running_) {
+        // Wait for messages or shutdown
+        {
+            std::unique_lock<std::mutex> lock(sender_mutex_);
+            sender_cv_.wait_for(lock, std::chrono::milliseconds(10), [this] {
+                return !sender_running_ || !outbound_queue_.empty();
+            });
+        }
+
+        if (!sender_running_) break;
+
+        loop_count++;
+
+        // Log frequently at startup, then every 100 iterations
+        bool should_log = (loop_count <= 10) || (loop_count % 100 == 0);
+        if (should_log) {
+            log.info("[SenderThread] loop={} quic={} connected={} queue_size={}",
+                     loop_count, quic_client_ != nullptr, connected_.load(),
+                     outbound_queue_.unsafe_size());
+        }
+
+        // Check connection
+        if (!quic_client_ || !connected_) {
+            skip_count++;
+            if (skip_count % 100 == 1 && !outbound_queue_.empty()) {
+                log.warn("[SenderThread] Skipping - no connection (quic={}, connected={}), queue_size={}",
+                         quic_client_ != nullptr, connected_.load(), outbound_queue_.unsafe_size());
+            }
+            continue;
+        }
+        skip_count = 0;  // Reset when connected
+
+        // Get or create stream
+        if (!outbound_stream_ || !outbound_stream_->is_open()) {
+            outbound_stream_ = quic_client_->get_stream();
+            if (!outbound_stream_) {
+                log.warn("[SenderThread] Failed to get stream");
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
+            log.info("[SenderThread] Created outbound stream");
+        }
+
+        // Drain queue
+        int sent_count = 0;
+        std::shared_ptr<fleet::v1::AgentMessage> msg;
+        while (outbound_queue_.try_pop(msg)) {
+            std::string serialized;
+            if (!msg->SerializeToString(&serialized)) {
+                log.warn("[SenderThread] Failed to serialize");
+                continue;
+            }
+
+            // Length-prefix framing
+            std::vector<uint8_t> data;
+            data.reserve(4 + serialized.size());
+            uint32_t len = static_cast<uint32_t>(serialized.size());
+            data.push_back((len >> 24) & 0xFF);
+            data.push_back((len >> 16) & 0xFF);
+            data.push_back((len >> 8) & 0xFF);
+            data.push_back(len & 0xFF);
+            data.insert(data.end(), serialized.begin(), serialized.end());
+
+            if (!outbound_stream_->write_async(data.data(), data.size(), false)) {
+                log.warn("[SenderThread] Write failed, recreating stream");
+                outbound_stream_.reset();
+                outbound_queue_.push(msg);  // Requeue
+                break;
+            }
+            sent_count++;
+        }
+
+        if (sent_count > 0) {
+            log.info("[SenderThread] Sent {} messages", sent_count);
+        }
+    }
+
+    log.info("[SenderThread] ===== STOPPED =====");
+}
+
+void Agent::on_quic_data(const uint8_t* data, size_t len) {
+    std::lock_guard<std::mutex> lock(inbound_mutex_);
+    inbound_buffer_.insert(inbound_buffer_.end(), data, data + len);
+
+    // Process complete messages
+    while (true) {
+        if (expected_msg_len_ == 0) {
+            if (inbound_buffer_.size() < 4) break;
+
+            expected_msg_len_ =
+                (static_cast<uint32_t>(inbound_buffer_[0]) << 24) |
+                (static_cast<uint32_t>(inbound_buffer_[1]) << 16) |
+                (static_cast<uint32_t>(inbound_buffer_[2]) << 8) |
+                static_cast<uint32_t>(inbound_buffer_[3]);
+
+            inbound_buffer_.erase(inbound_buffer_.begin(), inbound_buffer_.begin() + 4);
+
+            if (expected_msg_len_ > kMaxMessageBytes) {
+                log.error("Message too large: {} bytes", expected_msg_len_);
+                inbound_buffer_.clear();
+                expected_msg_len_ = 0;
+                break;
+            }
+        }
+
+        if (inbound_buffer_.size() < expected_msg_len_) break;
+
+        on_complete_message(inbound_buffer_.data(), expected_msg_len_);
+        inbound_buffer_.erase(inbound_buffer_.begin(),
+                               inbound_buffer_.begin() + expected_msg_len_);
+        expected_msg_len_ = 0;
+    }
+}
+
+void Agent::on_complete_message(const uint8_t* data, size_t len) {
+    fleet::v1::ServerMessage msg;
+    if (!msg.ParseFromArray(data, static_cast<int>(len))) {
+        log.error("Failed to parse ServerMessage");
+        return;
+    }
+    on_server_message(msg);
+}
+
+void Agent::on_server_message(const fleet::v1::ServerMessage& msg) {
+    if (msg.has_start_task()) {
+        const auto& cmd = msg.start_task();
+        std::unordered_map<std::string, std::string> params;
+        for (const auto& [k, v] : cmd.params()) {
+            params[k] = v;
+        }
+        handle_start_task(cmd.task_id(), cmd.graph_id(), params);
+    }
+    else if (msg.has_cancel()) {
+        handle_cancel_task(msg.cancel().task_id(), msg.cancel().reason());
+    }
+    else if (msg.has_deploy_graph()) {
+        handle_deploy_graph(msg.deploy_graph());
+    }
+    else if (msg.has_ping()) {
+        handle_ping(msg.ping().ping_id(), msg.ping().timestamp_ms());
+    }
+    else if (msg.has_fleet_state()) {
+        std::unordered_map<std::string, std::string> states;
+        std::unordered_map<std::string, bool> executing;
+        for (const auto& as : msg.fleet_state().agents()) {
+            states[as.agent_id()] = as.state();
+            executing[as.agent_id()] = as.is_executing();
+        }
+        handle_fleet_state(states, executing);
+    }
+}
+
+void Agent::on_connection_change(bool connected) {
+    connected_ = connected;
+    if (connected) {
+        log.info("QUIC connected");
+        reconnect_delay_ms_ = 1000;
+    } else {
+        log.warn("QUIC disconnected");
+        // Reset persistent stream on disconnect
+        outbound_stream_.reset();
+    }
+}
+
+bool Agent::try_connect() {
+    if (!quic_client_) return false;
+
+    const auto& cfg = config_.server.quic;
+    quic_client_->disconnect();
+
+    if (!quic_client_->connect(cfg.server_address, cfg.server_port)) {
         return false;
     }
 
-    // Build length-prefixed message (4-byte big-endian length + data)
+    setup_quic_handler();
+    connected_ = true;
+    log.info("Connected to {}:{}", cfg.server_address, cfg.server_port);
+    return true;
+}
+
+bool Agent::register_with_server() {
+    if (!quic_client_ || !connected_) return false;
+
+    log.info("Registering with server...");
+
+    fleet::v1::RegisterAgentRequest req;
+    req.set_agent_id("");  // Let server assign
+    req.set_name(config_.agent_name);
+    req.set_hardware_fingerprint(hardware_fingerprint_);
+
+    std::string serialized;
+    req.SerializeToString(&serialized);
+
     std::vector<uint8_t> data;
     data.reserve(4 + serialized.size());
-
     uint32_t len = static_cast<uint32_t>(serialized.size());
-    data.push_back(static_cast<uint8_t>((len >> 24) & 0xFF));
-    data.push_back(static_cast<uint8_t>((len >> 16) & 0xFF));
-    data.push_back(static_cast<uint8_t>((len >> 8) & 0xFF));
-    data.push_back(static_cast<uint8_t>(len & 0xFF));
+    data.push_back((len >> 24) & 0xFF);
+    data.push_back((len >> 16) & 0xFF);
+    data.push_back((len >> 8) & 0xFF);
+    data.push_back(len & 0xFF);
     data.insert(data.end(), serialized.begin(), serialized.end());
 
-    // Get a QUIC stream
     auto stream = quic_client_->get_stream();
-    if (!stream) {
-        log.error("Failed to get QUIC stream for registration");
+    if (!stream || !stream->write(data.data(), data.size(), false)) {
+        log.error("Failed to send registration");
         return false;
     }
 
-    // Send via stream (keep stream open to receive response)
-    if (!stream->write(data.data(), data.size(), false)) {
-        log.error("Failed to send RegisterAgentRequest via QUIC stream");
-        stream->close();
-        return false;
-    }
+    // Wait for response (blocking with timeout)
+    std::vector<uint8_t> resp_buf;
+    bool received = false;
 
-    // Wait for RegisterAgentResponse (with timeout)
-    std::vector<uint8_t> response_buffer;
-    std::mutex response_mutex;
-    std::condition_variable response_cv;
-    bool response_received = false;
-
-    stream->set_data_callback([&](const uint8_t* recv_data, size_t recv_len, bool fin) {
-        std::lock_guard<std::mutex> lock(response_mutex);
-        response_buffer.insert(response_buffer.end(), recv_data, recv_data + recv_len);
-        if (response_buffer.size() >= 4) {
-            uint32_t expected_len = (static_cast<uint32_t>(response_buffer[0]) << 24) |
-                                    (static_cast<uint32_t>(response_buffer[1]) << 16) |
-                                    (static_cast<uint32_t>(response_buffer[2]) << 8) |
-                                    static_cast<uint32_t>(response_buffer[3]);
-            if (response_buffer.size() >= 4 + expected_len) {
-                response_received = true;
-                response_cv.notify_one();
+    stream->set_data_callback([&](const uint8_t* d, size_t l, bool) {
+        resp_buf.insert(resp_buf.end(), d, d + l);
+        if (resp_buf.size() >= 4) {
+            uint32_t exp_len = (resp_buf[0] << 24) | (resp_buf[1] << 16) |
+                               (resp_buf[2] << 8) | resp_buf[3];
+            if (resp_buf.size() >= 4 + exp_len) {
+                received = true;
             }
         }
     });
 
-    // Wait for response (5 second timeout)
-    {
-        std::unique_lock<std::mutex> lock(response_mutex);
-        response_cv.wait_for(lock, std::chrono::seconds(5), [&] { return response_received; });
+    // Simple polling wait
+    for (int i = 0; i < 50 && !received; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
     stream->close();
 
-    if (!response_received || response_buffer.size() < 4) {
-        log.error("Timeout waiting for RegisterAgentResponse");
+    if (!received || resp_buf.size() < 4) {
+        log.error("Registration timeout");
         return false;
     }
 
-    // Parse response
-    uint32_t resp_len = (static_cast<uint32_t>(response_buffer[0]) << 24) |
-                        (static_cast<uint32_t>(response_buffer[1]) << 16) |
-                        (static_cast<uint32_t>(response_buffer[2]) << 8) |
-                        static_cast<uint32_t>(response_buffer[3]);
+    uint32_t resp_len = (resp_buf[0] << 24) | (resp_buf[1] << 16) |
+                        (resp_buf[2] << 8) | resp_buf[3];
 
-    if (response_buffer.size() < 4 + resp_len) {
-        log.error("Incomplete RegisterAgentResponse");
+    fleet::v1::RegisterAgentResponse resp;
+    if (!resp.ParseFromArray(resp_buf.data() + 4, resp_len)) {
+        log.error("Failed to parse registration response");
         return false;
     }
 
-    fleet::v1::RegisterAgentResponse response;
-    if (!response.ParseFromArray(response_buffer.data() + 4, static_cast<int>(resp_len))) {
-        log.error("Failed to parse RegisterAgentResponse");
+    if (!resp.success()) {
+        log.error("Registration rejected: {}", resp.error());
         return false;
     }
 
-    if (!response.success()) {
-        log.error("Server rejected registration: {}", response.error());
-        return false;
-    }
+    if (!resp.assigned_agent_id().empty()) {
+        std::string old_id = effective_agent_id_;
+        effective_agent_id_ = resp.assigned_agent_id();
+        agent_id_storage_->save(effective_agent_id_);
+        log.info("Server assigned ID: {}", effective_agent_id_);
 
-    // Handle server-assigned ID
-    if (response.id_was_assigned() && !response.assigned_agent_id().empty()) {
-        effective_agent_id_ = response.assigned_agent_id();
-        log.info("Server assigned agent ID: {}", effective_agent_id_);
-
-        // Persist the assigned ID
-        if (agent_id_storage_->save(effective_agent_id_)) {
-            log.info("Saved server-assigned ID to {}", config_.storage.agent_id_path);
-        } else {
-            log.warn("Failed to save server-assigned ID - will request again on restart");
+        // Update telemetry collectors to use the new ID
+        // This ensures telemetry is stored/retrieved under the correct ID
+        for (auto& collector : telemetry_collectors_) {
+            collector->set_robot_id(effective_agent_id_);
         }
+        log.info("Updated {} telemetry collector(s) with new ID", telemetry_collectors_.size());
     }
 
-    log.info("Agent registration successful via QUIC: {} with {} robots",
-             effective_agent_id_, config_.robots.size());
     return true;
 }
 
-void Agent::on_server_message(const fleet::v1::ServerMessage& message) {
-    log.debug("Received server message");
-
-    // Use MessageHandler for all message types
-    if (message_handler_) {
-        auto result = message_handler_->handle(message);
-        if (!result.success) {
-            log.error("Failed to handle server message: {}", result.error);
-        }
-        return;
-    }
-
-    // Fallback to direct handling if MessageHandler not initialized
-    // Route to command processor via inbound queue
-    if (message.has_execute()) {
-        InboundCommand inbound;
-        inbound.message_id = message.message_id();
-        inbound.received_at = std::chrono::steady_clock::now();
-        inbound.message = std::make_shared<fleet::v1::ServerMessage>(message);
-        inbound_queue_->push(std::move(inbound));
-    } else if (message.has_deploy_graph()) {
-        // Handle graph deployment
-        const auto& deploy = message.deploy_graph();
-        if (graph_storage_->store(deploy.graph())) {
-            log.info("Stored action graph: {}", deploy.graph().metadata().id());
-        } else {
-            log.error("Failed to store action graph");
-        }
-    }
-}
-
-void Agent::on_quic_connection_change(bool connected) {
-    if (connected) {
-        log.info("QUIC connected to central server");
-        // Clear connection lost flag
-        connection_lost_.store(false);
-
-        // Notify outbound sender that connection is available
-        if (quic_outbound_sender_) {
-            quic_outbound_sender_->notify_connected();
-        }
-
-        // Avoid heavy work in MsQuic callback thread; reconnect loop will resync.
-    } else {
-        log.warn("QUIC disconnected from central server");
-
-        // Notify outbound sender that connection is lost
-        if (quic_outbound_sender_) {
-            quic_outbound_sender_->notify_disconnected();
-        }
-
-        // Signal reconnection thread
-        if (state_ == State::RUNNING) {
-            connection_lost_.store(true);
-            reconnect_cv_.notify_one();
-        }
-    }
-}
-
-void Agent::setup_quic_stream_handler() {
-    if (!quic_client_) {
-        return;
-    }
+void Agent::setup_quic_handler() {
+    if (!quic_client_) return;
 
     auto* conn = quic_client_->connection();
-    if (!conn) {
-        log.debug("QUIC connection not ready for stream handler");
-        return;
-    }
+    if (!conn) return;
 
     conn->set_stream_callback([this](std::shared_ptr<transport::QUICStream> stream) {
-        if (!stream) {
-            return;
+        stream->set_data_callback([this](const uint8_t* d, size_t l, bool) {
+            on_quic_data(d, l);
+        });
+    });
+}
+
+// ============================================================
+// Command Handling
+// ============================================================
+
+void Agent::handle_start_task(const std::string& task_id,
+                               const std::string& graph_id,
+                               const std::unordered_map<std::string, std::string>& params) {
+    log.info("Starting task: {} (graph: {})", task_id, graph_id);
+
+    if (current_task_) {
+        log.warn("Task already running: {}", current_task_->task_id);
+        return;
+    }
+
+    // Load graph
+    auto graph = graph_storage_->load(graph_id);
+    if (!graph) {
+        log.error("Graph not found: {}", graph_id);
+        return;
+    }
+
+    // Find entry point directly from loaded graph
+    std::string entry_point = graph->entry_point();
+    if (entry_point.empty() && graph->vertices_size() > 0) {
+        // Fallback: use first vertex
+        entry_point = graph->vertices(0).id();
+    }
+    if (entry_point.empty()) {
+        log.error("No entry point in graph (vertices={}, entry_point='{}')",
+                  graph->vertices_size(), graph->entry_point());
+        return;
+    }
+
+    log.info("Task entry point: {} (graph has {} vertices, {} edges)",
+             entry_point, graph->vertices_size(), graph->edges_size());
+
+    // Initialize task context
+    TaskContext ctx;
+    ctx.task_id = task_id;
+    ctx.graph_id = graph_id;
+    ctx.graph = std::make_unique<fleet::v1::ActionGraph>(*graph);
+    ctx.variables = params;
+    ctx.started_at = std::chrono::steady_clock::now();
+    ctx.status = TaskContext::Status::RUNNING;
+    ctx.current_step_id = entry_point;
+
+    current_task_ = std::move(ctx);
+
+    update_exec_state(true, "", task_id, entry_point);
+    send_task_state_update();
+}
+
+void Agent::handle_cancel_task(const std::string& task_id, const std::string& reason) {
+    log.info("Cancelling task: {} ({})", task_id, reason);
+
+    if (!current_task_ || current_task_->task_id != task_id) {
+        log.warn("Task not found: {}", task_id);
+        return;
+    }
+
+    // Cancel current action if any
+    if (current_task_->current_goal) {
+        // Find the action client and cancel
+        for (auto& [key, client] : action_clients_) {
+            client->cancel_goal(current_task_->current_goal);
         }
+    }
 
-        const auto stream_id = stream->id();
-        log.debug("Accepted QUIC stream {}", stream_id);
-
-        auto framer = std::make_shared<InboundMessageFramer>(
-            [this, stream_id](const uint8_t* data, size_t len) {
-                fleet::v1::ServerMessage message;
-                if (!message.ParseFromArray(data, static_cast<int>(len))) {
-                    log.error("Failed to parse ServerMessage from stream {}", stream_id);
-                    return;
-                }
-                on_server_message(message);
-            });
-
-        stream->set_data_callback([framer](const uint8_t* data, size_t len, bool fin) {
-            framer->on_data(data, len, fin);
-        });
-
-        stream->set_close_callback([stream_id](uint64_t error_code) {
-            if (error_code != 0) {
-                log.warn("QUIC stream {} closed with error {}", stream_id, error_code);
-            } else {
-                log.debug("QUIC stream {} closed", stream_id);
-            }
-        });
-    });
+    current_task_->status = TaskContext::Status::CANCELLED;
+    current_task_->error_message = reason;
+    complete_task(false, reason);
 }
 
-void Agent::setup_shutdown_handler() {
-    // ShutdownHandler is a singleton - just register our callback
-    ShutdownHandler::instance().register_callback([this]() {
-        log.info("Shutdown signal received");
-        stop();
-    });
-}
+void Agent::handle_deploy_graph(const fleet::v1::DeployGraphRequest& req) {
+    const auto& graph = req.graph();
+    const auto& correlation_id = req.correlation_id();
+    const auto& id = graph.metadata().id();
+    int32_t version = graph.metadata().version();
 
-bool Agent::init_state_management() {
-    log.debug("Initializing state management...");
+    log.info("Deploying graph: {} (correlation: {}, force: {})",
+             id, correlation_id, req.force());
 
-    // Create state definition storage
-    state_storage_ = std::make_unique<state::StateDefinitionStorage>(
-        config_.storage.state_definitions_path);
+    // Build response message
+    auto resp_msg = std::make_shared<fleet::v1::AgentMessage>();
+    resp_msg->set_agent_id(effective_agent_id_);
+    resp_msg->set_timestamp_ms(now_ms());
+    auto* resp = resp_msg->mutable_deploy_response();
+    resp->set_correlation_id(correlation_id);
+    resp->set_graph_id(id);
+    resp->set_deployed_version(version);
 
-    // Create state tracker manager
-    state_tracker_mgr_ = std::make_unique<state::StateTrackerManager>();
+    bool success = false;
+    if (graph_storage_) {
+        success = graph_storage_->store(graph);
+    }
 
-    // Set global state change callback for logging
-    state_tracker_mgr_->set_state_change_callback(
-        [this](const std::string& agent_id,
-               const std::string& old_state,
-               const std::string& new_state) {
-            log.debug("Robot {} state changed: {} -> {}", agent_id, old_state, new_state);
-        });
-
-    // Initialize state tracker for this agent
-    auto tracker = state_tracker_mgr_->get_tracker(effective_agent_id_);
-
-    // Try to load existing state definition for this agent
-    auto state_def = state_storage_->get_for_agent(effective_agent_id_);
-    if (state_def) {
-        tracker->configure(*state_def);
-        log.info("Loaded state definition for agent {}: {} (version {})",
-                 effective_agent_id_, state_def->id, state_def->version);
+    if (success) {
+        log.info("Graph stored successfully: {} v{}", id, version);
+        resp->set_success(true);
+        resp->set_checksum(graph.checksum());
     } else {
-        log.debug("No state definition found for agent {}, using defaults",
-                  effective_agent_id_);
+        log.error("Failed to store graph: {}", id);
+        resp->set_success(false);
+        resp->set_error("Failed to store graph");
     }
 
-    // Create fleet state cache for cross-agent coordination
-    fleet_state_cache_ = std::make_unique<state::FleetStateCache>();
-    log.debug("Fleet state cache initialized for cross-agent coordination");
-
-    log.info("State management initialized");
-    return true;
+    // Send response back to server
+    queue_message(resp_msg);
+    log.info("Deploy response sent for graph: {} success={}", id, success);
 }
 
-bool Agent::init_protocol() {
-    log.debug("Initializing protocol handlers...");
+void Agent::handle_ping(const std::string& ping_id, int64_t server_ts) {
+    auto msg = std::make_shared<fleet::v1::AgentMessage>();
+    msg->set_agent_id(effective_agent_id_);
+    msg->set_timestamp_ms(now_ms());
 
-    // Create message handler with dependencies
-    protocol::MessageHandler::Dependencies deps;
-    deps.quic_client = quic_client_.get();
-    deps.state_storage = state_storage_.get();
-    deps.state_tracker_mgr = state_tracker_mgr_.get();
-    deps.fleet_state_cache = fleet_state_cache_.get();
-    deps.graph_storage = graph_storage_.get();
-    deps.command_processor = command_processor_.get();
-    deps.command_queue = command_queue_.get();
-    deps.quic_outbound_queue = quic_outbound_queue_.get();
-    deps.agent_id = effective_agent_id_;
+    auto* pong = msg->mutable_pong();
+    pong->set_ping_id(ping_id);
+    pong->set_server_timestamp_ms(server_ts);
+    pong->set_agent_timestamp_ms(now_ms());
 
-    message_handler_ = std::make_unique<protocol::MessageHandler>(deps);
-
-    // Create capability registrar
-    capability_registrar_ = std::make_unique<protocol::CapabilityRegistrar>(
-        quic_client_.get(), effective_agent_id_);
-
-    // Configure inbound QUIC stream handling for ServerMessage frames
-    setup_quic_stream_handler();
-
-    log.info("Protocol handlers initialized");
-    return true;
+    queue_message(msg);
 }
 
-void Agent::start_capability_scan_thread() {
-    if (capability_scan_running_.load()) {
-        log.warn("Capability scan thread already running");
-        return;
-    }
-
-    capability_scan_running_.store(true);
-    capability_scan_thread_ = std::thread([this]() {
-        log.info("Capability scan thread started (1 second interval)");
-
-        while (capability_scan_running_.load()) {
-            // Sleep for 1 second
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-
-            if (!capability_scan_running_.load()) {
-                break;
-            }
-
-            // Refresh capability list
-            int changes = capability_scanner_->refresh();
-
-            if (changes > 0) {
-                log.info("Detected {} capability changes, re-registering...", changes);
-                on_capabilities_changed();
-            }
+void Agent::handle_fleet_state(const std::unordered_map<std::string, std::string>& states,
+                                const std::unordered_map<std::string, bool>& executing) {
+    if (fleet_state_cache_) {
+        for (const auto& [id, state_str] : states) {
+            state::FleetStateEntry entry;
+            entry.agent_id = id;
+            entry.state_code = state_str;
+            entry.is_executing = executing.count(id) ? executing.at(id) : false;
+            entry.is_online = true;
+            entry.updated_at = std::chrono::system_clock::now();
+            fleet_state_cache_->update(entry);
         }
-
-        log.info("Capability scan thread stopped");
-    });
-}
-
-void Agent::stop_capability_scan_thread() {
-    if (!capability_scan_running_.load()) {
-        return;
-    }
-
-    log.debug("Stopping capability scan thread...");
-    capability_scan_running_.store(false);
-
-    if (capability_scan_thread_.joinable()) {
-        capability_scan_thread_.join();
-    }
-
-    log.debug("Capability scan thread stopped");
-}
-
-void Agent::on_capabilities_changed() {
-    // Get updated capability list
-    auto all_caps = capability_scanner_->get_all();
-    auto available_caps = capability_scanner_->get_for_registration();
-
-    // Update robot_capabilities_ map (for local use)
-    if (!config_.robots.empty()) {
-        robot_capabilities_[config_.robots[0].id] = all_caps;
-    }
-
-    log.info("Agent {} capabilities changed: {} total (available: {})",
-             effective_agent_id_, all_caps.size(), available_caps.size());
-
-    // Re-register capabilities with server via QUIC (agent-based)
-    if (capability_registrar_ && quic_client_ && quic_client_->is_connected()) {
-        if (capability_registrar_->register_capabilities(effective_agent_id_, available_caps)) {
-            log.info("Re-registered {} capabilities for agent {} via QUIC",
-                     available_caps.size(), effective_agent_id_);
-        } else {
-            log.warn("Failed to re-register capabilities for agent {} via QUIC",
-                     effective_agent_id_);
-        }
-    } else {
-        log.warn("QUIC not connected - cannot re-register capabilities");
     }
 }
 
-void Agent::resync_capabilities() {
-    if (!capability_registrar_ || !capability_scanner_) {
-        log.warn("Capability registrar or scanner not ready - skipping resync");
-        return;
-    }
+// ============================================================
+// Task Execution
+// ============================================================
 
-    if (!quic_client_ || !quic_client_->is_connected()) {
-        log.warn("QUIC not connected - skipping capability resync");
-        return;
-    }
+void Agent::process_task() {
+    if (!current_task_) return;
 
-    auto available_caps = capability_scanner_->get_for_registration();
-    log.info("Resyncing {} capabilities after reconnect", available_caps.size());
+    auto& task = *current_task_;
 
-    if (!capability_registrar_->register_capabilities(effective_agent_id_, available_caps)) {
-        log.warn("Capability resync failed for agent {}", effective_agent_id_);
-    }
-}
-
-void Agent::start_reconnect_thread() {
-    if (reconnect_running_.load()) {
-        log.warn("Reconnect thread already running");
-        return;
-    }
-
-    reconnect_running_.store(true);
-    reconnect_thread_ = std::thread([this]() {
-        reconnect_loop();
-    });
-    log.info("Auto-reconnection thread started");
-}
-
-void Agent::stop_reconnect_thread() {
-    if (!reconnect_running_.load()) {
-        return;
-    }
-
-    log.debug("Stopping reconnect thread...");
-    reconnect_running_.store(false);
-
-    // Wake up the thread if it's waiting
-    {
-        std::lock_guard<std::mutex> lock(reconnect_mutex_);
-        connection_lost_.store(true);
-    }
-    reconnect_cv_.notify_one();
-
-    if (reconnect_thread_.joinable()) {
-        reconnect_thread_.join();
-    }
-    log.debug("Reconnect thread stopped");
-}
-
-void Agent::reconnect_loop() {
-    log.info("Reconnect loop started");
-
-    // Exponential backoff parameters
-    const int initial_delay_ms = 1000;    // Start with 1 second
-    const int max_delay_ms = 30000;       // Max 30 seconds
-    const double backoff_multiplier = 2.0;
-
-    int current_delay_ms = initial_delay_ms;
-
-    while (reconnect_running_.load()) {
-        // Wait for connection loss signal or periodic check
-        {
-            std::unique_lock<std::mutex> lock(reconnect_mutex_);
-            // Wait with timeout to allow periodic checking
-            reconnect_cv_.wait_for(lock, std::chrono::seconds(5), [this]() {
-                return connection_lost_.load() || !reconnect_running_.load();
-            });
-        }
-
-        // Check if we should stop
-        if (!reconnect_running_.load()) {
+    switch (task.status) {
+        case TaskContext::Status::RUNNING:
+            // Execute current step
+            execute_step(task.current_step_id);
             break;
-        }
 
-        // Skip if QUIC client doesn't exist
-        if (!quic_client_) {
-            log.debug("No QUIC client - skipping reconnection");
-            continue;
-        }
+        case TaskContext::Status::WAITING_ACTION:
+            // Waiting for action result - nothing to do (poll_all_clients handles it)
+            break;
 
-        if (!connection_lost_.load() && !quic_client_->is_connected()) {
-            connection_lost_.store(true);
-        }
-
-        // Check if reconnection is needed
-        if (!connection_lost_.load()) {
-            continue;
-        }
-
-        // Already connected?
-        if (quic_client_->is_connected()) {
-            connection_lost_.store(false);
-            current_delay_ms = initial_delay_ms;  // Reset backoff
-            continue;
-        }
-
-        // Attempt reconnection
-        log.info("Attempting reconnection (backoff: {}ms)...", current_delay_ms);
-
-        if (attempt_reconnect()) {
-            log.info("Reconnection successful!");
-            connection_lost_.store(false);
-            current_delay_ms = initial_delay_ms;  // Reset backoff on success
-
-            // Re-register with server
-            if (register_with_server()) {
-                log.info("Re-registered with server after reconnection");
-                resync_capabilities();
-            }
-        } else {
-            log.warn("Reconnection failed, next attempt in {}ms", current_delay_ms);
-
-            // Wait with exponential backoff before next attempt
-            {
-                std::unique_lock<std::mutex> lock(reconnect_mutex_);
-                reconnect_cv_.wait_for(lock, std::chrono::milliseconds(current_delay_ms), [this]() {
-                    return !reconnect_running_.load();
-                });
-            }
-
-            // Increase delay with exponential backoff
-            current_delay_ms = std::min(
-                static_cast<int>(current_delay_ms * backoff_multiplier),
-                max_delay_ms
-            );
-        }
+        case TaskContext::Status::COMPLETED:
+        case TaskContext::Status::FAILED:
+        case TaskContext::Status::CANCELLED:
+            // Task finished - clear it
+            current_task_.reset();
+            break;
     }
-
-    log.info("Reconnect loop stopped");
 }
 
-bool Agent::attempt_reconnect() {
-    if (!quic_client_) {
-        return false;
+void Agent::execute_step(const std::string& step_id) {
+    auto& task = *current_task_;
+
+    auto vertex = find_vertex(step_id);
+    if (!vertex) {
+        log.error("Vertex not found: {}", step_id);
+        complete_task(false, "Vertex not found: " + step_id);
+        return;
     }
 
-    const auto& quic_cfg = config_.server.quic;
-
-    // Disconnect any existing connection first
-    quic_client_->disconnect();
-
-    // Small delay to ensure clean disconnect
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-    // Try to connect
-    if (quic_client_->connect(quic_cfg.server_address, quic_cfg.server_port)) {
-        setup_quic_stream_handler();
-
-        log.info("QUIC reconnected to {}:{}", quic_cfg.server_address, quic_cfg.server_port);
-        return true;
+    // Check if this is a terminal vertex
+    if (vertex->type() == fleet::v1::VERTEX_TYPE_TERMINAL) {
+        if (vertex->has_terminal()) {
+            auto terminal_type = vertex->terminal().terminal_type();
+            if (terminal_type == fleet::v1::TERMINAL_TYPE_SUCCESS) {
+                complete_task(true);
+                return;
+            } else if (terminal_type == fleet::v1::TERMINAL_TYPE_FAILURE) {
+                complete_task(false, "Reached failure end");
+                return;
+            }
+        }
+        complete_task(true);  // Default to success for unknown terminal types
+        return;
     }
 
-    return false;
+    // Execute action
+    if (!vertex->has_step() || !vertex->step().has_action()) {
+        log.error("Vertex {} has no action", step_id);
+        complete_task(false, "No action in vertex");
+        return;
+    }
+
+    const auto& step = vertex->step();
+    const auto& action = step.action();
+    const auto& action_type = action.action_type();
+    const auto& server = action.action_server();
+
+    log.info("Executing step: {} (action: {}, server: {})", step_id, action_type, server);
+
+    // Apply during_states to state tracker
+    if (step.during_states_size() > 0 && state_tracker_mgr_) {
+        if (auto tracker = state_tracker_mgr_->get_tracker(effective_agent_id_)) {
+            std::string during_state = step.during_states(0);  // Use first during_state
+            tracker->force_state(during_state, "step_start");
+            log.info("Applied during_state: {}", during_state);
+        }
+    }
+
+    // Get or create action client
+    auto* client = get_or_create_client(action_type, server);
+    if (!client) {
+        log.error("Failed to get action client for {}", action_type);
+        complete_task(false, "Failed to create action client");
+        return;
+    }
+
+    // Build goal from parameters (goal_params is bytes, need to convert)
+    nlohmann::json goal_json;
+    const auto& goal_params = action.goal_params();
+    if (!goal_params.empty()) {
+        try {
+            goal_json = nlohmann::json::parse(
+                std::string(goal_params.begin(), goal_params.end()));
+        } catch (...) {
+            log.warn("Failed to parse action goal_params as JSON");
+        }
+    }
+
+    // Variable substitution
+    for (auto& [key, value] : goal_json.items()) {
+        if (value.is_string()) {
+            std::string s = value.get<std::string>();
+            // Simple variable substitution: ${step_id.field}
+            if (s.length() > 3 && s[0] == '$' && s[1] == '{' && s.back() == '}') {
+                std::string var_name = s.substr(2, s.length() - 3);
+                if (task.variables.count(var_name)) {
+                    try {
+                        goal_json[key] = nlohmann::json::parse(task.variables[var_name]);
+                    } catch (...) {
+                        goal_json[key] = task.variables[var_name];
+                    }
+                }
+            }
+        }
+    }
+
+    // Send goal
+    task.current_action_type = action_type;
+    update_exec_state(true, action_type, task.task_id, step_id);
+
+    auto goal_handle = client->send_goal(
+        goal_json.dump(),
+        [this](bool success, const std::string& result) {
+            on_action_result(success, result);
+        },
+        nullptr  // No feedback callback for simplicity
+    );
+
+    if (!goal_handle) {
+        log.error("Failed to send goal");
+        complete_task(false, "Failed to send action goal");
+        return;
+    }
+
+    task.current_goal = goal_handle;
+    task.status = TaskContext::Status::WAITING_ACTION;
+}
+
+void Agent::on_action_result(bool success, const std::string& result_json) {
+    if (!current_task_) {
+        log.warn("Received action result but no task running");
+        return;
+    }
+
+    auto& task = *current_task_;
+    log.info("Action result: success={}, step={}", success, task.current_step_id);
+
+    // Store result in variables
+    task.variables[task.current_step_id + ".result"] = result_json;
+    task.variables[task.current_step_id + ".success"] = success ? "true" : "false";
+
+    // Apply success_states or failure_states
+    if (state_tracker_mgr_) {
+        if (auto tracker = state_tracker_mgr_->get_tracker(effective_agent_id_)) {
+            auto vertex = find_vertex(task.current_step_id);
+            if (vertex && vertex->has_step()) {
+                const auto& step = vertex->step();
+                if (success && step.success_states_size() > 0) {
+                    tracker->force_state(step.success_states(0), "step_success");
+                    log.info("Applied success_state: {}", step.success_states(0));
+                } else if (!success && step.failure_states_size() > 0) {
+                    tracker->force_state(step.failure_states(0), "step_failure");
+                    log.info("Applied failure_state: {}", step.failure_states(0));
+                }
+            }
+        }
+    }
+
+    task.current_goal.reset();
+    task.status = TaskContext::Status::RUNNING;
+
+    advance_task(success);
+}
+
+void Agent::advance_task(bool step_success) {
+    auto& task = *current_task_;
+
+    auto next = get_next_step(task.current_step_id, step_success);
+    if (!next) {
+        // No next step - complete based on step success
+        complete_task(step_success, step_success ? "" : "Step failed with no recovery path");
+        return;
+    }
+
+    task.current_step_id = *next;
+    log.info("Advancing to step: {}", *next);
+
+    send_task_state_update();
+}
+
+void Agent::complete_task(bool success, const std::string& error) {
+    if (!current_task_) return;
+
+    auto& task = *current_task_;
+    log.info("Task {} completed: success={}, error={}",
+             task.task_id, success, error.empty() ? "none" : error);
+
+    task.status = success ? TaskContext::Status::COMPLETED : TaskContext::Status::FAILED;
+    task.error_message = error;
+
+    // Update state
+    if (state_tracker_mgr_) {
+        auto tracker = state_tracker_mgr_->get_tracker(effective_agent_id_);
+        if (tracker) {
+            tracker->force_state(success ? "idle" : "error", "task_complete");
+        }
+    }
+
+    update_exec_state(false);
+    send_task_state_update();
+
+    // Clear task (will be done on next process_task call)
+}
+
+std::optional<fleet::v1::Vertex> Agent::find_vertex(const std::string& step_id) {
+    if (!current_task_ || !current_task_->graph) return std::nullopt;
+
+    for (const auto& v : current_task_->graph->vertices()) {
+        if (v.id() == step_id) {
+            return v;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> Agent::get_entry_point() {
+    if (!current_task_ || !current_task_->graph) return std::nullopt;
+
+    if (!current_task_->graph->entry_point().empty()) {
+        return current_task_->graph->entry_point();
+    }
+
+    // Fallback: first vertex
+    if (!current_task_->graph->vertices().empty()) {
+        return current_task_->graph->vertices(0).id();
+    }
+
+    return std::nullopt;
+}
+
+std::optional<std::string> Agent::get_next_step(const std::string& current, bool success) {
+    if (!current_task_ || !current_task_->graph) return std::nullopt;
+
+    for (const auto& edge : current_task_->graph->edges()) {
+        if (edge.from_vertex() != current) continue;
+
+        if (success && edge.type() == fleet::v1::EDGE_TYPE_ON_SUCCESS) {
+            return edge.to_vertex();
+        }
+        if (!success && edge.type() == fleet::v1::EDGE_TYPE_ON_FAILURE) {
+            return edge.to_vertex();
+        }
+        // EDGE_TYPE_CONDITIONAL acts as a fallback
+        if (edge.type() == fleet::v1::EDGE_TYPE_CONDITIONAL) {
+            return edge.to_vertex();
+        }
+    }
+
+    return std::nullopt;
+}
+
+// ============================================================
+// Action Client Management
+// ============================================================
+
+executor::DynamicActionClient* Agent::get_or_create_client(
+    const std::string& action_type,
+    const std::string& server_name) {
+
+    std::string key = action_type + "|" + server_name;
+
+    // Try to find existing client (read-only accessor)
+    {
+        decltype(action_clients_)::const_accessor acc;
+        if (action_clients_.find(acc, key)) {
+            return acc->second.get();
+        }
+    }
+
+    // Create new client
+    log.info("Creating action client: {} -> {}", action_type, server_name);
+
+    auto client = std::make_unique<executor::DynamicActionClient>(
+        node_, server_name, action_type);
+
+    if (!client->wait_for_server(std::chrono::seconds(5))) {
+        log.error("Action server not available: {}", server_name);
+        return nullptr;
+    }
+
+    auto* ptr = client.get();
+
+    // Insert with write accessor (thread-safe)
+    decltype(action_clients_)::accessor acc;
+    if (action_clients_.insert(acc, key)) {
+        // Successfully inserted new entry
+        acc->second = std::move(client);
+    }
+    // If insert returns false, another thread already inserted - return that one
+    return acc->second.get();
+}
+
+void Agent::poll_all_clients() {
+    // Iterate using range-based for with concurrent_hash_map
+    for (auto it = action_clients_.begin(); it != action_clients_.end(); ++it) {
+        it->second->poll_for_responses();
+    }
+}
+
+// ============================================================
+// Capability Management
+// ============================================================
+
+void Agent::discover_capabilities() {
+    log.info("Discovering capabilities...");
+
+    // Wait for ROS2 graph
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    int found = capability_scanner_->scan_all();
+    log.info("Discovered {} capabilities", found);
+
+    send_capabilities();
+}
+
+void Agent::send_capabilities() {
+    if (!connected_) return;
+
+    auto caps = capability_scanner_->get_for_registration();
+    if (caps.empty()) return;
+
+    auto msg = std::make_shared<fleet::v1::AgentMessage>();
+    msg->set_agent_id(effective_agent_id_);
+    msg->set_timestamp_ms(now_ms());
+
+    auto* reg = msg->mutable_capability_registration();
+    reg->set_agent_id(effective_agent_id_);
+
+    for (const auto& cap : caps) {
+        auto* c = reg->add_capabilities();
+        c->set_action_type(cap.action_type);
+        c->set_action_server(cap.action_server);
+        c->set_is_available(cap.available.load());  // Use actual availability status
+
+        // Set lifecycle state
+        auto lc_state = cap.lifecycle_state.load();
+        switch (lc_state) {
+            case LifecycleState::UNCONFIGURED:
+                c->set_lifecycle_state(fleet::v1::LIFECYCLE_STATE_UNCONFIGURED);
+                break;
+            case LifecycleState::INACTIVE:
+                c->set_lifecycle_state(fleet::v1::LIFECYCLE_STATE_INACTIVE);
+                break;
+            case LifecycleState::ACTIVE:
+                c->set_lifecycle_state(fleet::v1::LIFECYCLE_STATE_ACTIVE);
+                break;
+            case LifecycleState::FINALIZED:
+                c->set_lifecycle_state(fleet::v1::LIFECYCLE_STATE_FINALIZED);
+                break;
+            default:
+                c->set_lifecycle_state(fleet::v1::LIFECYCLE_STATE_UNKNOWN);
+                break;
+        }
+    }
+
+    queue_message(msg);
+    log.info("Sent {} capabilities", caps.size());
+}
+
+// ============================================================
+// State Reporting
+// ============================================================
+
+void Agent::send_task_state_update() {
+    if (!current_task_) return;
+
+    auto& task = *current_task_;
+
+    auto msg = std::make_shared<fleet::v1::AgentMessage>();
+    msg->set_agent_id(effective_agent_id_);
+    msg->set_timestamp_ms(now_ms());
+
+    auto* update = msg->mutable_task_state();
+    update->set_task_id(task.task_id);
+    update->set_current_step_id(task.current_step_id);
+
+    switch (task.status) {
+        case TaskContext::Status::RUNNING:
+        case TaskContext::Status::WAITING_ACTION:
+            update->set_state(fleet::v1::TASK_STATE_RUNNING);
+            break;
+        case TaskContext::Status::COMPLETED:
+            update->set_state(fleet::v1::TASK_STATE_COMPLETED);
+            break;
+        case TaskContext::Status::FAILED:
+            update->set_state(fleet::v1::TASK_STATE_FAILED);
+            if (!task.error_message.empty()) {
+                update->set_blocking_reason(task.error_message);
+            }
+            break;
+        case TaskContext::Status::CANCELLED:
+            update->set_state(fleet::v1::TASK_STATE_CANCELLED);
+            if (!task.error_message.empty()) {
+                update->set_blocking_reason(task.error_message);
+            }
+            break;
+    }
+
+    queue_message(msg);
+}
+
+void Agent::update_exec_state(bool executing,
+                               const std::string& action,
+                               const std::string& task_id,
+                               const std::string& step_id) {
+    // Atomic updates using shared_ptr (lock-free)
+    std::atomic_store(&exec_state_.action_type, std::make_shared<const std::string>(action));
+    std::atomic_store(&exec_state_.task_id, std::make_shared<const std::string>(task_id));
+    std::atomic_store(&exec_state_.step_id, std::make_shared<const std::string>(step_id));
+    exec_state_.is_executing.store(executing, std::memory_order_release);
+    exec_state_.version.fetch_add(1, std::memory_order_relaxed);
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+
+int64_t Agent::now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
 }  // namespace fleet_agent

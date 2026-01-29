@@ -32,6 +32,10 @@ type Scheduler struct {
 	tasks   map[string]*RunningTask
 	tasksMu sync.RWMutex
 
+	// Task completion channels (for agent-driven execution)
+	taskComplete   map[string]chan TaskCompletionResult
+	taskCompleteMu sync.RWMutex
+
 	// Task queue per robot
 	taskQueues   map[string][]string // agentID -> taskIDs
 	taskQueuesMu sync.RWMutex
@@ -40,6 +44,21 @@ type Scheduler struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+}
+
+// TaskCompletionResult represents the result of a completed task
+type TaskCompletionResult struct {
+	TaskID  string
+	Status  TaskStatus
+	Error   string
+}
+
+// CapabilityValidationResult contains the result of capability validation
+type CapabilityValidationResult struct {
+	Valid               bool     `json:"valid"`
+	MissingCapabilities []string `json:"missing_capabilities,omitempty"`
+	UnavailableServers  []string `json:"unavailable_servers,omitempty"`
+	Message             string   `json:"message,omitempty"`
 }
 
 const (
@@ -62,6 +81,15 @@ type RunningTask struct {
 	StartedAt     time.Time
 	ResultChan    chan *StepResult
 	CancelFunc    context.CancelFunc
+
+	// Step results storage for field_sources resolution
+	// Maps step_id -> result data (e.g., {"success": true, "distance": 5.2})
+	StepResults map[string]map[string]interface{}
+
+	// Pause/Resume support
+	pauseMu    sync.Mutex
+	pauseCond  *sync.Cond
+	isPaused   bool
 }
 
 // TaskStatus represents the status of a task
@@ -94,6 +122,7 @@ func NewScheduler(stateManager *state.GlobalStateManager, repo *db.Repository, h
 		handler:      handler,
 		quicHandler:  quicHandler,
 		tasks:        make(map[string]*RunningTask),
+		taskComplete: make(map[string]chan TaskCompletionResult),
 		taskQueues:   make(map[string][]string),
 		ctx:          ctx,
 		cancel:       cancel,
@@ -132,6 +161,130 @@ func (s *Scheduler) Stop() {
 	log.Println("Scheduler stopped")
 }
 
+// NotifyTaskComplete is called by RawQUICHandler when agent reports task completion
+// This unblocks the waiting runTask goroutine
+func (s *Scheduler) NotifyTaskComplete(taskID string, status TaskStatus, errorMsg string) {
+	s.taskCompleteMu.RLock()
+	ch, exists := s.taskComplete[taskID]
+	s.taskCompleteMu.RUnlock()
+
+	if exists {
+		select {
+		case ch <- TaskCompletionResult{TaskID: taskID, Status: status, Error: errorMsg}:
+			log.Printf("[Scheduler] Notified task completion: %s status=%s", taskID, status)
+		default:
+			log.Printf("[Scheduler] Task completion channel full or closed: %s", taskID)
+		}
+	}
+}
+
+// ============================================================
+// Capability Validation (Safety Check)
+// ============================================================
+
+// ValidateCapabilities checks if all required action servers in the graph are available on the agent
+// This is a critical safety check before executing any action graph
+func (s *Scheduler) ValidateCapabilities(actionGraphID, agentID string) (*CapabilityValidationResult, error) {
+	// Get action graph
+	dbGraph, err := s.repo.GetActionGraph(actionGraphID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get action graph: %w", err)
+	}
+	if dbGraph == nil {
+		return nil, fmt.Errorf("action graph %s not found", actionGraphID)
+	}
+
+	// Parse steps from graph
+	var steps []db.ActionGraphStep
+	if err := json.Unmarshal(dbGraph.Steps, &steps); err != nil {
+		return nil, fmt.Errorf("failed to parse steps: %w", err)
+	}
+
+	// Extract required action types and servers from steps
+	requiredCapabilities := make(map[string]string) // action_type -> action_server
+	for _, step := range steps {
+		if step.Action != nil && step.Action.Type != "" {
+			requiredCapabilities[step.Action.Type] = step.Action.Server
+		}
+	}
+
+	// If no actions required, validation passes
+	if len(requiredCapabilities) == 0 {
+		return &CapabilityValidationResult{
+			Valid:   true,
+			Message: "No action capabilities required",
+		}, nil
+	}
+
+	// Get agent's capabilities
+	agentCaps, err := s.repo.GetAgentCapabilities(agentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get agent capabilities: %w", err)
+	}
+
+	// Build capability map for quick lookup
+	capMap := make(map[string]*db.AgentCapability)       // action_type -> capability
+	serverMap := make(map[string]*db.AgentCapability)    // action_server -> capability
+	for i := range agentCaps {
+		cap := &agentCaps[i]
+		capMap[cap.ActionType] = cap
+		serverMap[cap.ActionServer] = cap
+	}
+
+	// Check each required capability
+	var missingCaps []string
+	var unavailableServers []string
+
+	for actionType, actionServer := range requiredCapabilities {
+		// First check by action server (more specific)
+		if actionServer != "" {
+			if cap, exists := serverMap[actionServer]; exists {
+				if !cap.IsAvailable {
+					unavailableServers = append(unavailableServers, actionServer)
+				}
+				continue
+			}
+		}
+
+		// Check by action type
+		if cap, exists := capMap[actionType]; exists {
+			if !cap.IsAvailable {
+				unavailableServers = append(unavailableServers, actionType)
+			}
+			continue
+		}
+
+		// Capability not found
+		if actionServer != "" {
+			missingCaps = append(missingCaps, fmt.Sprintf("%s (%s)", actionType, actionServer))
+		} else {
+			missingCaps = append(missingCaps, actionType)
+		}
+	}
+
+	// Build result
+	result := &CapabilityValidationResult{
+		Valid:               len(missingCaps) == 0 && len(unavailableServers) == 0,
+		MissingCapabilities: missingCaps,
+		UnavailableServers:  unavailableServers,
+	}
+
+	if !result.Valid {
+		var messages []string
+		if len(missingCaps) > 0 {
+			messages = append(messages, fmt.Sprintf("missing capabilities: %v", missingCaps))
+		}
+		if len(unavailableServers) > 0 {
+			messages = append(messages, fmt.Sprintf("unavailable servers: %v", unavailableServers))
+		}
+		result.Message = strings.Join(messages, "; ")
+	} else {
+		result.Message = "All required capabilities are available"
+	}
+
+	return result, nil
+}
+
 // ============================================================
 // Task Execution
 // ============================================================
@@ -147,6 +300,16 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 	if !exists {
 		return "", fmt.Errorf("agent %s not found in state manager", agentID)
 	}
+
+	// SAFETY CHECK: Validate that all required capabilities are available
+	capResult, err := s.ValidateCapabilities(actionGraphID, agentID)
+	if err != nil {
+		return "", fmt.Errorf("capability validation failed: %w", err)
+	}
+	if !capResult.Valid {
+		return "", fmt.Errorf("cannot start task: %s", capResult.Message)
+	}
+	log.Printf("Capability validation passed for graph=%s agent=%s", actionGraphID, agentID)
 
 	// Try to get action graph from cache first
 	var steps []db.ActionGraphStep
@@ -214,6 +377,16 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 		return "", fmt.Errorf("action graph has no steps")
 	}
 
+	// Debug: Log parsed steps and their action servers
+	for i, step := range steps {
+		if step.Action != nil {
+			log.Printf("[DEBUG] Parsed step[%d]: id=%s action_type='%s' action_server='%s'",
+				i, step.ID, step.Action.Type, step.Action.Server)
+		} else {
+			log.Printf("[DEBUG] Parsed step[%d]: id=%s (no action)", i, step.ID)
+		}
+	}
+
 	// NOTE: Agent mode delegation removed - all graphs execute server-side for consistency
 	// This ensures predictable behavior and centralized state management
 
@@ -275,11 +448,14 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 		CurrentStep:   entryIndex,
 		Status:        TaskRunning,
 		RetryCount:    make(map[string]int),
+		StepResults:   make(map[string]map[string]interface{}),
 		ReservedZones: requiredZones,
 		StartedAt:     time.Now(),
 		ResultChan:    make(chan *StepResult, 1),
 		CancelFunc:    taskCancel,
 	}
+	// Initialize pause condition variable
+	task.pauseCond = sync.NewCond(&task.pauseMu)
 
 	// Store task
 	s.tasksMu.Lock()
@@ -304,10 +480,23 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 	return taskID, nil
 }
 
-// runTask executes task steps sequentially
+// runTask sends StartTask to agent and waits for completion (Agent-driven execution)
+// The agent executes the graph autonomously and reports progress via TaskStateUpdate
 func (s *Scheduler) runTask(ctx context.Context, task *RunningTask) {
+	// Create completion channel
+	completeChan := make(chan TaskCompletionResult, 1)
+	s.taskCompleteMu.Lock()
+	s.taskComplete[task.ID] = completeChan
+	s.taskCompleteMu.Unlock()
+
 	defer func() {
-		// Cleanup
+		// Cleanup completion channel
+		s.taskCompleteMu.Lock()
+		delete(s.taskComplete, task.ID)
+		s.taskCompleteMu.Unlock()
+		close(completeChan)
+
+		// Cleanup state
 		s.stateManager.CompleteExecution(task.AgentID, task.ReservedZones)
 
 		// Update database
@@ -318,53 +507,33 @@ func (s *Scheduler) runTask(ctx context.Context, task *RunningTask) {
 		delete(s.tasks, task.ID)
 		s.tasksMu.Unlock()
 
-		log.Printf("Task completed: %s status=%s", task.ID, task.Status)
+		log.Printf("[Scheduler] Task completed: %s status=%s", task.ID, task.Status)
 	}()
 
-	for task.CurrentStep < len(task.Steps) {
-		select {
-		case <-ctx.Done():
-			task.Status = TaskCancelled
-			return
-		default:
-		}
+	// Send StartTask to agent (Agent-driven execution)
+	log.Printf("[Scheduler] Sending StartTask to agent: task=%s graph=%s agent=%s",
+		task.ID, task.ActionGraphID, task.AgentID)
 
-		step := task.Steps[task.CurrentStep]
-
-		// Execute step
-		result := s.executeStep(ctx, task, &step)
-
-		// Handle result
-		nextStep := s.handleStepResult(task, &step, result)
-
-		if nextStep == "" {
-			// Task completed or failed
-			log.Printf("[DEBUG] handleStepResult returned empty string, task status=%s", task.Status)
-			return
-		}
-
-		log.Printf("[DEBUG] Next step: %s, looking up in StepIndex (len=%d)", nextStep, len(task.StepIndex))
-
-		// Find next step using O(1) index lookup
-		if idx, found := task.StepIndex[nextStep]; found {
-			log.Printf("[DEBUG] Found step index: %d, advancing to step %s", idx, task.Steps[idx].ID)
-			task.CurrentStep = idx
-
-			// Update state manager with new step ID for accurate UI display
-			if err := s.stateManager.UpdateRobotExecution(task.AgentID, true, task.ID, task.Steps[idx].ID); err != nil {
-				log.Printf("[Scheduler] Failed to update step in state manager: %v", err)
-			}
-		} else {
-			log.Printf("Next step %s not found in task %s (available: %v)", nextStep, task.ID, task.StepIndex)
-			task.Status = TaskFailed
-			return
-		}
-
-		// Update database
-		s.repo.UpdateTaskStatus(task.ID, string(task.Status), step.ID, task.CurrentStep, "")
+	err := s.quicHandler.SendStartTask(task.AgentID, task.ID, task.ActionGraphID, task.AgentID, nil)
+	if err != nil {
+		log.Printf("[Scheduler] Failed to send StartTask: %v", err)
+		task.Status = TaskFailed
+		return
 	}
 
-	task.Status = TaskCompleted
+	// Wait for agent to complete the task
+	select {
+	case result := <-completeChan:
+		log.Printf("[Scheduler] Task %s completed by agent: status=%s", task.ID, result.Status)
+		task.Status = result.Status
+		if result.Error != "" {
+			log.Printf("[Scheduler] Task error: %s", result.Error)
+		}
+
+	case <-ctx.Done():
+		log.Printf("[Scheduler] Task %s cancelled by context", task.ID)
+		task.Status = TaskCancelled
+	}
 }
 
 // executeStep executes a single step
@@ -589,21 +758,84 @@ func (s *Scheduler) executeAction(ctx context.Context, task *RunningTask, step *
 	// Build params
 	params := make(map[string]interface{})
 	if action.Params != nil {
-		// Get waypoint data if needed
-		if action.Params.Source == "waypoint" && action.Params.WaypointID != "" {
-			wp, err := s.repo.GetWaypoint(action.Params.WaypointID)
-			if err != nil {
-				return &StepResult{
-					StepID: step.ID,
-					Status: fleetgrpc.ActionStatusFailed,
-					Error:  fmt.Sprintf("failed to get waypoint: %v", err),
+		switch action.Params.Source {
+		case "waypoint":
+			// Get waypoint data from DB
+			if action.Params.WaypointID != "" {
+				wp, err := s.repo.GetWaypoint(action.Params.WaypointID)
+				if err != nil {
+					return &StepResult{
+						StepID: step.ID,
+						Status: fleetgrpc.ActionStatusFailed,
+						Error:  fmt.Sprintf("failed to get waypoint: %v", err),
+					}
+				}
+				if wp != nil {
+					json.Unmarshal(wp.Data, &params)
 				}
 			}
-			if wp != nil {
-				json.Unmarshal(wp.Data, &params)
+
+		case "mapped":
+			// Process per-field source mappings
+			if action.Params.FieldSources != nil {
+				for fieldName, fieldSource := range action.Params.FieldSources {
+					switch fieldSource.Source {
+					case "constant":
+						// Use the constant value directly
+						params[fieldName] = fieldSource.Value
+
+					case "step_result":
+						// Resolve value from previous step's result stored in task.StepResults
+						if fieldSource.StepID != "" {
+							if stepResult, ok := task.StepResults[fieldSource.StepID]; ok {
+								if fieldSource.ResultField != "" {
+									// Get specific field from result
+									if value, exists := stepResult[fieldSource.ResultField]; exists {
+										params[fieldName] = value
+										log.Printf("[DEBUG] Resolved %s.%s = %v for field %s",
+											fieldSource.StepID, fieldSource.ResultField, value, fieldName)
+									} else {
+										log.Printf("[WARN] Result field %s not found in step %s result",
+											fieldSource.ResultField, fieldSource.StepID)
+									}
+								} else {
+									// Use entire result object
+									params[fieldName] = stepResult
+									log.Printf("[DEBUG] Resolved entire result of step %s for field %s",
+										fieldSource.StepID, fieldName)
+								}
+							} else {
+								log.Printf("[WARN] Step result not found for step %s (available: %v)",
+									fieldSource.StepID, getMapKeys(task.StepResults))
+							}
+						}
+
+					case "expression":
+						// Use the expression directly (already in ${} format)
+						if fieldSource.Expression != "" {
+							params[fieldName] = fieldSource.Expression
+						}
+
+					case "dynamic":
+						// Dynamic params are provided at execution time - skip for now
+						// These will be merged from execution request params
+					}
+				}
 			}
-		} else if action.Params.Data != nil {
-			params = action.Params.Data
+			// Also merge any inline data as base values
+			if action.Params.Data != nil {
+				for k, v := range action.Params.Data {
+					if _, exists := params[k]; !exists {
+						params[k] = v
+					}
+				}
+			}
+
+		default:
+			// inline or other: use data directly
+			if action.Params.Data != nil {
+				params = action.Params.Data
+			}
 		}
 	}
 
@@ -631,6 +863,9 @@ func (s *Scheduler) executeAction(ctx context.Context, task *RunningTask, step *
 			Error:  fmt.Sprintf("failed to marshal params: %v", err),
 		}
 	}
+
+	// Debug: Log action server value being sent
+	log.Printf("[DEBUG] executeAction: step=%s action_type=%s action_server='%s'", step.ID, action.Type, action.Server)
 
 	cmdReq := &fleetgrpc.ExecuteCommandReq{
 		CommandID:     commandID,
@@ -909,7 +1144,12 @@ func (s *Scheduler) resolveTransition(transition interface{}) string {
 		return stepID
 	}
 
-	// Object transition (conditional)
+	// TransitionOnFailure struct (directly assigned)
+	if tf, ok := transition.(db.TransitionOnFailure); ok {
+		return tf.Next
+	}
+
+	// Object transition (from JSON unmarshaling)
 	if obj, ok := transition.(map[string]interface{}); ok {
 		if next, exists := obj["next"]; exists {
 			if nextID, ok := next.(string); ok {
@@ -932,7 +1172,12 @@ func (s *Scheduler) parseFailureTransition(transition interface{}) *db.Transitio
 		return nil
 	}
 
-	// Object - parse as TransitionOnFailure
+	// TransitionOnFailure struct (directly assigned)
+	if tf, ok := transition.(db.TransitionOnFailure); ok {
+		return &tf
+	}
+
+	// Object - parse as TransitionOnFailure (from JSON unmarshaling)
 	if obj, ok := transition.(map[string]interface{}); ok {
 		result := &db.TransitionOnFailure{}
 
@@ -1049,6 +1294,15 @@ func stringifyResultValue(value interface{}) string {
 	}
 }
 
+// getMapKeys returns the keys of a map for debugging purposes
+func getMapKeys(m map[string]map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 func normalizeOutcomeValue(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "success", "succeeded":
@@ -1125,33 +1379,80 @@ func (s *Scheduler) CancelTask(taskID, reason string) error {
 // PauseTask pauses a running task
 func (s *Scheduler) PauseTask(taskID string) error {
 	s.tasksMu.Lock()
-	defer s.tasksMu.Unlock()
-
 	task, exists := s.tasks[taskID]
+	s.tasksMu.Unlock()
+
 	if !exists {
 		return fmt.Errorf("task %s not found", taskID)
 	}
 
+	// Set pause flag with task-specific lock
+	task.pauseMu.Lock()
+	task.isPaused = true
 	task.Status = TaskPaused
+	task.pauseMu.Unlock()
+
+	log.Printf("Task %s paused", taskID)
 	return nil
 }
 
 // ResumeTask resumes a paused task
 func (s *Scheduler) ResumeTask(taskID string) error {
 	s.tasksMu.Lock()
-	defer s.tasksMu.Unlock()
-
 	task, exists := s.tasks[taskID]
+	s.tasksMu.Unlock()
+
 	if !exists {
 		return fmt.Errorf("task %s not found", taskID)
 	}
 
-	if task.Status != TaskPaused {
+	task.pauseMu.Lock()
+	if !task.isPaused {
+		task.pauseMu.Unlock()
 		return fmt.Errorf("task %s is not paused", taskID)
 	}
 
+	task.isPaused = false
 	task.Status = TaskRunning
+	task.pauseCond.Broadcast() // Wake up waiting goroutine
+	task.pauseMu.Unlock()
+
+	log.Printf("Task %s resumed", taskID)
 	return nil
+}
+
+// waitWhilePaused blocks until the task is no longer paused or context is cancelled
+// Returns true if should continue, false if context was cancelled
+func (t *RunningTask) waitWhilePaused(ctx context.Context) bool {
+	t.pauseMu.Lock()
+	defer t.pauseMu.Unlock()
+
+	for t.isPaused {
+		// Check context before waiting
+		select {
+		case <-ctx.Done():
+			return false
+		default:
+		}
+
+		// Wait for resume signal with timeout to periodically check context
+		// Using a goroutine to handle the condvar wait with context cancellation
+		done := make(chan struct{})
+		go func() {
+			t.pauseCond.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// Resumed, continue checking in case of spurious wakeup
+		case <-ctx.Done():
+			// Context cancelled while paused
+			t.pauseCond.Broadcast() // Wake up the waiting goroutine
+			return false
+		}
+	}
+	return true
 }
 
 // GetTask returns a task by ID
@@ -1309,10 +1610,11 @@ func (s *Scheduler) canonicalToDBSteps(g *graph.CanonicalGraph) []db.ActionGraph
 				}
 				if v.Step.Action.Params != nil {
 					step.Action.Params = &db.ActionParams{
-						Source:     v.Step.Action.Params.Source,
-						WaypointID: v.Step.Action.Params.WaypointID,
-						Data:       v.Step.Action.Params.Data,
-						Fields:     v.Step.Action.Params.Fields,
+						Source:       v.Step.Action.Params.Source,
+						WaypointID:   v.Step.Action.Params.WaypointID,
+						Data:         v.Step.Action.Params.Data,
+						Fields:       v.Step.Action.Params.Fields,
+						FieldSources: graphToDBFieldSources(v.Step.Action.Params.FieldSources),
 					}
 				}
 			}
@@ -1357,6 +1659,24 @@ func graphToDBStartConditions(conds []graph.StartCondition) []db.StartCondition 
 		})
 	}
 	return out
+}
+
+// graphToDBFieldSources converts graph schema field sources to DB format for scheduler use
+func graphToDBFieldSources(graphSources map[string]graph.ParameterFieldSource) map[string]db.ParameterFieldSource {
+	if len(graphSources) == 0 {
+		return nil
+	}
+	result := make(map[string]db.ParameterFieldSource, len(graphSources))
+	for fieldName, graphSource := range graphSources {
+		result[fieldName] = db.ParameterFieldSource{
+			Source:      string(graphSource.Source),
+			Value:       graphSource.Value,
+			StepID:      graphSource.StepID,
+			ResultField: graphSource.ResultField,
+			Expression:  graphSource.Expression,
+		}
+	}
+	return result
 }
 
 // buildTransitionsForVertex builds transitions from edges for a vertex
@@ -1603,11 +1923,14 @@ func (s *Scheduler) StartMultiAgentTask(
 			CurrentStep:   entryIndex,
 			Status:        TaskRunning,
 			RetryCount:    make(map[string]int),
+			StepResults:   make(map[string]map[string]interface{}),
 			ReservedZones: executions[i].RequiredZones,
 			StartedAt:     time.Now(),
 			ResultChan:    make(chan *StepResult, 1),
 			CancelFunc:    taskCancel,
 		}
+		// Initialize pause condition variable
+		task.pauseCond = sync.NewCond(&task.pauseMu)
 
 		tasks[agentID] = task
 		taskInfos[i] = MultiAgentTaskInfo{

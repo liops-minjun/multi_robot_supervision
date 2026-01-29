@@ -122,6 +122,15 @@ public:
                           const std::unordered_map<std::string, std::string>& metadata = {});
 
     // ============================================================
+    // Configuration
+    // ============================================================
+
+    /**
+     * Update agent ID (used when server assigns a new ID).
+     */
+    void set_agent_id(const std::string& agent_id) { agent_id_ = agent_id; }
+
+    // ============================================================
     // Accessors
     // ============================================================
 

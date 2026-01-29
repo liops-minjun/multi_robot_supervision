@@ -46,7 +46,7 @@ func (Agent) TableName() string {
 type AgentCapability struct {
 	ID           string         `gorm:"primaryKey;size:100"` // agent_id + action_server hash
 	AgentID      string         `gorm:"size:50;not null;index"`
-	ActionType   string         `gorm:"size:100;not null"` // e.g., "nav2_msgs/action/NavigateToPose"
+	ActionType   string         `gorm:"size:100;not null;index"` // e.g., "nav2_msgs/action/NavigateToPose"
 	ActionServer string         `gorm:"size:200;not null"` // e.g., "/navigate_to_pose"
 
 	// Auto-introspected schemas
@@ -57,12 +57,20 @@ type AgentCapability struct {
 	// Inferred success criteria
 	SuccessCriteria datatypes.JSON `gorm:"type:jsonb"` // Auto-inferred from result schema
 
+	// User-editable metadata (for UI/documentation)
+	Description    sql.NullString `gorm:"type:text"`           // Human-readable description
+	Category       sql.NullString `gorm:"size:50;index"`       // Category: navigation, manipulation, perception, etc.
+	DefaultTimeout float64        `gorm:"default:30.0"`        // Default timeout in seconds
+	SchemaVersion  int            `gorm:"default:1"`           // Schema version for compatibility tracking
+
 	// Runtime status
-	Status       string       `gorm:"size:20;default:idle"` // idle, executing
-	IsAvailable  bool         `gorm:"default:true"`
-	LastUsedAt   sql.NullTime
-	DiscoveredAt time.Time    `gorm:"autoCreateTime"`
-	UpdatedAt    time.Time    `gorm:"autoUpdateTime"`
+	Status         string       `gorm:"size:20;default:idle"` // idle, executing
+	IsAvailable    bool         `gorm:"default:true"`
+	LifecycleState string       `gorm:"size:20;default:unknown"` // unknown, unconfigured, inactive, active, finalized
+	LastUsedAt     sql.NullTime
+	DiscoveredAt   time.Time    `gorm:"autoCreateTime"`
+	UpdatedAt      time.Time    `gorm:"autoUpdateTime;index"`  // Index for incremental sync
+	DeletedAt      sql.NullTime `gorm:"index"`                 // Soft delete for sync tracking
 
 	// Relationships
 	Agent *Agent `gorm:"foreignKey:AgentID"`
@@ -350,17 +358,42 @@ type ActionGraphStep struct {
 }
 
 type StepAction struct {
-	Type       string       `json:"type"`
-	Server     string       `json:"server"`
-	Params     *ActionParams `json:"params,omitempty"`
-	TimeoutSec float64      `json:"timeout_sec,omitempty"`
+	Type         string            `json:"type"`
+	Server       string            `json:"server"`
+	Params       *ActionParams     `json:"params,omitempty"`
+	TimeoutSec   float64           `json:"timeout_sec,omitempty"`
+	ResultSchema *StepResultSchema `json:"result_schema,omitempty"` // Expected result schema (for other steps to reference)
+}
+
+// ParameterFieldSource defines how a single parameter field gets its value
+type ParameterFieldSource struct {
+	Source      string      `json:"source"`                  // constant, step_result, dynamic, expression
+	Value       interface{} `json:"value,omitempty"`         // For constant
+	StepID      string      `json:"step_id,omitempty"`       // For step_result
+	ResultField string      `json:"result_field,omitempty"`  // For step_result (e.g., "pose.position.x")
+	Expression  string      `json:"expression,omitempty"`    // For expression
+}
+
+// ResultFieldDef defines a single field in the result schema
+type ResultFieldDef struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Description string `json:"description,omitempty"`
+}
+
+// StepResultSchema defines the expected result schema for a step
+type StepResultSchema struct {
+	Fields []ResultFieldDef `json:"fields,omitempty"`
 }
 
 type ActionParams struct {
-	Source     string                 `json:"source,omitempty"` // waypoint, inline, dynamic
+	Source     string                 `json:"source,omitempty"` // waypoint, inline, dynamic, mapped
 	WaypointID string                 `json:"waypoint_id,omitempty"`
 	Data       map[string]interface{} `json:"data,omitempty"`
 	Fields     []string               `json:"fields,omitempty"`
+
+	// Per-field source mapping (when Source="mapped")
+	FieldSources map[string]ParameterFieldSource `json:"field_sources,omitempty"`
 }
 
 type WaitFor struct {

@@ -52,6 +52,11 @@ type CreateAgentRequest struct {
 	Name string `json:"name"`
 }
 
+// UpdateAgentRequest represents a request to update an agent
+type UpdateAgentRequest struct {
+	Name string `json:"name,omitempty"`
+}
+
 // CreateAgent creates a new agent
 func (s *Server) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	var req CreateAgentRequest
@@ -88,6 +93,39 @@ func (s *Server) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, agentToResponse(agent, s.stateManager))
+}
+
+// UpdateAgent updates an existing agent (primarily for renaming)
+func (s *Server) UpdateAgent(w http.ResponseWriter, r *http.Request) {
+	agentID := chi.URLParam(r, "agentID")
+
+	agent, err := s.repo.GetAgent(agentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if agent == nil {
+		writeError(w, http.StatusNotFound, "Agent not found")
+		return
+	}
+
+	var req UpdateAgentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	// Update name if provided
+	if req.Name != "" {
+		agent.Name = req.Name
+	}
+
+	if err := s.repo.UpdateAgent(agent); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, agentToResponse(agent, s.stateManager))
 }
 
 // DeleteAgent deletes an agent
@@ -952,6 +990,21 @@ func agentToResponse(agent *db.Agent, sm *state.GlobalStateManager) AgentRespons
 		response.CurrentState = robotState.CurrentState
 	} else {
 		response.CurrentState = agent.CurrentState
+	}
+
+	// Check real-time online status from state manager
+	// This overrides the database status with live connection status
+	if sm.IsAgentOnline(agent.ID) {
+		response.Status = "online"
+		// Update IP address from live connection if available
+		if liveStatus, exists := sm.GetAgentStatus(agent.ID); exists {
+			if liveStatus.IPAddress != "" {
+				response.IPAddress = liveStatus.IPAddress
+			}
+			response.LastSeen = &liveStatus.LastHeartbeat
+		}
+	} else {
+		response.Status = "offline"
 	}
 
 	return response

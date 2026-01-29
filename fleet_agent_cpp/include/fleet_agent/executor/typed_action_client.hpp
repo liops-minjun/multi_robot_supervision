@@ -33,9 +33,11 @@ namespace action_client_logging {
     extern ::fleet_agent::logging::ComponentLogger action_log;
 }
 
+// Get current time in milliseconds since Unix epoch (wall clock time)
+// Note: Use system_clock for timestamps that need to be meaningful across systems
 inline int64_t now_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
+        std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
 // ============================================================
@@ -144,6 +146,9 @@ public:
 
     std::string action_type() const override { return action_type_; }
 
+    // Poll for pending responses - can be called externally for tick-based designs
+    void poll_for_responses();
+
 private:
     rclcpp::Node::SharedPtr node_;
     std::string action_name_;
@@ -177,7 +182,6 @@ private:
     // Timer for polling results/feedback
     rclcpp::TimerBase::SharedPtr poll_timer_;
 
-    void poll_for_responses();
     void process_goal_response(int64_t sequence);
     void process_result(int64_t sequence);
     void process_feedback();

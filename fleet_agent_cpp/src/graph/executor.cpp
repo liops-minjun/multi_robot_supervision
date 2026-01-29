@@ -275,6 +275,86 @@ std::optional<fleet::v1::Vertex> GraphExecutor::get_next_step(
     return next_vertex;
 }
 
+std::string GraphExecutor::resolve_nested_path(
+    const std::string& var_name,
+    const ExecutionContext& ctx) {
+
+    // First try direct lookup
+    auto it = ctx.variables.find(var_name);
+    if (it != ctx.variables.end()) {
+        return it->second;
+    }
+
+    // Try to resolve nested JSON path (e.g., "step_id.pose.position.x")
+    // Split by '.' and try to find the longest matching prefix that's a JSON value
+    std::vector<std::string> parts;
+    std::string current;
+    for (char c : var_name) {
+        if (c == '.') {
+            if (!current.empty()) {
+                parts.push_back(current);
+                current.clear();
+            }
+        } else {
+            current += c;
+        }
+    }
+    if (!current.empty()) {
+        parts.push_back(current);
+    }
+
+    // Try progressively longer prefixes to find a JSON value
+    for (size_t prefix_len = 1; prefix_len < parts.size(); ++prefix_len) {
+        std::string prefix;
+        for (size_t i = 0; i < prefix_len; ++i) {
+            if (i > 0) prefix += ".";
+            prefix += parts[i];
+        }
+
+        auto prefix_it = ctx.variables.find(prefix);
+        if (prefix_it != ctx.variables.end()) {
+            // Found a variable - try to parse as JSON and navigate remaining path
+            try {
+                auto json_val = nlohmann::json::parse(prefix_it->second);
+
+                // Navigate remaining path
+                for (size_t i = prefix_len; i < parts.size(); ++i) {
+                    if (json_val.is_object() && json_val.contains(parts[i])) {
+                        json_val = json_val[parts[i]];
+                    } else if (json_val.is_array()) {
+                        // Try parsing as array index
+                        try {
+                            size_t idx = std::stoul(parts[i]);
+                            if (idx < json_val.size()) {
+                                json_val = json_val[idx];
+                            } else {
+                                return "";
+                            }
+                        } catch (...) {
+                            return "";
+                        }
+                    } else {
+                        return "";
+                    }
+                }
+
+                // Return the final value
+                if (json_val.is_string()) {
+                    return json_val.get<std::string>();
+                } else if (json_val.is_number()) {
+                    return json_val.dump();
+                } else {
+                    return json_val.dump();
+                }
+            } catch (...) {
+                // Not valid JSON, continue searching
+            }
+        }
+    }
+
+    return "";
+}
+
 std::string GraphExecutor::substitute_variables(
     const std::string& input,
     const ExecutionContext& ctx) {
@@ -285,15 +365,10 @@ std::string GraphExecutor::substitute_variables(
     std::smatch match;
     while (std::regex_search(result, match, var_pattern)) {
         std::string var_name = match[1].str();
-        std::string replacement;
+        std::string replacement = resolve_nested_path(var_name, ctx);
 
-        // Look up variable
-        auto it = ctx.variables.find(var_name);
-        if (it != ctx.variables.end()) {
-            replacement = it->second;
-        } else {
-            log.warn("Variable {} not found", var_name);
-            replacement = "";
+        if (replacement.empty()) {
+            log.warn("Variable {} not found or could not be resolved", var_name);
         }
 
         result = result.replace(match.position(), match.length(), replacement);

@@ -544,3 +544,177 @@ discovery:
 - **Protobuf**: `sudo apt install libprotobuf-dev protobuf-compiler`
 - **spdlog**: `sudo apt install libspdlog-dev`
 - **nlohmann-json**: `sudo apt install nlohmann-json3-dev`
+
+---
+
+## Development Principles (개발 원칙)
+
+### 1. Interface-First Design (인터페이스 우선 설계)
+
+모든 주요 컴포넌트는 인터페이스(IXxx)를 먼저 정의하고 구현해야 합니다.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Agent (Orchestrator)                     │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────┐  │
+│  │   ITransport*    │  │ICapabilityScanner*│  │IActionExecutor*│ │
+│  │   (interface)    │  │   (interface)     │  │  (interface)  │  │
+│  └────────┬─────────┘  └────────┬─────────┘  └───────┬───────┘  │
+│           │                     │                     │          │
+│  ┌────────▼─────────┐  ┌───────▼──────────┐  ┌──────▼────────┐  │
+│  │QUICTransport     │  │CapabilityScanner │  │ROS2Action     │  │
+│  │Adapter           │  │Adapter           │  │Executor       │  │
+│  └──────────────────┘  └──────────────────┘  └───────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**핵심 인터페이스:**
+- `interfaces/transport.hpp` - ITransport (네트워크 통신)
+- `interfaces/capability_scanner.hpp` - ICapabilityScanner (ROS2 액션 탐색)
+- `interfaces/action_executor.hpp` - IActionExecutor (액션 실행)
+
+**원칙:**
+- Agent 클래스는 인터페이스만 사용, 구체 클래스 직접 사용 금지
+- Mock 객체를 통한 단위 테스트 가능하게 설계
+- 새 컴포넌트 추가 시 인터페이스 먼저 정의
+
+### 2. Dependency Injection (의존성 주입)
+
+컴포넌트는 생성자를 통해 주입됩니다.
+
+```cpp
+// Production usage (via Factory)
+auto agent = AgentFactory::create_agent("config.yaml");
+
+// Testing usage (with mocks)
+AgentComponents components;
+components.transport = std::make_unique<MockTransport>();
+components.scanner = std::make_unique<MockScanner>();
+components.executor = std::make_unique<MockExecutor>();
+auto agent = AgentFactory::create_agent_with_components(config, std::move(components));
+```
+
+**Factory 패턴:**
+- `factory/agent_factory.hpp` - AgentFactory 클래스
+- `create_agent()` - 프로덕션용 기본 컴포넌트로 Agent 생성
+- `create_agent_with_components()` - 커스텀 컴포넌트로 Agent 생성 (테스트용)
+
+### 3. Single Responsibility (단일 책임)
+
+각 클래스는 하나의 책임만 가집니다.
+
+| 클래스 | 책임 | 목표 라인 수 |
+|--------|------|-------------|
+| Agent | 오케스트레이션 (타이머, 메시지 라우팅) | ~500 lines |
+| GraphExecutor | 그래프 탐색 로직 | ~300 lines |
+| IActionExecutor | ROS2 액션 클라이언트 관리 | ~200 lines |
+| ICapabilityScanner | ROS2 액션 서버 탐색 | ~200 lines |
+| ITransport | 네트워크 통신 | ~150 lines |
+
+**원칙:**
+- 클래스가 500줄을 넘으면 책임 분리 고려
+- 그래프 로직은 GraphExecutor에만 존재
+- 액션 실행은 IActionExecutor에만 존재
+
+### 4. Adapter Pattern for Legacy Code (어댑터 패턴)
+
+기존 클래스의 인터페이스 변경 없이 어댑터로 감쌉니다.
+
+```cpp
+// 기존 구현체 (수정 없음)
+class QUICClient { ... };
+
+// 어댑터 (ITransport 인터페이스 구현)
+class QUICTransportAdapter : public ITransport {
+    std::shared_ptr<QUICClient> client_;
+public:
+    bool connect(const std::string& addr, uint16_t port) override {
+        return client_->connect(addr, port);
+    }
+};
+```
+
+**어댑터 목록:**
+- `QUICTransportAdapter` - QUICClient를 ITransport로 변환
+- `CapabilityScannerAdapter` - CapabilityScanner를 ICapabilityScanner로 변환
+- `ROS2ActionExecutor` - DynamicActionClient를 IActionExecutor로 변환
+
+### 5. No Code Duplication (코드 중복 금지)
+
+로직은 한 곳에만 존재해야 합니다.
+
+**금지 사항:**
+- 그래프 탐색 로직이 Agent와 GraphExecutor에 모두 존재
+- 동일한 변환 함수가 여러 파일에 존재
+- 유사한 에러 처리 코드의 복사/붙여넣기
+
+**해결책:**
+- 공통 로직은 별도 함수/클래스로 추출
+- 유틸리티 함수는 core/ 디렉토리에 배치
+- 변환 함수는 어댑터 클래스 내에 정의
+
+### 6. Type Conversion Guidelines (타입 변환 가이드)
+
+인터페이스와 구현체 간 타입 변환 시:
+
+```cpp
+// ActionCapability (concrete) → CapabilityInfo (interface)
+interfaces::CapabilityInfo CapabilityScannerAdapter::convert(const ActionCapability& cap) {
+    interfaces::CapabilityInfo info;
+    info.action_type = cap.action_type;
+    info.action_server = cap.action_server;
+    info.is_available = cap.available.load();
+    return info;
+}
+
+// LifecycleState enum 변환
+interfaces::LifecycleState convert_lifecycle_state(fleet_agent::LifecycleState state) {
+    switch (state) {
+        case fleet_agent::LifecycleState::ACTIVE:
+            return interfaces::LifecycleState::ACTIVE;
+        // ...
+    }
+}
+```
+
+### 7. File Organization (파일 구성)
+
+```
+fleet_agent_cpp/
+├── include/fleet_agent/
+│   ├── interfaces/              # 인터페이스 정의 (순수 가상 클래스)
+│   │   ├── transport.hpp        # ITransport
+│   │   ├── capability_scanner.hpp # ICapabilityScanner
+│   │   └── action_executor.hpp  # IActionExecutor
+│   ├── factory/                 # 팩토리 클래스
+│   │   └── agent_factory.hpp
+│   ├── transport/               # Transport 구현
+│   │   ├── quic_transport.hpp   # QUICClient (concrete)
+│   │   └── quic_transport_adapter.hpp # ITransport adapter
+│   ├── capability/              # Capability 구현
+│   │   ├── scanner.hpp          # CapabilityScanner (concrete)
+│   │   └── capability_scanner_adapter.hpp # ICapabilityScanner adapter
+│   └── executor/                # Executor 구현
+│       ├── dynamic_action_client.hpp # DynamicActionClient (concrete)
+│       └── ros2_action_executor.hpp  # IActionExecutor implementation
+└── src/                         # 구현 파일들 (동일 구조)
+```
+
+### 8. When Adding New Components (새 컴포넌트 추가 시)
+
+1. **인터페이스 정의** (`interfaces/i_xxx.hpp`)
+2. **구현체 생성** 또는 **어댑터 생성** (기존 클래스 감싸기)
+3. **팩토리 메서드 추가** (`AgentFactory::create_default_xxx()`)
+4. **CMakeLists.txt 업데이트** (새 소스 파일 추가)
+5. **테스트 작성** (Mock 객체 사용)
+
+### 9. Naming Conventions (네이밍 규칙)
+
+| 타입 | 패턴 | 예시 |
+|------|------|------|
+| 인터페이스 | `I` + PascalCase | `ITransport`, `IActionExecutor` |
+| 어댑터 | Concrete + `Adapter` | `QUICTransportAdapter` |
+| 팩토리 메서드 | `create_` + snake_case | `create_default_transport()` |
+| 콜백 타입 | PascalCase + `Callback` | `ResultCallback`, `FeedbackCallback` |
+| 결과 구조체 | PascalCase + `Result/Info` | `ActionResult`, `CapabilityInfo` |

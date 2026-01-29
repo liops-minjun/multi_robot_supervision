@@ -24,6 +24,7 @@ install(PROGRAMS
   scripts/test_a_server.py
   scripts/test_b_server.py
   scripts/test_c_server.py
+  scripts/auto_activate.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

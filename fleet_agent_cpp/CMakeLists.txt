@@ -31,6 +31,8 @@ find_package(rosidl_runtime_cpp REQUIRED)
 find_package(rosidl_typesupport_cpp REQUIRED)
 find_package(rosidl_typesupport_introspection_cpp REQUIRED)
 find_package(action_msgs REQUIRED)
+find_package(tf2_msgs REQUIRED)
+find_package(lifecycle_msgs REQUIRED)
 
 # Find external dependencies
 find_package(Protobuf REQUIRED)
@@ -141,6 +143,7 @@ set(FLEET_AGENT_SOURCES
   src/capability/type_loader.cpp
   src/capability/schema_extractor.cpp
   src/capability/scanner.cpp
+  src/capability/capability_scanner_adapter.cpp
 
   # Executor
   src/executor/precondition.cpp
@@ -148,6 +151,8 @@ set(FLEET_AGENT_SOURCES
   src/executor/dynamic_action_client.cpp
   src/executor/command_processor.cpp
   src/executor/task_log_sender.cpp
+  src/executor/task_executor.cpp
+  src/executor/ros2_action_executor.cpp
 
   # Graph
   src/graph/storage.cpp
@@ -164,8 +169,16 @@ set(FLEET_AGENT_SOURCES
   # Transport
   src/transport/tls_credentials.cpp
   src/transport/quic_transport.cpp
+  src/transport/quic_transport_adapter.cpp
   src/transport/quic_outbound_sender.cpp
   src/transport/persistent_queue.cpp
+
+  # Telemetry
+  src/telemetry/collector.cpp
+  src/telemetry/aggregator.cpp
+
+  # Factory
+  src/factory/agent_factory.cpp
 
   # Agent
   src/agent.cpp
@@ -205,6 +218,8 @@ ament_target_dependencies(fleet_agent_lib PUBLIC
   rosidl_typesupport_cpp
   rosidl_typesupport_introspection_cpp
   action_msgs
+  tf2_msgs
+  lifecycle_msgs
 )
 
 # ==============================================================================

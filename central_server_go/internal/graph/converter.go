@@ -174,10 +174,11 @@ func stepToVertex(step *db.ActionGraphStep) Vertex {
 
 			if step.Action.Params != nil {
 				stepData.Action.Params = &ActionParams{
-					Source:     step.Action.Params.Source,
-					WaypointID: step.Action.Params.WaypointID,
-					Data:       step.Action.Params.Data,
-					Fields:     step.Action.Params.Fields,
+					Source:       step.Action.Params.Source,
+					WaypointID:   step.Action.Params.WaypointID,
+					Data:         step.Action.Params.Data,
+					Fields:       step.Action.Params.Fields,
+					FieldSources: convertDBFieldSourcesToGraph(step.Action.Params.FieldSources),
 				}
 			}
 		}
@@ -360,10 +361,11 @@ func vertexToStep(v *Vertex, cg *CanonicalGraph) db.ActionGraphStep {
 			}
 			if v.Step.Action.Params != nil {
 				step.Action.Params = &db.ActionParams{
-					Source:     v.Step.Action.Params.Source,
-					WaypointID: v.Step.Action.Params.WaypointID,
-					Data:       v.Step.Action.Params.Data,
-					Fields:     v.Step.Action.Params.Fields,
+					Source:       v.Step.Action.Params.Source,
+					WaypointID:   v.Step.Action.Params.WaypointID,
+					Data:         v.Step.Action.Params.Data,
+					Fields:       v.Step.Action.Params.Fields,
+					FieldSources: convertGraphFieldSourcesToDB(v.Step.Action.Params.FieldSources),
 				}
 			}
 		}
@@ -539,6 +541,46 @@ func decodeOutcomeCondition(raw string) (string, string, bool) {
 	outcome := strings.TrimSpace(payload["outcome"])
 	state := strings.TrimSpace(payload["state"])
 	return outcome, state, outcome != "" || state != ""
+}
+
+// =============================================================================
+// Field Sources Conversion
+// =============================================================================
+
+// convertDBFieldSourcesToGraph converts DB field sources to graph schema format
+func convertDBFieldSourcesToGraph(dbSources map[string]db.ParameterFieldSource) map[string]ParameterFieldSource {
+	if len(dbSources) == 0 {
+		return nil
+	}
+	result := make(map[string]ParameterFieldSource, len(dbSources))
+	for fieldName, dbSource := range dbSources {
+		result[fieldName] = ParameterFieldSource{
+			Source:      ParameterSourceType(dbSource.Source),
+			Value:       dbSource.Value,
+			StepID:      dbSource.StepID,
+			ResultField: dbSource.ResultField,
+			Expression:  dbSource.Expression,
+		}
+	}
+	return result
+}
+
+// convertGraphFieldSourcesToDB converts graph schema field sources to DB format
+func convertGraphFieldSourcesToDB(graphSources map[string]ParameterFieldSource) map[string]db.ParameterFieldSource {
+	if len(graphSources) == 0 {
+		return nil
+	}
+	result := make(map[string]db.ParameterFieldSource, len(graphSources))
+	for fieldName, graphSource := range graphSources {
+		result[fieldName] = db.ParameterFieldSource{
+			Source:      string(graphSource.Source),
+			Value:       graphSource.Value,
+			StepID:      graphSource.StepID,
+			ResultField: graphSource.ResultField,
+			Expression:  graphSource.Expression,
+		}
+	}
+	return result
 }
 
 // =============================================================================

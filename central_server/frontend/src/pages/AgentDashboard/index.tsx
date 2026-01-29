@@ -24,9 +24,17 @@ import {
   ChevronUp,
   RotateCcw,
   AlertTriangle,
+  Gauge,
+  Navigation,
+  GitBranch,
+  Pencil,
+  Check,
+  X,
+  Trash2,
 } from 'lucide-react'
-import { agentApi, actionGraphApi, fleetApi, stateDefinitionApi, taskApi, logsApi } from '../../api/client'
-import type { AgentCapabilityInfo, AgentConnectionStatus, ActionGraph, RobotStateSnapshot, StateDefinition, ExecutionPhase, TaskLogEntry, TaskLogLevel } from '../../types'
+import { agentApi, actionGraphApi, fleetApi, stateDefinitionApi, taskApi, logsApi, telemetryApi } from '../../api/client'
+import type { AgentCapabilityInfo, AgentConnectionStatus, ActionGraph, RobotStateSnapshot, StateDefinition, ExecutionPhase, TaskLogEntry, TaskLogLevel, RobotTelemetry, LifecycleState } from '../../types'
+import { getLifecycleStateInfo } from '../../types'
 import ActionGraphViewer from '../../components/ActionGraphViewer'
 import { useTranslation } from '../../i18n'
 
@@ -228,14 +236,37 @@ function CapabilityCard({
               <Loader2 className="w-3 h-3 animate-spin" />
               사용 중 - {inUseByStep.name}
             </span>
-          ) : capability.is_available ? (
-            <span className="text-xs px-2 py-0.5 bg-green-500/20 text-green-400 rounded">
-              {t('agent.available')}
-            </span>
           ) : (
-            <span className="text-xs px-2 py-0.5 bg-gray-500/20 text-gray-400 rounded">
-              {t('agent.unavailable')}
-            </span>
+            <>
+              {/* Lifecycle state badge - only shown for lifecycle nodes (not 'unknown') */}
+              {capability.lifecycle_state && capability.lifecycle_state !== 'unknown' && (() => {
+                const info = getLifecycleStateInfo(capability.lifecycle_state as LifecycleState)
+                const colorClasses: Record<string, string> = {
+                  green: 'bg-green-500/20 text-green-400',
+                  yellow: 'bg-yellow-500/20 text-yellow-400',
+                  gray: 'bg-gray-500/20 text-gray-400',
+                  red: 'bg-red-500/20 text-red-400',
+                }
+                return (
+                  <span
+                    className={`text-xs px-2 py-0.5 rounded ${colorClasses[info.color] || colorClasses.gray}`}
+                    title={info.description}
+                  >
+                    {info.label}
+                  </span>
+                )
+              })()}
+              {/* Availability badge */}
+              {capability.is_available ? (
+                <span className="text-xs px-2 py-0.5 bg-green-500/20 text-green-400 rounded">
+                  {t('agent.available')}
+                </span>
+              ) : (
+                <span className="text-xs px-2 py-0.5 bg-gray-500/20 text-gray-400 rounded">
+                  {t('agent.unavailable')}
+                </span>
+              )}
+            </>
           )}
         </div>
         <ChevronRight
@@ -263,6 +294,26 @@ function CapabilityCard({
                 {capability.action_type}
               </div>
             </div>
+            {/* Lifecycle State (only for lifecycle nodes) */}
+            {capability.lifecycle_state && capability.lifecycle_state !== 'unknown' && (() => {
+              const info = getLifecycleStateInfo(capability.lifecycle_state as LifecycleState)
+              const dotColors: Record<string, string> = {
+                green: 'bg-green-500',
+                yellow: 'bg-yellow-500',
+                gray: 'bg-gray-500',
+                red: 'bg-red-500',
+              }
+              return (
+                <div>
+                  <div className="text-xs text-gray-400 uppercase tracking-wider mb-1">Lifecycle State</div>
+                  <div className="flex items-center gap-2 px-3 py-2 bg-[#16162a] rounded-lg">
+                    <div className={`w-2 h-2 rounded-full ${dotColors[info.color] || dotColors.gray}`} />
+                    <span className="text-sm text-gray-300">{info.label}</span>
+                    <span className="text-xs text-gray-500">- {info.description}</span>
+                  </div>
+                </div>
+              )
+            })()}
             {capability.status && (
               <div className="text-xs text-gray-500">
                 {t('common.status')}: <span className="text-gray-400">{capability.status}</span>
@@ -389,6 +440,218 @@ function ExecutionLogsPanel({
   )
 }
 
+// Telemetry Panel component - shows JointState, Odometry, TF data
+function TelemetryPanel({
+  telemetry,
+  isLoading,
+  isExpanded,
+  onToggleExpand,
+  lastUpdated,
+}: {
+  telemetry: RobotTelemetry | null
+  isLoading: boolean
+  isExpanded: boolean
+  onToggleExpand: () => void
+  lastUpdated?: string
+}) {
+  const formatNumber = (n: number, decimals = 3) => n.toFixed(decimals)
+  const formatQuaternion = (q: { x: number; y: number; z: number; w: number }) =>
+    `(${formatNumber(q.x)}, ${formatNumber(q.y)}, ${formatNumber(q.z)}, ${formatNumber(q.w)})`
+  const formatVector3 = (v: { x: number; y: number; z: number }) =>
+    `(${formatNumber(v.x)}, ${formatNumber(v.y)}, ${formatNumber(v.z)})`
+
+  const hasData = telemetry && (telemetry.joint_state || telemetry.odometry || (telemetry.transforms && telemetry.transforms.length > 0))
+
+  return (
+    <div className="bg-[#0d0d1a] rounded-lg border border-[#2a2a4a] overflow-hidden">
+      {/* Header */}
+      <button
+        onClick={onToggleExpand}
+        className="w-full flex items-center justify-between px-4 py-3 bg-[#16162a] hover:bg-[#1a1a2e] transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <Gauge className="w-4 h-4 text-cyan-400" />
+          <span className="text-sm font-medium text-white">Telemetry</span>
+          {hasData && (
+            <span className="text-xs text-gray-500">
+              ({[
+                telemetry?.joint_state && 'JointState',
+                telemetry?.odometry && 'Odometry',
+                telemetry?.transforms?.length && `${telemetry.transforms.length} TF`,
+              ].filter(Boolean).join(', ')})
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {lastUpdated && (
+            <span className="text-[10px] text-gray-500">
+              {new Date(lastUpdated).toLocaleTimeString()}
+            </span>
+          )}
+          {isExpanded ? (
+            <ChevronUp className="w-4 h-4 text-gray-500" />
+          ) : (
+            <ChevronDown className="w-4 h-4 text-gray-500" />
+          )}
+        </div>
+      </button>
+
+      {/* Content */}
+      {isExpanded && (
+        <div className="p-4 space-y-4">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-6 text-gray-500">
+              <Loader2 className="w-4 h-4 animate-spin mr-2" />
+              Loading telemetry...
+            </div>
+          ) : !hasData ? (
+            <div className="flex flex-col items-center justify-center py-6 text-gray-500">
+              <Gauge className="w-8 h-8 mb-2 opacity-50" />
+              <p className="text-sm">No telemetry data available</p>
+              <p className="text-[10px] mt-1">Telemetry will appear when the agent sends data</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* JointState Section */}
+              {telemetry?.joint_state && (
+                <div className="bg-[#16162a] rounded-lg p-3 border border-[#2a2a4a]">
+                  <div className="flex flex-col gap-1.5 mb-3">
+                    <div className="flex items-center gap-2">
+                      <Gauge className="w-4 h-4 text-orange-400" />
+                      <span className="text-xs font-medium text-white uppercase tracking-wider">JointState</span>
+                      <span className="text-[10px] text-gray-500">({telemetry.joint_state.name.length} joints)</span>
+                    </div>
+                    {telemetry.joint_state.topic_name && (
+                      <div className="flex items-center gap-2 px-2 py-1 bg-[#0d0d1a] rounded">
+                        <span className="text-[10px] text-gray-500">TOPIC</span>
+                        <span className="text-xs text-cyan-400 font-mono">{telemetry.joint_state.topic_name}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="space-y-1.5 max-h-[200px] overflow-y-auto">
+                    <div className="grid grid-cols-4 gap-2 text-[10px] text-gray-500 uppercase tracking-wider pb-1 border-b border-[#2a2a4a]">
+                      <span>Joint</span>
+                      <span>Position</span>
+                      <span>Velocity</span>
+                      <span>Effort</span>
+                    </div>
+                    {telemetry.joint_state.name.map((name, idx) => (
+                      <div key={name} className="grid grid-cols-4 gap-2 text-xs font-mono">
+                        <span className="text-gray-300 truncate" title={name}>{name}</span>
+                        <span className="text-cyan-400">{formatNumber(telemetry.joint_state?.position?.[idx] ?? 0)}</span>
+                        <span className="text-yellow-400">{formatNumber(telemetry.joint_state?.velocity?.[idx] ?? 0)}</span>
+                        <span className="text-purple-400">{formatNumber(telemetry.joint_state?.effort?.[idx] ?? 0)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Odometry Section */}
+              {telemetry?.odometry && (
+                <div className="bg-[#16162a] rounded-lg p-3 border border-[#2a2a4a]">
+                  <div className="flex flex-col gap-1.5 mb-3">
+                    <div className="flex items-center gap-2">
+                      <Navigation className="w-4 h-4 text-green-400" />
+                      <span className="text-xs font-medium text-white uppercase tracking-wider">Odometry</span>
+                      <span className="text-[10px] text-gray-500">{telemetry.odometry.frame_id} → {telemetry.odometry.child_frame_id}</span>
+                    </div>
+                    {telemetry.odometry.topic_name && (
+                      <div className="flex items-center gap-2 px-2 py-1 bg-[#0d0d1a] rounded">
+                        <span className="text-[10px] text-gray-500">TOPIC</span>
+                        <span className="text-xs text-cyan-400 font-mono">{telemetry.odometry.topic_name}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="space-y-3">
+                    {/* Position */}
+                    <div>
+                      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Position</div>
+                      <div className="grid grid-cols-3 gap-2 text-xs font-mono">
+                        <div>
+                          <span className="text-gray-500">X: </span>
+                          <span className="text-cyan-400">{formatNumber(telemetry.odometry.pose.position.x)}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">Y: </span>
+                          <span className="text-cyan-400">{formatNumber(telemetry.odometry.pose.position.y)}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">Z: </span>
+                          <span className="text-cyan-400">{formatNumber(telemetry.odometry.pose.position.z)}</span>
+                        </div>
+                      </div>
+                    </div>
+                    {/* Orientation */}
+                    <div>
+                      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Orientation (Quaternion)</div>
+                      <div className="text-xs font-mono text-yellow-400">
+                        {formatQuaternion(telemetry.odometry.pose.orientation)}
+                      </div>
+                    </div>
+                    {/* Linear Velocity */}
+                    <div>
+                      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Linear Velocity</div>
+                      <div className="text-xs font-mono text-green-400">
+                        {formatVector3(telemetry.odometry.twist.linear)} m/s
+                      </div>
+                    </div>
+                    {/* Angular Velocity */}
+                    <div>
+                      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Angular Velocity</div>
+                      <div className="text-xs font-mono text-purple-400">
+                        {formatVector3(telemetry.odometry.twist.angular)} rad/s
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Transforms Section */}
+              {telemetry?.transforms && telemetry.transforms.length > 0 && (
+                <div className="bg-[#16162a] rounded-lg p-3 border border-[#2a2a4a] lg:col-span-2">
+                  <div className="flex flex-col gap-1.5 mb-3">
+                    <div className="flex items-center gap-2">
+                      <GitBranch className="w-4 h-4 text-blue-400" />
+                      <span className="text-xs font-medium text-white uppercase tracking-wider">TF Transforms</span>
+                      <span className="text-[10px] text-gray-500">({telemetry.transforms.length} transforms)</span>
+                    </div>
+                    <div className="flex items-center gap-2 px-2 py-1 bg-[#0d0d1a] rounded">
+                      <span className="text-[10px] text-gray-500">TOPIC</span>
+                      <span className="text-xs text-cyan-400 font-mono">/tf, /tf_static</span>
+                    </div>
+                  </div>
+                  <div className="space-y-2 max-h-[200px] overflow-y-auto">
+                    {telemetry.transforms.map((tf, idx) => (
+                      <div key={`${tf.frame_id}-${tf.child_frame_id}-${idx}`} className="bg-[#0d0d1a] rounded p-2 text-xs">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-blue-400 font-mono">{tf.frame_id}</span>
+                          <span className="text-gray-600">→</span>
+                          <span className="text-cyan-400 font-mono">{tf.child_frame_id}</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 font-mono text-[10px]">
+                          <div>
+                            <span className="text-gray-500">T: </span>
+                            <span className="text-green-400">{formatVector3(tf.translation)}</span>
+                          </div>
+                          <div>
+                            <span className="text-gray-500">R: </span>
+                            <span className="text-yellow-400">{formatQuaternion(tf.rotation)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 const resolveAgentId = (robot: RobotStateSnapshot) => robot.id || ''
 const resolveAgentName = (robot: RobotStateSnapshot) => robot.name || resolveAgentId(robot)
 const resolveRobotState = (robot: RobotStateSnapshot) => robot.current_state || robot.state || ''
@@ -396,7 +659,17 @@ const resolveRobotExecuting = (robot: RobotStateSnapshot) => robot.is_executing 
 
 const resolveActiveStepId = (graph: ActionGraph | null, robot?: RobotStateSnapshot | null) => {
   if (!graph || !robot) return null
-  if (robot.current_step_id) return robot.current_step_id
+
+  // Only return current_step_id if the robot is executing THIS specific graph
+  // This prevents showing execution state from a different graph
+  if (robot.current_step_id) {
+    const currentGraphId = robot.current_graph_id || (robot as any).currentGraphId
+    if (currentGraphId && currentGraphId === graph.id) {
+      return robot.current_step_id
+    }
+    // Robot is executing a different graph - don't show its step here
+    return null
+  }
   if (!resolveRobotExecuting(robot)) return null
 
   const currentState = resolveRobotState(robot)
@@ -443,7 +716,16 @@ export default function AgentDashboard() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [expandedCapabilities, setExpandedCapabilities] = useState<string[]>([])
   const [selectedRobotId, setSelectedRobotId] = useState<string | null>(null)
+  const [selectedGraphId, setSelectedGraphId] = useState<string | null>(null)
   const [logsExpanded, setLogsExpanded] = useState(true)
+  const [telemetryExpanded, setTelemetryExpanded] = useState(false)
+  const [isEditingName, setIsEditingName] = useState(false)
+  const [editedName, setEditedName] = useState('')
+  // For inline editing in agent list
+  const [editingAgentInList, setEditingAgentInList] = useState<string | null>(null)
+  const [listEditedName, setListEditedName] = useState('')
+  // Filter to show only online agents (default: false - show all agents)
+  const [showOnlineOnly, setShowOnlineOnly] = useState(false)
 
   // Fetch all agents
   const {
@@ -479,21 +761,70 @@ export default function AgentDashboard() {
     refetchInterval: 5000,
   })
 
-  const { data: actionGraphs = [], isLoading: graphsLoading } = useQuery({
-    queryKey: ['action-graphs', 'fleet'],
-    queryFn: () => actionGraphApi.list({ includeTemplates: false }),
+  // Fetch action graphs ASSIGNED to the selected agent (only deployed ones can be executed)
+  const { data: assignedGraphs = [], isLoading: graphsLoading } = useQuery({
+    queryKey: ['agent-assigned-graphs', selectedAgentId],
+    queryFn: () => agentApi.getAssignedActionGraphs(selectedAgentId!),
+    enabled: !!selectedAgentId,
     refetchInterval: 10000,
   })
 
+  // Deploy action graph mutation
+  const deployGraphMutation = useMutation({
+    mutationFn: ({ graphId, agentId }: { graphId: string; agentId: string }) =>
+      agentApi.deployActionGraph(graphId, agentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agent-assigned-graphs', selectedAgentId] })
+    },
+  })
+
+  // Show ALL assigned graphs (including pending/failed) and sort by status then update time
+  const sortedActionGraphs = useMemo(() => {
+    const statusOrder: Record<string, number> = {
+      'deployed': 0,
+      'deploying': 1,
+      'pending': 2,
+      'failed': 3,
+      'outdated': 4,
+    }
+    return assignedGraphs
+      .sort((a, b) => {
+        // Sort by status first (deployed first), then by update time
+        const statusA = statusOrder[a.deployment_status] ?? 5
+        const statusB = statusOrder[b.deployment_status] ?? 5
+        if (statusA !== statusB) return statusA - statusB
+        const aTime = new Date(a.updated_at || a.created_at).getTime()
+        const bTime = new Date(b.updated_at || b.created_at).getTime()
+        return bTime - aTime
+      })
+      .map(g => ({
+        id: g.action_graph_id,
+        name: g.action_graph_name || g.action_graph_id,
+        version: g.deployed_version,
+        server_version: g.server_version,
+        deployment_status: g.deployment_status,
+        deployment_error: g.deployment_error,
+        updated_at: g.updated_at,
+        created_at: g.created_at,
+      }))
+  }, [assignedGraphs])
+
+  // Auto-select first graph when graphs load or selection becomes invalid
+  useEffect(() => {
+    if (sortedActionGraphs.length > 0) {
+      const currentValid = sortedActionGraphs.some(g => g.id === selectedGraphId)
+      if (!selectedGraphId || !currentValid) {
+        setSelectedGraphId(sortedActionGraphs[0].id)
+      }
+    } else {
+      setSelectedGraphId(null)
+    }
+  }, [sortedActionGraphs, selectedGraphId])
+
   const fleetGraphMeta = useMemo(() => {
-    if (actionGraphs.length === 0) return null
-    const sorted = [...actionGraphs].sort((a, b) => {
-      const aTime = new Date(a.updated_at || a.created_at).getTime()
-      const bTime = new Date(b.updated_at || b.created_at).getTime()
-      return bTime - aTime
-    })
-    return sorted[0]
-  }, [actionGraphs])
+    if (!selectedGraphId) return null
+    return sortedActionGraphs.find(g => g.id === selectedGraphId) || null
+  }, [sortedActionGraphs, selectedGraphId])
 
   const { data: fleetGraph } = useQuery({
     queryKey: ['action-graph', fleetGraphMeta?.id],
@@ -524,6 +855,30 @@ export default function AgentDashboard() {
     refetchInterval: 2000, // Refresh every 2s for real-time feel
     refetchIntervalInBackground: true,
   })
+
+  // Fetch telemetry for selected robot
+  const { data: robotTelemetry, isLoading: telemetryLoading } = useQuery({
+    queryKey: ['robot-telemetry', selectedRobotId],
+    queryFn: () => telemetryApi.getRobotTelemetry(selectedRobotId!),
+    enabled: !!selectedRobotId && telemetryExpanded, // Only fetch when panel is expanded
+    refetchInterval: telemetryExpanded ? 500 : false, // 500ms refresh when expanded
+    refetchIntervalInBackground: true,
+  })
+
+  // Check if action graph can be executed (capability validation)
+  const { data: executabilityCheck } = useQuery({
+    queryKey: ['executability-check', fleetGraphMeta?.id, selectedRobotId],
+    queryFn: () => actionGraphApi.checkExecutability(fleetGraphMeta!.id, selectedRobotId!),
+    enabled: !!fleetGraphMeta?.id && !!selectedRobotId,
+    refetchInterval: 5000, // Check every 5 seconds
+    refetchIntervalInBackground: true,
+  })
+
+  // Derived state for execution safety
+  const canExecute = executabilityCheck?.can_execute ?? false
+  const executabilityMessage = executabilityCheck?.message || ''
+  const missingCapabilities = executabilityCheck?.missing_capabilities || []
+  const unavailableServers = executabilityCheck?.unavailable_servers || []
 
   const selectedAgent = agents.find((a) => a.id === selectedAgentId)
   const selectedAgentConnection = selectedAgentId ? connectionStatusMap[selectedAgentId] : undefined
@@ -576,6 +931,13 @@ export default function AgentDashboard() {
   const selectedRobotExecuting = selectedRobotState ? resolveRobotExecuting(selectedRobotState) : false
   const currentTaskId = selectedRobotState?.current_task_id
 
+  // Check if robot is executing the CURRENTLY VIEWED graph (not just any graph)
+  const isExecutingCurrentGraph = useMemo(() => {
+    if (!selectedRobotState || !selectedRobotExecuting || !selectedGraphId) return false
+    const currentGraphId = selectedRobotState.current_graph_id || (selectedRobotState as any).currentGraphId
+    return currentGraphId === selectedGraphId
+  }, [selectedRobotState, selectedRobotExecuting, selectedGraphId])
+
   // Task execution control mutations
   const executeGraphMutation = useMutation({
     mutationFn: ({ graphId, agentId }: { graphId: string; agentId: string }) => {
@@ -627,6 +989,32 @@ export default function AgentDashboard() {
     },
   })
 
+  const renameAgentMutation = useMutation({
+    mutationFn: ({ agentId, name }: { agentId: string; name: string }) =>
+      agentApi.update(agentId, { name }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
+      setIsEditingName(false)
+    },
+    onError: (error: Error) => {
+      alert(`Failed to rename agent: ${error.message}`)
+    },
+  })
+
+  const deleteAgentMutation = useMutation({
+    mutationFn: (agentId: string) => agentApi.delete(agentId),
+    onSuccess: (_, deletedAgentId) => {
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
+      // Clear selection if deleted agent was selected
+      if (selectedAgentId === deletedAgentId) {
+        setSelectedAgentId(null)
+      }
+    },
+    onError: (error: Error) => {
+      alert(`Failed to delete agent: ${error.message}`)
+    },
+  })
+
   const isExecutionLoading =
     executeGraphMutation.isPending ||
     pauseTaskMutation.isPending ||
@@ -638,40 +1026,69 @@ export default function AgentDashboard() {
   const onlineCount = agents.filter((a) => a.status === 'online').length
   const offlineCount = agents.filter((a) => a.status !== 'online').length
 
+  // Filtered agents list
+  const filteredAgents = showOnlineOnly
+    ? agents.filter((a) => a.status === 'online')
+    : agents
+
   return (
     <div className="h-screen flex bg-[#0f0f1a]">
       {/* Left Panel - Agent List */}
       <div className="w-80 bg-[#16162a] border-r border-[#2a2a4a] flex flex-col">
         {/* Header */}
-        <div className="p-4 border-b border-[#2a2a4a] flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Server className="w-5 h-5 text-blue-400" />
-            <h2 className="font-semibold text-white">{t('agent.title')}</h2>
+        <div className="p-4 border-b border-[#2a2a4a]">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Server className="w-5 h-5 text-blue-400" />
+              <h2 className="font-semibold text-white">{t('agent.title')}</h2>
+            </div>
+            <button
+              onClick={() => refetchAgents()}
+              className="p-1.5 text-gray-500 hover:text-white hover:bg-[#2a2a4a] rounded transition-colors"
+              title={t('common.refresh')}
+            >
+              <RefreshCw size={16} />
+            </button>
           </div>
-          <button
-            onClick={() => refetchAgents()}
-            className="p-1.5 text-gray-500 hover:text-white hover:bg-[#2a2a4a] rounded transition-colors"
-            title={t('common.refresh')}
-          >
-            <RefreshCw size={16} />
-          </button>
+          {/* Filter toggle */}
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              onClick={() => setShowOnlineOnly(!showOnlineOnly)}
+              className={`text-xs px-2 py-1 rounded transition-colors ${
+                showOnlineOnly
+                  ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                  : 'bg-gray-500/20 text-gray-400 border border-gray-500/30'
+              }`}
+            >
+              {showOnlineOnly ? `Online only (${onlineCount})` : `All (${agents.length})`}
+            </button>
+            {!showOnlineOnly && offlineCount > 0 && (
+              <span className="text-[10px] text-gray-500">
+                {offlineCount} offline
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Agent List */}
         <div className="flex-1 overflow-y-auto">
           {agentsLoading ? (
             <div className="p-4 text-center text-gray-500">{t('agent.loading')}</div>
-          ) : agents.length === 0 ? (
+          ) : filteredAgents.length === 0 ? (
             <div className="p-8 text-center">
               <Server className="w-12 h-12 mx-auto mb-3 text-gray-600" />
-              <p className="text-gray-500 text-sm">{t('agent.noAgents')}</p>
+              <p className="text-gray-500 text-sm">
+                {showOnlineOnly ? 'No online agents' : t('agent.noAgents')}
+              </p>
               <p className="text-xs text-gray-600 mt-1">
-                {t('agent.noAgentsHint')}
+                {showOnlineOnly && agents.length > 0
+                  ? `${offlineCount} offline agent(s) hidden`
+                  : t('agent.noAgentsHint')}
               </p>
             </div>
           ) : (
             <div className="py-2">
-              {agents.map((agent) => (
+              {filteredAgents.map((agent) => (
                 <button
                   key={agent.id}
                   onClick={() => setSelectedAgentId(agent.id)}
@@ -701,9 +1118,71 @@ export default function AgentDashboard() {
                   {/* Agent info */}
                   <div className="flex-1 min-w-0 text-left">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-white truncate">
-                        {agent.name}
-                      </span>
+                      {editingAgentInList === agent.id ? (
+                        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="text"
+                            value={listEditedName}
+                            onChange={(e) => setListEditedName(e.target.value)}
+                            className="text-sm font-medium text-white bg-[#1a1a2e] border border-blue-500 rounded px-1.5 py-0.5 w-28 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && listEditedName.trim()) {
+                                renameAgentMutation.mutate({ agentId: agent.id, name: listEditedName.trim() })
+                                setEditingAgentInList(null)
+                              } else if (e.key === 'Escape') {
+                                setEditingAgentInList(null)
+                              }
+                            }}
+                            onBlur={() => {
+                              if (listEditedName.trim() && listEditedName !== agent.name) {
+                                renameAgentMutation.mutate({ agentId: agent.id, name: listEditedName.trim() })
+                              }
+                              setEditingAgentInList(null)
+                            }}
+                          />
+                        </div>
+                      ) : (
+                        <>
+                          <span
+                            className="text-sm font-medium text-white truncate cursor-pointer hover:text-blue-300"
+                            onDoubleClick={(e) => {
+                              e.stopPropagation()
+                              setListEditedName(agent.name)
+                              setEditingAgentInList(agent.id)
+                            }}
+                            title="Double-click to rename"
+                          >
+                            {agent.name}
+                          </span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setListEditedName(agent.name)
+                              setEditingAgentInList(agent.id)
+                            }}
+                            className="p-0.5 text-gray-600 hover:text-blue-400 transition-colors"
+                            title="Rename"
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </button>
+                          {/* Delete button - only for offline agents */}
+                          {agent.status !== 'online' && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                if (confirm(`Delete agent "${agent.name}"?`)) {
+                                  deleteAgentMutation.mutate(agent.id)
+                                }
+                              }}
+                              className="p-0.5 text-gray-600 hover:text-red-400 transition-colors"
+                              title="Delete agent"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          )}
+                        </>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 mt-0.5">
                       {agent.ip_address && (
@@ -714,7 +1193,22 @@ export default function AgentDashboard() {
                     </div>
                   </div>
 
-                  <ChevronRight className="w-4 h-4 text-gray-600" />
+                  {agent.status === 'online' ? (
+                    <ChevronRight className="w-4 h-4 text-gray-600" />
+                  ) : (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        if (confirm(`Delete agent "${agent.name}"?`)) {
+                          deleteAgentMutation.mutate(agent.id)
+                        }
+                      }}
+                      className="p-1.5 text-gray-600 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+                      title="Delete agent"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
                 </button>
               ))}
             </div>
@@ -760,9 +1254,78 @@ export default function AgentDashboard() {
                     />
                   </div>
                   <div>
-                    <h2 className="text-xl font-semibold text-white">{selectedAgent.name}</h2>
+                    {/* Editable Agent Name */}
+                    {isEditingName ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={editedName}
+                          onChange={(e) => setEditedName(e.target.value)}
+                          className="text-xl font-semibold text-white bg-[#1a1a2e] border border-blue-500 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && editedName.trim()) {
+                              renameAgentMutation.mutate({ agentId: selectedAgent.id, name: editedName.trim() })
+                            } else if (e.key === 'Escape') {
+                              setIsEditingName(false)
+                              setEditedName(selectedAgent.name)
+                            }
+                          }}
+                        />
+                        <button
+                          onClick={() => {
+                            if (editedName.trim()) {
+                              renameAgentMutation.mutate({ agentId: selectedAgent.id, name: editedName.trim() })
+                            }
+                          }}
+                          disabled={!editedName.trim() || renameAgentMutation.isPending}
+                          className="p-1 text-green-400 hover:text-green-300 disabled:text-gray-600"
+                          title="Save"
+                        >
+                          {renameAgentMutation.isPending ? (
+                            <Loader2 className="w-5 h-5 animate-spin" />
+                          ) : (
+                            <Check className="w-5 h-5" />
+                          )}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setIsEditingName(false)
+                            setEditedName(selectedAgent.name)
+                          }}
+                          className="p-1 text-gray-400 hover:text-gray-300"
+                          title="Cancel"
+                        >
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <h2
+                          className="text-xl font-semibold text-white cursor-pointer hover:text-blue-300 transition-colors"
+                          onDoubleClick={() => {
+                            setEditedName(selectedAgent.name)
+                            setIsEditingName(true)
+                          }}
+                          title="Double-click to rename"
+                        >
+                          {selectedAgent.name}
+                        </h2>
+                        <button
+                          onClick={() => {
+                            setEditedName(selectedAgent.name)
+                            setIsEditingName(true)
+                          }}
+                          className="p-1 text-gray-500 hover:text-blue-400 transition-colors"
+                          title="Rename agent"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
                     <div className="flex items-center gap-3 mt-1">
-                      <span className="text-sm text-gray-500 font-mono">{selectedAgent.id}</span>
+                      <span className="text-sm text-gray-500 font-mono" title="Server-assigned ID">{selectedAgent.id}</span>
+                      <span className="text-[10px] px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded">Server ID</span>
                       {selectedAgent.ip_address && (
                         <>
                           <span className="text-gray-600">|</span>
@@ -947,38 +1510,68 @@ export default function AgentDashboard() {
                       <div className="bg-[#16162a] rounded-lg border border-[#2a2a4a] p-4 space-y-3">
                         <div className="flex items-center justify-between">
                           <span className="text-xs text-gray-500 uppercase tracking-wider">Execution Status</span>
-                          <ExecutionPhaseBadge
-                            phase={selectedRobotState.execution_phase}
-                            currentStepName={currentStepId ? (fleetGraph?.steps.find(s => s.id === currentStepId)?.job_name || fleetGraph?.steps.find(s => s.id === currentStepId)?.name) : null}
-                            graphName={fleetGraph?.name}
-                            blockingConditions={selectedRobotState.blocking_conditions}
-                          />
+                          {/* Show different status when robot is executing a different graph */}
+                          {selectedRobotExecuting && !isExecutingCurrentGraph ? (
+                            <span className="px-2 py-1 bg-yellow-500/20 text-yellow-400 text-xs rounded">
+                              Executing different graph
+                            </span>
+                          ) : (
+                            <ExecutionPhaseBadge
+                              phase={selectedRobotState.execution_phase}
+                              currentStepName={currentStepId ? (fleetGraph?.steps.find(s => s.id === currentStepId)?.job_name || fleetGraph?.steps.find(s => s.id === currentStepId)?.name) : null}
+                              graphName={fleetGraph?.name}
+                              blockingConditions={selectedRobotState.blocking_conditions}
+                            />
+                          )}
                         </div>
 
                         {/* Execution Control Buttons */}
                         <div className="flex items-center gap-2 pt-2 border-t border-[#2a2a4a]">
                           {!selectedRobotExecuting ? (
                             // Start button - when not executing
-                            <button
-                              onClick={() => {
-                                if (fleetGraph && selectedRobotId) {
-                                  executeGraphMutation.mutate({
-                                    graphId: fleetGraph.id,
-                                    agentId: selectedRobotId,
-                                  })
+                            <>
+                              <button
+                                onClick={() => {
+                                  if (fleetGraph && selectedRobotId && canExecute) {
+                                    executeGraphMutation.mutate({
+                                      graphId: fleetGraph.id,
+                                      agentId: selectedRobotId,
+                                    })
+                                  }
+                                }}
+                                disabled={!fleetGraph || isExecutionLoading || !selectedRobotState.is_online || !canExecute}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors"
+                                title={
+                                  !selectedRobotState.is_online
+                                    ? 'Agent is offline'
+                                    : !fleetGraph
+                                      ? 'No graph available'
+                                      : !canExecute
+                                        ? `Cannot execute: ${executabilityMessage}${unavailableServers.length > 0 ? ` (Unavailable: ${unavailableServers.join(', ')})` : ''}`
+                                        : 'Start execution'
                                 }
-                              }}
-                              disabled={!fleetGraph || isExecutionLoading || !selectedRobotState.is_online}
-                              className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors"
-                              title={!selectedRobotState.is_online ? 'Agent is offline' : !fleetGraph ? 'No graph available' : 'Start execution'}
-                            >
-                              {isExecutionLoading ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : (
-                                <Play className="w-3.5 h-3.5" />
+                              >
+                                {isExecutionLoading ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <Play className="w-3.5 h-3.5" />
+                                )}
+                                Start
+                              </button>
+                              {/* Capability Warning - when Start is disabled due to missing capabilities */}
+                              {!canExecute && selectedRobotState.is_online && fleetGraph && (
+                                <div className="flex items-center gap-1.5 px-2 py-1 bg-red-500/20 text-red-400 text-xs rounded">
+                                  <AlertTriangle className="w-3.5 h-3.5" />
+                                  <span>
+                                    {unavailableServers.length > 0
+                                      ? `${unavailableServers.length} action server${unavailableServers.length > 1 ? 's' : ''} offline`
+                                      : missingCapabilities.length > 0
+                                        ? `Missing ${missingCapabilities.length} capability${missingCapabilities.length > 1 ? 'ies' : ''}`
+                                        : 'Capability check failed'}
+                                  </span>
+                                </div>
                               )}
-                              Start
-                            </button>
+                            </>
                           ) : (
                             // Pause/Resume and Stop buttons - when executing
                             <>
@@ -1093,6 +1686,86 @@ export default function AgentDashboard() {
                       </div>
                     )}
 
+                    {/* Action Graph Selection */}
+                    {sortedActionGraphs.length === 0 ? (
+                      <div className="flex items-center gap-2 mb-2 px-2 py-1.5 bg-yellow-500/10 border border-yellow-500/30 rounded">
+                        <AlertTriangle className="w-3.5 h-3.5 text-yellow-400" />
+                        <span className="text-xs text-yellow-400">
+                          No graphs assigned to this agent. Assign and deploy a graph from the Action Graph Editor.
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="mb-2 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <label className="text-xs text-gray-400">Action Graph:</label>
+                          <select
+                            value={selectedGraphId || ''}
+                            onChange={(e) => setSelectedGraphId(e.target.value)}
+                            className="flex-1 px-2 py-1 bg-[#1a1a2e] border border-[#2a2a4a] rounded text-xs text-white focus:outline-none focus:border-blue-500"
+                          >
+                            {sortedActionGraphs.map((graph) => {
+                              const statusIcon = graph.deployment_status === 'deployed' ? '\u2713' :
+                                                 graph.deployment_status === 'pending' ? '\u25cb' :
+                                                 graph.deployment_status === 'deploying' ? '\u21bb' :
+                                                 graph.deployment_status === 'failed' ? '\u2717' : '\u25cb'
+                              return (
+                                <option key={graph.id} value={graph.id}>
+                                  {statusIcon} {graph.name} {graph.version ? `(v${graph.version})` : graph.deployment_status === 'pending' ? '(not deployed)' : ''}
+                                </option>
+                              )
+                            })}
+                          </select>
+                          <span className="text-[10px] text-gray-500">
+                            {sortedActionGraphs.length} graphs
+                          </span>
+                        </div>
+                        {/* Deployment Status Banner */}
+                        {fleetGraphMeta && fleetGraphMeta.deployment_status !== 'deployed' && (
+                          <div className={`flex items-center justify-between gap-2 px-2 py-1.5 rounded border ${
+                            fleetGraphMeta.deployment_status === 'pending' ? 'bg-yellow-500/10 border-yellow-500/30' :
+                            fleetGraphMeta.deployment_status === 'deploying' ? 'bg-blue-500/10 border-blue-500/30' :
+                            fleetGraphMeta.deployment_status === 'failed' ? 'bg-red-500/10 border-red-500/30' :
+                            'bg-orange-500/10 border-orange-500/30'
+                          }`}>
+                            <div className="flex items-center gap-2">
+                              {fleetGraphMeta.deployment_status === 'deploying' ? (
+                                <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin" />
+                              ) : fleetGraphMeta.deployment_status === 'failed' ? (
+                                <XCircle className="w-3.5 h-3.5 text-red-400" />
+                              ) : (
+                                <AlertTriangle className="w-3.5 h-3.5 text-yellow-400" />
+                              )}
+                              <span className={`text-xs ${
+                                fleetGraphMeta.deployment_status === 'pending' ? 'text-yellow-400' :
+                                fleetGraphMeta.deployment_status === 'deploying' ? 'text-blue-400' :
+                                fleetGraphMeta.deployment_status === 'failed' ? 'text-red-400' :
+                                'text-orange-400'
+                              }`}>
+                                {fleetGraphMeta.deployment_status === 'pending' && 'Graph assigned but not deployed. Deploy to enable execution.'}
+                                {fleetGraphMeta.deployment_status === 'deploying' && 'Deploying graph to agent...'}
+                                {fleetGraphMeta.deployment_status === 'failed' && `Deployment failed: ${fleetGraphMeta.deployment_error || 'Unknown error'}`}
+                                {fleetGraphMeta.deployment_status === 'outdated' && `Graph outdated (server: v${fleetGraphMeta.server_version}, deployed: v${fleetGraphMeta.version})`}
+                              </span>
+                            </div>
+                            {(fleetGraphMeta.deployment_status === 'pending' || fleetGraphMeta.deployment_status === 'failed' || fleetGraphMeta.deployment_status === 'outdated') && selectedAgentId && (
+                              <button
+                                onClick={() => deployGraphMutation.mutate({ graphId: fleetGraphMeta.id, agentId: selectedAgentId })}
+                                disabled={deployGraphMutation.isPending}
+                                className="flex items-center gap-1 px-2 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 text-white rounded text-xs transition-colors"
+                              >
+                                {deployGraphMutation.isPending ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Play className="w-3 h-3" />
+                                )}
+                                {fleetGraphMeta.deployment_status === 'outdated' ? 'Update' : 'Deploy'}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     <div className="h-[380px] rounded-lg border border-[#2a2a4a] overflow-hidden bg-[#0f0f1a]">
                       <ActionGraphViewer
                         actionGraph={fleetGraph}
@@ -1106,6 +1779,19 @@ export default function AgentDashboard() {
                   </div>
                 )}
               </div>
+
+              {/* Telemetry */}
+              {selectedRobotId && (
+                <div>
+                  <TelemetryPanel
+                    telemetry={robotTelemetry || null}
+                    isLoading={telemetryLoading}
+                    isExpanded={telemetryExpanded}
+                    onToggleExpand={() => setTelemetryExpanded(!telemetryExpanded)}
+                    lastUpdated={robotTelemetry?.updated_at}
+                  />
+                </div>
+              )}
 
               {/* Execution Logs */}
               <div>

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"strings"
 	"sync"
@@ -62,9 +63,15 @@ type RawQUICHandler struct {
 	// Ping interval for latency tracking
 	pingInterval time.Duration
 
+	// Task completion callback (for agent-driven execution)
+	taskCompleteCallback TaskCompleteCallback
+
 	ctx    context.Context
 	cancel context.CancelFunc
 }
+
+// TaskCompleteCallback is called when agent reports task completion
+type TaskCompleteCallback func(taskID string, status string, errorMsg string)
 
 // Note: PendingCommand is defined in handlers.go
 
@@ -73,6 +80,26 @@ type RawQUICHandler struct {
 type WebSocketBroadcaster interface {
 	BroadcastAgentUpdate(agentID string, status string)
 	BroadcastCapabilityUpdate(agentID string, capabilities interface{})
+	BroadcastTaskStateUpdate(update interface{})
+}
+
+// TaskStateUpdateBroadcast is the struct sent to WebSocket clients for task state updates
+type TaskStateUpdateBroadcast struct {
+	TaskID         string            `json:"task_id"`
+	StepID         string            `json:"step_id"`
+	State          string            `json:"state"`
+	Progress       float32           `json:"progress"`
+	BlockingReason string            `json:"blocking_reason,omitempty"`
+	Variables      map[string]string `json:"variables,omitempty"`
+	StepResult     *StepResultBroadcast `json:"step_result,omitempty"`
+}
+
+// StepResultBroadcast is the step result info sent to WebSocket clients
+type StepResultBroadcast struct {
+	StepID     string `json:"step_id"`
+	Status     int32  `json:"status"`
+	DurationMs int64  `json:"duration_ms"`
+	Error      string `json:"error,omitempty"`
 }
 
 // agentConnection tracks an agent's QUIC connection with bidirectional support
@@ -90,6 +117,9 @@ type agentConnection struct {
 	sendDone        chan struct{}         // Signal to stop sender goroutine
 	useHeartbeatRtt atomic.Bool           // Prefer latency from heartbeat stats
 	// In 1:1 model, agent_id = robot_id, so no separate robotIDs field needed
+
+	// Debug counters
+	telemetryLogCounter int // For rate-limited telemetry debug logging
 }
 
 // OutboundCommand represents a command to send to agent
@@ -128,6 +158,11 @@ func NewRawQUICHandler(
 		ctx:             ctx,
 		cancel:          cancel,
 	}
+}
+
+// SetTaskCompleteCallback sets the callback for agent-driven task completion
+func (h *RawQUICHandler) SetTaskCompleteCallback(cb TaskCompleteCallback) {
+	h.taskCompleteCallback = cb
 }
 
 // Start starts listening for raw QUIC connections
@@ -312,10 +347,42 @@ type AgentMsg struct {
 	StatusUpdate           *AgentStatusUpdateMsg      // field 13
 	DeployResponse         *DeployGraphResponseMsg    // field 14
 	GraphStatus            *GraphExecutionStatusMsg   // field 15
+	TaskStateUpdate        *TaskStateUpdateMsg        // field 20 (agent-driven)
 	Pong                   *PongResponseMsg           // field 16
 	ConfigAck              *ConfigUpdateAckMsg        // field 17
 	CapabilityRegistration *CapabilityRegistrationMsg // field 18
 	TaskLog                *TaskLogMsg                // field 19
+}
+
+// TaskStateUpdateMsg represents agent-driven task state update
+// message TaskStateUpdate {
+//   string task_id = 1;
+//   string current_step_id = 2;
+//   TaskState state = 3;
+//   float progress = 4;
+//   string blocking_reason = 5;
+//   map<string, string> variables = 6;
+//   StepResultInfo step_result = 7;
+//   int64 timestamp_ms = 8;
+// }
+type TaskStateUpdateMsg struct {
+	TaskID         string
+	CurrentStepID  string
+	State          int32 // TaskState enum
+	Progress       float32
+	BlockingReason string
+	Variables      map[string]string
+	StepResult     *StepResultInfoMsg
+	TimestampMs    int64
+}
+
+// StepResultInfoMsg represents step completion info
+type StepResultInfoMsg struct {
+	StepID     string
+	Status     int32 // ActionStatus enum
+	ResultJSON []byte
+	Error      string
+	DurationMs int64
 }
 
 // TaskLogMsg represents task execution log from agent
@@ -345,6 +412,72 @@ type AgentHeartbeatMsg struct {
 	HasNetworkLatency   bool
 	NetworkLatencyUs    uint32
 	HasNetworkLatencyUs bool
+	Telemetry           *TelemetryPayloadMsg // Optional telemetry data
+}
+
+// TelemetryPayloadMsg represents telemetry data from agent
+type TelemetryPayloadMsg struct {
+	RobotID       string
+	JointState    *JointStateDataMsg
+	Transforms    []*TransformDataMsg
+	Odometry      *OdometryDataMsg
+	CollectedAtNs int64
+}
+
+// JointStateDataMsg represents joint state telemetry
+type JointStateDataMsg struct {
+	Name        []string
+	Position    []float64
+	Velocity    []float64
+	Effort      []float64
+	TimestampNs int64
+	TopicName   string // ROS2 topic name for visualization
+}
+
+// TransformDataMsg represents transform telemetry
+type TransformDataMsg struct {
+	FrameID      string
+	ChildFrameID string
+	Translation  *Vector3Msg
+	Rotation     *QuaternionMsg
+	TimestampNs  int64
+}
+
+// OdometryDataMsg represents odometry telemetry
+type OdometryDataMsg struct {
+	FrameID      string
+	ChildFrameID string
+	Pose         *PoseMsg
+	Twist        *TwistMsg
+	TimestampNs  int64
+	TopicName    string // ROS2 topic name for visualization
+}
+
+// Vector3Msg represents 3D vector
+type Vector3Msg struct {
+	X float64
+	Y float64
+	Z float64
+}
+
+// QuaternionMsg represents quaternion rotation
+type QuaternionMsg struct {
+	X float64
+	Y float64
+	Z float64
+	W float64
+}
+
+// PoseMsg represents pose (position + orientation)
+type PoseMsg struct {
+	Position    *Vector3Msg
+	Orientation *QuaternionMsg
+}
+
+// TwistMsg represents twist (linear + angular velocity)
+type TwistMsg struct {
+	Linear  *Vector3Msg
+	Angular *Vector3Msg
 }
 
 // ActionResultMsg represents action completion result
@@ -687,6 +820,18 @@ func parseAgentMessage(data []byte) (*AgentMsg, error) {
 				}
 				data = data[n:]
 			}
+		case 20: // task_state (TaskStateUpdate) - agent-driven execution
+			if wireType == protowire.BytesType {
+				updateData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid task_state")
+				}
+				update, err := parseTaskStateUpdate(updateData)
+				if err == nil {
+					msg.TaskStateUpdate = update
+				}
+				data = data[n:]
+			}
 		default:
 			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
 			if n < 0 {
@@ -913,6 +1058,223 @@ func parseTaskLog(data []byte) (*TaskLogMsg, error) {
 	return taskLog, nil
 }
 
+// parseTaskStateUpdate parses TaskStateUpdate protobuf (agent-driven execution)
+// message TaskStateUpdate {
+//   string task_id = 1;
+//   string current_step_id = 2;
+//   TaskState state = 3;
+//   float progress = 4;
+//   string blocking_reason = 5;
+//   map<string, string> variables = 6;
+//   StepResultInfo step_result = 7;
+//   int64 timestamp_ms = 8;
+// }
+func parseTaskStateUpdate(data []byte) (*TaskStateUpdateMsg, error) {
+	update := &TaskStateUpdateMsg{
+		Variables: make(map[string]string),
+	}
+
+	for len(data) > 0 {
+		fieldNum, wireType, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, fmt.Errorf("invalid tag")
+		}
+		data = data[n:]
+
+		switch fieldNum {
+		case 1: // task_id (string)
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid task_id")
+				}
+				update.TaskID = v
+				data = data[n:]
+			}
+		case 2: // current_step_id (string)
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid current_step_id")
+				}
+				update.CurrentStepID = v
+				data = data[n:]
+			}
+		case 3: // state (TaskState enum - varint)
+			if wireType == protowire.VarintType {
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid state")
+				}
+				update.State = int32(v)
+				data = data[n:]
+			}
+		case 4: // progress (float)
+			if wireType == protowire.Fixed32Type {
+				v, n := protowire.ConsumeFixed32(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid progress")
+				}
+				update.Progress = float32FromBits(v)
+				data = data[n:]
+			}
+		case 5: // blocking_reason (string)
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid blocking_reason")
+				}
+				update.BlockingReason = v
+				data = data[n:]
+			}
+		case 6: // variables (map<string, string>)
+			if wireType == protowire.BytesType {
+				mapData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid variables")
+				}
+				// Parse map entry: key=1, value=2
+				var key, value string
+				for len(mapData) > 0 {
+					fn, wt, m := protowire.ConsumeTag(mapData)
+					if m < 0 {
+						break
+					}
+					mapData = mapData[m:]
+					if fn == 1 && wt == protowire.BytesType {
+						k, m := protowire.ConsumeString(mapData)
+						if m >= 0 {
+							key = k
+							mapData = mapData[m:]
+						}
+					} else if fn == 2 && wt == protowire.BytesType {
+						v, m := protowire.ConsumeString(mapData)
+						if m >= 0 {
+							value = v
+							mapData = mapData[m:]
+						}
+					} else {
+						m := protowire.ConsumeFieldValue(fn, wt, mapData)
+						if m < 0 {
+							break
+						}
+						mapData = mapData[m:]
+					}
+				}
+				if key != "" {
+					update.Variables[key] = value
+				}
+				data = data[n:]
+			}
+		case 7: // step_result (StepResultInfo message)
+			if wireType == protowire.BytesType {
+				resultData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid step_result")
+				}
+				result, err := parseStepResultInfo(resultData)
+				if err == nil {
+					update.StepResult = result
+				}
+				data = data[n:]
+			}
+		case 8: // timestamp_ms (int64)
+			if wireType == protowire.VarintType {
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid timestamp_ms")
+				}
+				update.TimestampMs = int64(v)
+				data = data[n:]
+			}
+		default:
+			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
+			if n < 0 {
+				return nil, fmt.Errorf("invalid field %d", fieldNum)
+			}
+			data = data[n:]
+		}
+	}
+
+	return update, nil
+}
+
+// parseStepResultInfo parses StepResultInfo protobuf
+// message StepResultInfo {
+//   string step_id = 1;
+//   ActionStatus status = 2;
+//   bytes result_json = 3;
+//   string error = 4;
+//   int64 duration_ms = 5;
+// }
+func parseStepResultInfo(data []byte) (*StepResultInfoMsg, error) {
+	info := &StepResultInfoMsg{}
+
+	for len(data) > 0 {
+		fieldNum, wireType, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, fmt.Errorf("invalid tag")
+		}
+		data = data[n:]
+
+		switch fieldNum {
+		case 1: // step_id (string)
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid step_id")
+				}
+				info.StepID = v
+				data = data[n:]
+			}
+		case 2: // status (ActionStatus enum - varint)
+			if wireType == protowire.VarintType {
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid status")
+				}
+				info.Status = int32(v)
+				data = data[n:]
+			}
+		case 3: // result_json (bytes)
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid result_json")
+				}
+				info.ResultJSON = v
+				data = data[n:]
+			}
+		case 4: // error (string)
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid error")
+				}
+				info.Error = v
+				data = data[n:]
+			}
+		case 5: // duration_ms (int64)
+			if wireType == protowire.VarintType {
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid duration_ms")
+				}
+				info.DurationMs = int64(v)
+				data = data[n:]
+			}
+		default:
+			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
+			if n < 0 {
+				return nil, fmt.Errorf("invalid field %d", fieldNum)
+			}
+			data = data[n:]
+		}
+	}
+
+	return info, nil
+}
+
 // parseActionCapability parses ActionCapability protobuf
 func parseActionCapability(data []byte) (*ActionCapabilityMsg, error) {
 	cap := &ActionCapabilityMsg{}
@@ -1114,8 +1476,10 @@ func (h *RawQUICHandler) handleStream(agentConn *agentConnection, stream quic.St
 
 		// Try to parse as RegisterAgentRequest first
 		regReq, err := parseRegisterAgentRequest(msgBuf)
-		if err == nil && regReq.AgentID != "" {
-			log.Printf("[RawQUIC] Parsed as RegisterAgentRequest: %s", regReq.AgentID)
+		// Accept registration if: has AgentID OR has HardwareFingerprint (for server-assigned ID)
+		if err == nil && (regReq.AgentID != "" || regReq.HardwareFingerprint != "") {
+			log.Printf("[RawQUIC] Parsed as RegisterAgentRequest: agentID=%q, fingerprint=%q",
+				regReq.AgentID, regReq.HardwareFingerprint)
 			h.handleRegisterAgent(agentConn, stream, regReq)
 			// Continue reading - C++ agent may reuse this stream for capability registration
 			continue
@@ -1142,8 +1506,12 @@ func (h *RawQUICHandler) handleStream(agentConn *agentConnection, stream quic.St
 			handled := false
 
 			if agentMsg.Heartbeat != nil {
+				log.Printf("[RawQUIC] Processing heartbeat from %s (state=%s, executing=%v)",
+					agentMsg.AgentID, agentMsg.Heartbeat.State, agentMsg.Heartbeat.IsExecuting)
 				h.handleHeartbeat(agentConn, agentMsg.Heartbeat)
 				handled = true
+			} else {
+				log.Printf("[RawQUIC] AgentMessage has no heartbeat payload (agent=%s)", agentMsg.AgentID)
 			}
 
 			if agentMsg.ActionResult != nil {
@@ -1188,13 +1556,27 @@ func (h *RawQUICHandler) handleStream(agentConn *agentConnection, stream quic.St
 			}
 
 			if agentMsg.CapabilityRegistration != nil {
-				log.Printf("[RawQUIC] Found CapabilityRegistration, handling...")
-				h.handleCapabilityRegistration(agentConn, agentMsg.AgentID, agentMsg.CapabilityRegistration)
+				// Use agentConn.agentID (server-assigned) instead of agentMsg.AgentID (client's config)
+				effectiveID := agentConn.agentID
+				if effectiveID == "" {
+					effectiveID = agentMsg.AgentID // Fallback if connection not registered yet
+				}
+				log.Printf("[RawQUIC] Found CapabilityRegistration, handling for %s (msg had %s)...",
+					effectiveID, agentMsg.AgentID)
+				h.handleCapabilityRegistration(agentConn, effectiveID, agentMsg.CapabilityRegistration)
 				handled = true
 			}
 
 			if agentMsg.TaskLog != nil {
 				h.handleTaskLog(agentConn, agentMsg.TaskLog)
+				handled = true
+			}
+
+			if agentMsg.TaskStateUpdate != nil {
+				log.Printf("[RawQUIC] Received TaskStateUpdate: task=%s, step=%s, state=%d",
+					agentMsg.TaskStateUpdate.TaskID, agentMsg.TaskStateUpdate.CurrentStepID,
+					agentMsg.TaskStateUpdate.State)
+				h.handleTaskStateUpdate(agentConn, agentMsg.TaskStateUpdate)
 				handled = true
 			}
 
@@ -1214,32 +1596,59 @@ func (h *RawQUICHandler) handleRegisterAgent(
 	stream quic.Stream,
 	req *RegisterAgentReq,
 ) {
-	// Server-assigned ID logic
-	effectiveAgentID := req.AgentID
-	idWasAssigned := false
+	// Server is the sole authority for Agent ID assignment
+	// Agent's provided ID is only used as a hint for logging
+	var effectiveAgentID string
+	idWasAssigned := true // Server always assigns
 
-	if req.AgentID == "" {
-		// Agent requesting server-assigned ID
-		// First, try to recover ID from hardware fingerprint
-		if req.HardwareFingerprint != "" {
-			existingAgent, err := h.repo.GetAgentByHardwareFingerprint(req.HardwareFingerprint)
-			if err == nil && existingAgent != nil {
-				// Found existing agent with same fingerprint
-				effectiveAgentID = existingAgent.ID
-				idWasAssigned = true
-				log.Printf("[RawQUIC] Recovered agent ID %s from hardware fingerprint", effectiveAgentID)
-			}
+	// Step 1: Try to recover existing ID from hardware fingerprint
+	if req.HardwareFingerprint != "" {
+		log.Printf("[RawQUIC] Looking up agent by hardware fingerprint: %s", req.HardwareFingerprint)
+		existingAgent, err := h.repo.GetAgentByHardwareFingerprint(req.HardwareFingerprint)
+		if err != nil {
+			log.Printf("[RawQUIC] Warning: fingerprint lookup failed: %v (will generate new ID)", err)
+		} else if existingAgent != nil {
+			// Found existing agent with same fingerprint - reuse the ID
+			effectiveAgentID = existingAgent.ID
+			log.Printf("[RawQUIC] Recovered agent ID %s from hardware fingerprint (agent suggested: %s)",
+				effectiveAgentID, req.AgentID)
+		} else {
+			log.Printf("[RawQUIC] No existing agent found with fingerprint %s", req.HardwareFingerprint)
 		}
+	} else {
+		log.Printf("[RawQUIC] Warning: no hardware fingerprint provided - cannot recover existing ID")
+	}
 
-		// If no existing ID found, generate new UUID
-		if effectiveAgentID == "" {
-			effectiveAgentID = uuid.New().String()
-			idWasAssigned = true
-			log.Printf("[RawQUIC] Generated new agent ID: %s", effectiveAgentID)
+	// Step 2: If no existing ID found, generate new UUID
+	if effectiveAgentID == "" {
+		effectiveAgentID = uuid.New().String()
+		log.Printf("[RawQUIC] Generated new agent ID: %s (agent suggested: %s)",
+			effectiveAgentID, req.AgentID)
+	}
+
+	// Step 3: Determine effective agent name
+	// Server generates name if agent provides empty or generic name like "Fleet Agent"
+	effectiveName := req.Name
+	if effectiveName == "" || effectiveName == "Fleet Agent" {
+		// Check if existing agent has a name
+		existingAgent, _ := h.repo.GetAgent(effectiveAgentID)
+		if existingAgent != nil && existingAgent.Name != "" && existingAgent.Name != "Fleet Agent" {
+			// Reuse existing name
+			effectiveName = existingAgent.Name
+			log.Printf("[RawQUIC] Reusing existing agent name: %s", effectiveName)
+		} else {
+			// Generate new sequential name
+			nextNum, err := h.repo.GetNextAgentNumber()
+			if err != nil {
+				log.Printf("[RawQUIC] Warning: failed to get next agent number: %v, using fallback", err)
+				nextNum = 1
+			}
+			effectiveName = fmt.Sprintf("Agent-%03d", nextNum)
+			log.Printf("[RawQUIC] Generated new agent name: %s", effectiveName)
 		}
 	}
 
-	log.Printf("[RawQUIC] Agent registration: %s (%s) assigned=%v", effectiveAgentID, req.Name, idWasAssigned)
+	log.Printf("[RawQUIC] Agent registration: %s (%s) assigned=%v", effectiveAgentID, effectiveName, idWasAssigned)
 
 	// Store agent ID in connection
 	agentConn.agentID = effectiveAgentID
@@ -1257,39 +1666,51 @@ func (h *RawQUICHandler) handleRegisterAgent(
 	// Register robot in state manager (agent_id = robot_id in 1:1 model)
 	h.stateManager.RegisterRobot(
 		effectiveAgentID,
-		req.Name,
+		effectiveName,
 		effectiveAgentID,
 		"idle",
 	)
 
 	// In 1:1 model, agent_id = robot_id, so no separate robotIDs needed
-	h.stateManager.RegisterAgent(effectiveAgentID, req.Name, req.Namespace)
+	h.stateManager.RegisterAgent(effectiveAgentID, effectiveName, req.Namespace)
 
 	// Update database - Agent
+	remoteAddr := agentConn.quicConn.RemoteAddr().String()
 	agent, _ := h.repo.GetAgent(effectiveAgentID)
 	if agent == nil {
 		// Create new agent
 		agent = &db.Agent{
 			ID:               effectiveAgentID,
-			Name:             req.Name,
+			Name:             effectiveName,
 			Namespace:        req.Namespace,
 			Status:           "online",
+			IPAddress:        sql.NullString{String: remoteAddr, Valid: true},
 			AssignedByServer: idWasAssigned,
 			CreatedAt:        time.Now(),
 			LastSeen:         sql.NullTime{Time: time.Now(), Valid: true},
 		}
+		// Always store hardware fingerprint for future ID recovery
+		agent.HardwareFingerprint = sql.NullString{
+			String: req.HardwareFingerprint,
+			Valid:  req.HardwareFingerprint != "",
+		}
+		h.repo.CreateAgent(agent)
+		log.Printf("[RawQUIC] Created new agent %s with IP %s (fingerprint: %s)",
+			effectiveAgentID, remoteAddr, req.HardwareFingerprint)
+	} else {
+		// Update existing agent - always update hardware fingerprint to ensure recovery works
+		agent.Status = "online"
+		agent.IPAddress = sql.NullString{String: remoteAddr, Valid: true}
+		agent.LastSeen = sql.NullTime{Time: time.Now(), Valid: true}
 		if req.HardwareFingerprint != "" {
 			agent.HardwareFingerprint = sql.NullString{String: req.HardwareFingerprint, Valid: true}
 		}
-		h.repo.CreateAgent(agent)
-	} else {
-		// Update existing agent
-		h.repo.UpdateAgentStatus(effectiveAgentID, "online", agentConn.quicConn.RemoteAddr().String())
-		// Update hardware fingerprint if provided and not yet set
-		if req.HardwareFingerprint != "" && !agent.HardwareFingerprint.Valid {
-			agent.HardwareFingerprint = sql.NullString{String: req.HardwareFingerprint, Valid: true}
-			h.repo.CreateOrUpdateAgent(agent)
+		// Update name if it was generic "Fleet Agent"
+		if agent.Name == "Fleet Agent" || agent.Name == "" {
+			agent.Name = effectiveName
 		}
+		h.repo.CreateOrUpdateAgent(agent)
+		log.Printf("[RawQUIC] Updated existing agent %s (%s) with IP %s", effectiveAgentID, agent.Name, remoteAddr)
 	}
 
 	// Broadcast to frontend via WebSocket
@@ -1561,33 +1982,289 @@ func (h *RawQUICHandler) SendExecuteGraph(ctx context.Context, agentID, executio
 }
 
 // buildDeployGraphMessage builds a ServerMessage with DeployGraphRequest
+// Encodes complete protobuf structure (vertices, edges, entry_point) for agent consumption
 func (h *RawQUICHandler) buildDeployGraphMessage(correlationID string, graphJSON []byte) []byte {
-	// Build DeployGraphRequest
-	// message DeployGraphRequest {
-	//   string correlation_id = 1;
-	//   ActionGraph graph = 2;
-	//   bool force = 3;
-	// }
-	var deployReq []byte
+	// Parse canonical JSON
+	var canonical struct {
+		ActionGraph struct {
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			Version int    `json:"version"`
+		} `json:"action_graph"`
+		Vertices []struct {
+			ID   string `json:"id"`
+			Type string `json:"type"`
+			Step *struct {
+				StepType string `json:"step_type"`
+				Action   *struct {
+					Type      string                 `json:"type"`
+					Server    string                 `json:"server"`
+					TimeoutS  float64                `json:"timeout_sec"`
+					Params    map[string]interface{} `json:"params"`
+				} `json:"action"`
+				States *struct {
+					During  []string `json:"during"`
+					Success []string `json:"success"`
+					Failure []string `json:"failure"`
+				} `json:"states"`
+			} `json:"step"`
+			Terminal *struct {
+				TerminalType string `json:"terminal_type"`
+			} `json:"terminal"`
+		} `json:"vertices"`
+		Edges []struct {
+			From      string `json:"from"`
+			To        string `json:"to"`
+			Type      string `json:"type"`
+			Condition string `json:"condition"`
+		} `json:"edges"`
+		EntryPoint string `json:"entry_point"`
+		Checksum   string `json:"checksum"`
+	}
 
-	// Field 1: correlation_id
+	if err := json.Unmarshal(graphJSON, &canonical); err != nil {
+		log.Printf("[RawQUIC] Failed to parse graph JSON: %v", err)
+		return nil
+	}
+
+	// Build ActionGraph protobuf
+	// message ActionGraph {
+	//   string schema_version = 1;
+	//   ActionGraphMetadata metadata = 2;
+	//   repeated Vertex vertices = 3;
+	//   repeated Edge edges = 4;
+	//   string entry_point = 5;
+	//   string checksum = 6;
+	// }
+	var graphMsg []byte
+
+	// Field 1: schema_version
+	graphMsg = protowire.AppendTag(graphMsg, 1, protowire.BytesType)
+	graphMsg = protowire.AppendString(graphMsg, "1.0.0")
+
+	// Field 2: metadata
+	var metadata []byte
+	if canonical.ActionGraph.ID != "" {
+		metadata = protowire.AppendTag(metadata, 1, protowire.BytesType)
+		metadata = protowire.AppendString(metadata, canonical.ActionGraph.ID)
+	}
+	if canonical.ActionGraph.Name != "" {
+		metadata = protowire.AppendTag(metadata, 2, protowire.BytesType)
+		metadata = protowire.AppendString(metadata, canonical.ActionGraph.Name)
+	}
+	if canonical.ActionGraph.Version > 0 {
+		metadata = protowire.AppendTag(metadata, 3, protowire.VarintType)
+		metadata = protowire.AppendVarint(metadata, uint64(canonical.ActionGraph.Version))
+	}
+	if len(metadata) > 0 {
+		graphMsg = protowire.AppendTag(graphMsg, 2, protowire.BytesType)
+		graphMsg = protowire.AppendBytes(graphMsg, metadata)
+	}
+
+	// Field 3: vertices (repeated)
+	for _, v := range canonical.Vertices {
+		vertexMsg := h.buildVertexMessage(v.ID, v.Type, v.Step, v.Terminal)
+		graphMsg = protowire.AppendTag(graphMsg, 3, protowire.BytesType)
+		graphMsg = protowire.AppendBytes(graphMsg, vertexMsg)
+	}
+
+	// Field 4: edges (repeated)
+	for _, e := range canonical.Edges {
+		edgeMsg := h.buildEdgeMessage(e.From, e.To, e.Type, e.Condition)
+		graphMsg = protowire.AppendTag(graphMsg, 4, protowire.BytesType)
+		graphMsg = protowire.AppendBytes(graphMsg, edgeMsg)
+	}
+
+	// Field 5: entry_point
+	if canonical.EntryPoint != "" {
+		graphMsg = protowire.AppendTag(graphMsg, 5, protowire.BytesType)
+		graphMsg = protowire.AppendString(graphMsg, canonical.EntryPoint)
+	}
+
+	// Field 6: checksum
+	if canonical.Checksum != "" {
+		graphMsg = protowire.AppendTag(graphMsg, 6, protowire.BytesType)
+		graphMsg = protowire.AppendString(graphMsg, canonical.Checksum)
+	}
+
+	// Build DeployGraphRequest
+	var deployReq []byte
 	deployReq = protowire.AppendTag(deployReq, 1, protowire.BytesType)
 	deployReq = protowire.AppendString(deployReq, correlationID)
-
-	// Field 2: graph - embed canonical JSON in ActionGraph.graph_json (field 20)
-	var graphMsg []byte
-	graphMsg = protowire.AppendTag(graphMsg, 20, protowire.BytesType) // graph_json field
-	graphMsg = protowire.AppendString(graphMsg, string(graphJSON))
-
 	deployReq = protowire.AppendTag(deployReq, 2, protowire.BytesType)
 	deployReq = protowire.AppendBytes(deployReq, graphMsg)
-
-	// Field 3: force = true
 	deployReq = protowire.AppendTag(deployReq, 3, protowire.VarintType)
-	deployReq = protowire.AppendVarint(deployReq, 1)
+	deployReq = protowire.AppendVarint(deployReq, 1) // force = true
 
-	// Build ServerMessage wrapper (timestamp_ms field = 3)
+	log.Printf("[RawQUIC] Built deploy message: %d vertices, %d edges, entry=%s",
+		len(canonical.Vertices), len(canonical.Edges), canonical.EntryPoint)
+
 	return h.buildServerMessage(correlationID, 12, deployReq)
+}
+
+// buildVertexMessage builds a Vertex protobuf message
+func (h *RawQUICHandler) buildVertexMessage(id, vType string, step interface{}, terminal interface{}) []byte {
+	var msg []byte
+
+	// Field 1: id
+	msg = protowire.AppendTag(msg, 1, protowire.BytesType)
+	msg = protowire.AppendString(msg, id)
+
+	// Field 2: type (enum VertexType)
+	vertexType := uint64(1) // VERTEX_TYPE_STEP
+	if vType == "terminal" {
+		vertexType = 2 // VERTEX_TYPE_TERMINAL
+	}
+	msg = protowire.AppendTag(msg, 2, protowire.VarintType)
+	msg = protowire.AppendVarint(msg, vertexType)
+
+	// Field 3: step (StepVertex) or Field 4: terminal (TerminalVertex)
+	if vType == "terminal" && terminal != nil {
+		termData, ok := terminal.(*struct {
+			TerminalType string `json:"terminal_type"`
+		})
+		if ok && termData != nil {
+			var termMsg []byte
+			termType := uint64(1) // TERMINAL_TYPE_SUCCESS
+			if termData.TerminalType == "failure" {
+				termType = 2
+			}
+			termMsg = protowire.AppendTag(termMsg, 1, protowire.VarintType)
+			termMsg = protowire.AppendVarint(termMsg, termType)
+			msg = protowire.AppendTag(msg, 4, protowire.BytesType)
+			msg = protowire.AppendBytes(msg, termMsg)
+		}
+	} else if step != nil {
+		stepData, ok := step.(*struct {
+			StepType string `json:"step_type"`
+			Action   *struct {
+				Type      string                 `json:"type"`
+				Server    string                 `json:"server"`
+				TimeoutS  float64                `json:"timeout_sec"`
+				Params    map[string]interface{} `json:"params"`
+			} `json:"action"`
+			States *struct {
+				During  []string `json:"during"`
+				Success []string `json:"success"`
+				Failure []string `json:"failure"`
+			} `json:"states"`
+		})
+		if ok && stepData != nil {
+			stepMsg := h.buildStepVertexMessage(stepData)
+			msg = protowire.AppendTag(msg, 3, protowire.BytesType)
+			msg = protowire.AppendBytes(msg, stepMsg)
+		}
+	}
+
+	return msg
+}
+
+// buildStepVertexMessage builds a StepVertex protobuf message
+func (h *RawQUICHandler) buildStepVertexMessage(step *struct {
+	StepType string `json:"step_type"`
+	Action   *struct {
+		Type      string                 `json:"type"`
+		Server    string                 `json:"server"`
+		TimeoutS  float64                `json:"timeout_sec"`
+		Params    map[string]interface{} `json:"params"`
+	} `json:"action"`
+	States *struct {
+		During  []string `json:"during"`
+		Success []string `json:"success"`
+		Failure []string `json:"failure"`
+	} `json:"states"`
+}) []byte {
+	var msg []byte
+
+	// Field 1: step_type (enum StepType)
+	stepType := uint64(1) // STEP_TYPE_ACTION
+	if step.StepType == "wait" {
+		stepType = 2
+	} else if step.StepType == "condition" {
+		stepType = 3
+	}
+	msg = protowire.AppendTag(msg, 1, protowire.VarintType)
+	msg = protowire.AppendVarint(msg, stepType)
+
+	// Field 2: action (ActionStep)
+	if step.Action != nil {
+		var actionMsg []byte
+		if step.Action.Type != "" {
+			actionMsg = protowire.AppendTag(actionMsg, 1, protowire.BytesType)
+			actionMsg = protowire.AppendString(actionMsg, step.Action.Type)
+		}
+		if step.Action.Server != "" {
+			actionMsg = protowire.AppendTag(actionMsg, 2, protowire.BytesType)
+			actionMsg = protowire.AppendString(actionMsg, step.Action.Server)
+		}
+		if step.Action.TimeoutS > 0 {
+			actionMsg = protowire.AppendTag(actionMsg, 3, protowire.Fixed32Type)
+			actionMsg = protowire.AppendFixed32(actionMsg, math.Float32bits(float32(step.Action.TimeoutS)))
+		}
+		if len(step.Action.Params) > 0 {
+			paramsJSON, _ := json.Marshal(step.Action.Params)
+			actionMsg = protowire.AppendTag(actionMsg, 4, protowire.BytesType)
+			actionMsg = protowire.AppendBytes(actionMsg, paramsJSON)
+		}
+		if len(actionMsg) > 0 {
+			msg = protowire.AppendTag(msg, 2, protowire.BytesType)
+			msg = protowire.AppendBytes(msg, actionMsg)
+		}
+	}
+
+	// Fields 15-17: states (during_states, success_states, failure_states)
+	if step.States != nil {
+		for _, s := range step.States.During {
+			msg = protowire.AppendTag(msg, 15, protowire.BytesType)
+			msg = protowire.AppendString(msg, s)
+		}
+		for _, s := range step.States.Success {
+			msg = protowire.AppendTag(msg, 16, protowire.BytesType)
+			msg = protowire.AppendString(msg, s)
+		}
+		for _, s := range step.States.Failure {
+			msg = protowire.AppendTag(msg, 17, protowire.BytesType)
+			msg = protowire.AppendString(msg, s)
+		}
+	}
+
+	return msg
+}
+
+// buildEdgeMessage builds an Edge protobuf message
+func (h *RawQUICHandler) buildEdgeMessage(from, to, edgeType, condition string) []byte {
+	var msg []byte
+
+	// Field 1: from_vertex
+	msg = protowire.AppendTag(msg, 1, protowire.BytesType)
+	msg = protowire.AppendString(msg, from)
+
+	// Field 2: to_vertex
+	msg = protowire.AppendTag(msg, 2, protowire.BytesType)
+	msg = protowire.AppendString(msg, to)
+
+	// Field 3: type (enum EdgeType)
+	eType := uint64(4) // EDGE_TYPE_CONDITIONAL (default)
+	switch edgeType {
+	case "on_success":
+		eType = 1
+	case "on_failure":
+		eType = 2
+	case "on_timeout":
+		eType = 3
+	case "conditional":
+		eType = 4
+	}
+	msg = protowire.AppendTag(msg, 3, protowire.VarintType)
+	msg = protowire.AppendVarint(msg, eType)
+
+	// Field 4: condition (optional)
+	if condition != "" {
+		msg = protowire.AppendTag(msg, 4, protowire.BytesType)
+		msg = protowire.AppendString(msg, condition)
+	}
+
+	return msg
 }
 
 // buildConfigUpdateMessage builds a ServerMessage with ConfigUpdate.
@@ -1952,6 +2629,21 @@ func parseAgentHeartbeat(data []byte) (*AgentHeartbeatMsg, error) {
 				hb.CurrentStepID = v
 				data = data[n:]
 			}
+		case 12: // telemetry (TelemetryPayload message)
+			if wireType == protowire.BytesType {
+				msgData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid telemetry")
+				}
+				telemetry, err := parseTelemetryPayload(msgData)
+				if err != nil {
+					log.Printf("[RawQUIC] Failed to parse telemetry payload: %v", err)
+					// Don't fail the whole heartbeat, just skip telemetry
+				} else {
+					hb.Telemetry = telemetry
+				}
+				data = data[n:]
+			}
 		default:
 			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
 			if n < 0 {
@@ -1964,6 +2656,559 @@ func parseAgentHeartbeat(data []byte) (*AgentHeartbeatMsg, error) {
 	return hb, nil
 }
 
+// parseTelemetryPayload parses TelemetryPayload protobuf
+func parseTelemetryPayload(data []byte) (*TelemetryPayloadMsg, error) {
+	tp := &TelemetryPayloadMsg{}
+
+	for len(data) > 0 {
+		fieldNum, wireType, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, fmt.Errorf("invalid tag")
+		}
+		data = data[n:]
+
+		switch fieldNum {
+		case 1: // robot_id
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid robot_id")
+				}
+				tp.RobotID = v
+				data = data[n:]
+			}
+		case 2: // joint_state
+			if wireType == protowire.BytesType {
+				msgData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid joint_state")
+				}
+				js, err := parseJointStateData(msgData)
+				if err == nil {
+					tp.JointState = js
+				}
+				data = data[n:]
+			}
+		case 3: // transforms (repeated)
+			if wireType == protowire.BytesType {
+				msgData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid transforms")
+				}
+				tf, err := parseTransformData(msgData)
+				if err == nil {
+					tp.Transforms = append(tp.Transforms, tf)
+				}
+				data = data[n:]
+			}
+		case 4: // odometry
+			if wireType == protowire.BytesType {
+				msgData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid odometry")
+				}
+				odom, err := parseOdometryData(msgData)
+				if err == nil {
+					tp.Odometry = odom
+				}
+				data = data[n:]
+			}
+		case 5: // collected_at_ns
+			if wireType == protowire.VarintType {
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid collected_at_ns")
+				}
+				tp.CollectedAtNs = int64(v)
+				data = data[n:]
+			}
+		default:
+			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
+			if n < 0 {
+				return nil, fmt.Errorf("invalid field")
+			}
+			data = data[n:]
+		}
+	}
+
+	return tp, nil
+}
+
+// parseJointStateData parses JointStateData protobuf
+func parseJointStateData(data []byte) (*JointStateDataMsg, error) {
+	js := &JointStateDataMsg{}
+
+	for len(data) > 0 {
+		fieldNum, wireType, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, fmt.Errorf("invalid tag")
+		}
+		data = data[n:]
+
+		switch fieldNum {
+		case 1: // name (repeated string)
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid name")
+				}
+				js.Name = append(js.Name, v)
+				data = data[n:]
+			}
+		case 2: // position (repeated double, packed)
+			if wireType == protowire.BytesType {
+				packed, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid position")
+				}
+				js.Position = parsePackedDoubles(packed)
+				data = data[n:]
+			} else if wireType == protowire.Fixed64Type {
+				v, n := protowire.ConsumeFixed64(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid position")
+				}
+				js.Position = append(js.Position, float64FromBits(v))
+				data = data[n:]
+			}
+		case 3: // velocity (repeated double, packed)
+			if wireType == protowire.BytesType {
+				packed, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid velocity")
+				}
+				js.Velocity = parsePackedDoubles(packed)
+				data = data[n:]
+			} else if wireType == protowire.Fixed64Type {
+				v, n := protowire.ConsumeFixed64(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid velocity")
+				}
+				js.Velocity = append(js.Velocity, float64FromBits(v))
+				data = data[n:]
+			}
+		case 4: // effort (repeated double, packed)
+			if wireType == protowire.BytesType {
+				packed, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid effort")
+				}
+				js.Effort = parsePackedDoubles(packed)
+				data = data[n:]
+			} else if wireType == protowire.Fixed64Type {
+				v, n := protowire.ConsumeFixed64(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid effort")
+				}
+				js.Effort = append(js.Effort, float64FromBits(v))
+				data = data[n:]
+			}
+		case 5: // timestamp_ns
+			if wireType == protowire.VarintType {
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid timestamp_ns")
+				}
+				js.TimestampNs = int64(v)
+				data = data[n:]
+			}
+		case 6: // topic_name
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid topic_name")
+				}
+				js.TopicName = v
+				data = data[n:]
+			}
+		default:
+			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
+			if n < 0 {
+				return nil, fmt.Errorf("invalid field")
+			}
+			data = data[n:]
+		}
+	}
+
+	return js, nil
+}
+
+// parseTransformData parses TransformData protobuf
+func parseTransformData(data []byte) (*TransformDataMsg, error) {
+	tf := &TransformDataMsg{}
+
+	for len(data) > 0 {
+		fieldNum, wireType, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, fmt.Errorf("invalid tag")
+		}
+		data = data[n:]
+
+		switch fieldNum {
+		case 1: // frame_id
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid frame_id")
+				}
+				tf.FrameID = v
+				data = data[n:]
+			}
+		case 2: // child_frame_id
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid child_frame_id")
+				}
+				tf.ChildFrameID = v
+				data = data[n:]
+			}
+		case 3: // translation (Vector3)
+			if wireType == protowire.BytesType {
+				msgData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid translation")
+				}
+				vec, err := parseVector3(msgData)
+				if err == nil {
+					tf.Translation = vec
+				}
+				data = data[n:]
+			}
+		case 4: // rotation (Quaternion)
+			if wireType == protowire.BytesType {
+				msgData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid rotation")
+				}
+				quat, err := parseQuaternion(msgData)
+				if err == nil {
+					tf.Rotation = quat
+				}
+				data = data[n:]
+			}
+		case 5: // timestamp_ns
+			if wireType == protowire.VarintType {
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid timestamp_ns")
+				}
+				tf.TimestampNs = int64(v)
+				data = data[n:]
+			}
+		default:
+			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
+			if n < 0 {
+				return nil, fmt.Errorf("invalid field")
+			}
+			data = data[n:]
+		}
+	}
+
+	return tf, nil
+}
+
+// parseOdometryData parses OdometryData protobuf
+func parseOdometryData(data []byte) (*OdometryDataMsg, error) {
+	odom := &OdometryDataMsg{}
+
+	for len(data) > 0 {
+		fieldNum, wireType, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, fmt.Errorf("invalid tag")
+		}
+		data = data[n:]
+
+		switch fieldNum {
+		case 1: // frame_id
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid frame_id")
+				}
+				odom.FrameID = v
+				data = data[n:]
+			}
+		case 2: // child_frame_id
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid child_frame_id")
+				}
+				odom.ChildFrameID = v
+				data = data[n:]
+			}
+		case 3: // pose (Pose)
+			if wireType == protowire.BytesType {
+				msgData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid pose")
+				}
+				pose, err := parsePose(msgData)
+				if err == nil {
+					odom.Pose = pose
+				}
+				data = data[n:]
+			}
+		case 4: // twist (Twist)
+			if wireType == protowire.BytesType {
+				msgData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid twist")
+				}
+				twist, err := parseTwist(msgData)
+				if err == nil {
+					odom.Twist = twist
+				}
+				data = data[n:]
+			}
+		case 5: // timestamp_ns
+			if wireType == protowire.VarintType {
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid timestamp_ns")
+				}
+				odom.TimestampNs = int64(v)
+				data = data[n:]
+			}
+		case 6: // topic_name
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid topic_name")
+				}
+				odom.TopicName = v
+				data = data[n:]
+			}
+		default:
+			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
+			if n < 0 {
+				return nil, fmt.Errorf("invalid field")
+			}
+			data = data[n:]
+		}
+	}
+
+	return odom, nil
+}
+
+// parseVector3 parses Vector3 protobuf
+func parseVector3(data []byte) (*Vector3Msg, error) {
+	vec := &Vector3Msg{}
+
+	for len(data) > 0 {
+		fieldNum, wireType, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, fmt.Errorf("invalid tag")
+		}
+		data = data[n:]
+
+		switch fieldNum {
+		case 1: // x
+			if wireType == protowire.Fixed64Type {
+				v, n := protowire.ConsumeFixed64(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid x")
+				}
+				vec.X = float64FromBits(v)
+				data = data[n:]
+			}
+		case 2: // y
+			if wireType == protowire.Fixed64Type {
+				v, n := protowire.ConsumeFixed64(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid y")
+				}
+				vec.Y = float64FromBits(v)
+				data = data[n:]
+			}
+		case 3: // z
+			if wireType == protowire.Fixed64Type {
+				v, n := protowire.ConsumeFixed64(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid z")
+				}
+				vec.Z = float64FromBits(v)
+				data = data[n:]
+			}
+		default:
+			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
+			if n < 0 {
+				return nil, fmt.Errorf("invalid field")
+			}
+			data = data[n:]
+		}
+	}
+
+	return vec, nil
+}
+
+// parseQuaternion parses Quaternion protobuf
+func parseQuaternion(data []byte) (*QuaternionMsg, error) {
+	quat := &QuaternionMsg{}
+
+	for len(data) > 0 {
+		fieldNum, wireType, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, fmt.Errorf("invalid tag")
+		}
+		data = data[n:]
+
+		switch fieldNum {
+		case 1: // x
+			if wireType == protowire.Fixed64Type {
+				v, n := protowire.ConsumeFixed64(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid x")
+				}
+				quat.X = float64FromBits(v)
+				data = data[n:]
+			}
+		case 2: // y
+			if wireType == protowire.Fixed64Type {
+				v, n := protowire.ConsumeFixed64(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid y")
+				}
+				quat.Y = float64FromBits(v)
+				data = data[n:]
+			}
+		case 3: // z
+			if wireType == protowire.Fixed64Type {
+				v, n := protowire.ConsumeFixed64(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid z")
+				}
+				quat.Z = float64FromBits(v)
+				data = data[n:]
+			}
+		case 4: // w
+			if wireType == protowire.Fixed64Type {
+				v, n := protowire.ConsumeFixed64(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid w")
+				}
+				quat.W = float64FromBits(v)
+				data = data[n:]
+			}
+		default:
+			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
+			if n < 0 {
+				return nil, fmt.Errorf("invalid field")
+			}
+			data = data[n:]
+		}
+	}
+
+	return quat, nil
+}
+
+// parsePose parses Pose protobuf
+func parsePose(data []byte) (*PoseMsg, error) {
+	pose := &PoseMsg{}
+
+	for len(data) > 0 {
+		fieldNum, wireType, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, fmt.Errorf("invalid tag")
+		}
+		data = data[n:]
+
+		switch fieldNum {
+		case 1: // position (Vector3)
+			if wireType == protowire.BytesType {
+				msgData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid position")
+				}
+				vec, err := parseVector3(msgData)
+				if err == nil {
+					pose.Position = vec
+				}
+				data = data[n:]
+			}
+		case 2: // orientation (Quaternion)
+			if wireType == protowire.BytesType {
+				msgData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid orientation")
+				}
+				quat, err := parseQuaternion(msgData)
+				if err == nil {
+					pose.Orientation = quat
+				}
+				data = data[n:]
+			}
+		default:
+			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
+			if n < 0 {
+				return nil, fmt.Errorf("invalid field")
+			}
+			data = data[n:]
+		}
+	}
+
+	return pose, nil
+}
+
+// parseTwist parses Twist protobuf
+func parseTwist(data []byte) (*TwistMsg, error) {
+	twist := &TwistMsg{}
+
+	for len(data) > 0 {
+		fieldNum, wireType, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, fmt.Errorf("invalid tag")
+		}
+		data = data[n:]
+
+		switch fieldNum {
+		case 1: // linear (Vector3)
+			if wireType == protowire.BytesType {
+				msgData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid linear")
+				}
+				vec, err := parseVector3(msgData)
+				if err == nil {
+					twist.Linear = vec
+				}
+				data = data[n:]
+			}
+		case 2: // angular (Vector3)
+			if wireType == protowire.BytesType {
+				msgData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid angular")
+				}
+				vec, err := parseVector3(msgData)
+				if err == nil {
+					twist.Angular = vec
+				}
+				data = data[n:]
+			}
+		default:
+			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
+			if n < 0 {
+				return nil, fmt.Errorf("invalid field")
+			}
+			data = data[n:]
+		}
+	}
+
+	return twist, nil
+}
+
+// parsePackedDoubles parses packed repeated double field
+func parsePackedDoubles(data []byte) []float64 {
+	var doubles []float64
+	for len(data) >= 8 {
+		v := binary.LittleEndian.Uint64(data[:8])
+		doubles = append(doubles, float64FromBits(v))
+		data = data[8:]
+	}
+	return doubles
+}
 
 // parseActionResult parses ActionResult protobuf
 func parseActionResult(data []byte) (*ActionResultMsg, error) {
@@ -2595,41 +3840,143 @@ func (h *RawQUICHandler) handleHeartbeat(agentConn *agentConnection, hb *AgentHe
 		log.Printf("[RawQUIC] Failed to update agent state for %s: %v", agentConn.agentID, err)
 	}
 
-	// Update execution state, but only if server is not actively managing a task
-	// This prevents agent heartbeat from overwriting server-controlled execution state
-	robotState, robotExists := h.stateManager.GetRobotState(agentConn.agentID)
-	if robotExists && robotState.IsExecuting && robotState.CurrentTaskID != "" {
-		// Server is managing this task - don't let heartbeat override execution state
-		// Server is the source of truth for execution state during server-controlled execution
-		// Skip ALL heartbeat execution updates while server task is running
-		// The scheduler will update execution state directly when steps change
-		if hb.CurrentTaskID != robotState.CurrentTaskID || !hb.IsExecuting {
-			// Different task, or agent reports not executing - skip to preserve server state
-			// Agent may report is_executing=false between steps, but server knows task is still running
-			log.Printf("[RawQUIC] Skipping heartbeat execution update: server task=%s is_executing=true (heartbeat task=%s is_executing=%v)",
-				robotState.CurrentTaskID, hb.CurrentTaskID, hb.IsExecuting)
-		}
-		// Note: We don't update anything here - server/scheduler controls execution state
-	} else {
-		// No server-managed task running
-		// If agent reports is_executing=false, don't accept stale task_id/step_id
-		// This prevents stale heartbeat values from restoring cleared state
-		if !hb.IsExecuting && hb.CurrentTaskID != "" {
-			// Agent is not executing but reports a task_id - this is stale data, ignore it
-			// Just update is_executing to false with empty task/step
-			if err := h.stateManager.UpdateRobotExecution(agentConn.agentID, false, "", ""); err != nil {
-				log.Printf("[RawQUIC] Failed to update agent execution for %s: %v", agentConn.agentID, err)
-			}
-		} else {
-			// Use heartbeat values as-is
-			if err := h.stateManager.UpdateRobotExecution(agentConn.agentID, hb.IsExecuting, hb.CurrentTaskID, hb.CurrentStepID); err != nil {
-				log.Printf("[RawQUIC] Failed to update agent execution for %s: %v", agentConn.agentID, err)
-			}
+	// Update execution state atomically - this prevents TOCTOU race condition
+	// The TryUpdateRobotExecutionFromHeartbeat method checks and updates inside a single lock
+	// This ensures server-managed tasks are not overwritten by heartbeat data
+	updated, err := h.stateManager.TryUpdateRobotExecutionFromHeartbeat(
+		agentConn.agentID,
+		hb.IsExecuting,
+		hb.CurrentTaskID,
+		hb.CurrentStepID,
+	)
+	if err != nil {
+		log.Printf("[RawQUIC] Failed to update agent execution for %s: %v", agentConn.agentID, err)
+	} else if !updated {
+		// Server is managing execution - heartbeat was intentionally skipped
+		// Only log at debug level to avoid log spam
+		if hb.IsExecuting || hb.CurrentTaskID != "" {
+			log.Printf("[RawQUIC] Skipping heartbeat execution update for %s: server is managing task (heartbeat task=%s is_executing=%v)",
+				agentConn.agentID, hb.CurrentTaskID, hb.IsExecuting)
 		}
 	}
 
 	// Update last seen
 	agentConn.lastSeen = time.Now()
+
+	// Update telemetry if present in heartbeat
+	if hb.Telemetry != nil {
+		robotID := hb.Telemetry.RobotID
+		if robotID == "" {
+			// In 1:1 model, use agent_id as robot_id
+			robotID = agentConn.agentID
+		}
+		telemetry := convertTelemetryPayload(hb.Telemetry)
+
+		// Debug log telemetry data (every 10 heartbeats)
+		agentConn.telemetryLogCounter++
+		if agentConn.telemetryLogCounter >= 10 {
+			agentConn.telemetryLogCounter = 0
+			hasJoint := telemetry.JointState != nil
+			hasOdom := telemetry.Odometry != nil
+			numTf := 0
+			if telemetry.Transforms != nil {
+				numTf = len(telemetry.Transforms)
+			}
+			log.Printf("[RawQUIC] Telemetry for %s: joint_state=%v odometry=%v transforms=%d",
+				robotID, hasJoint, hasOdom, numTf)
+		}
+
+		if err := h.stateManager.UpdateRobotTelemetry(robotID, telemetry); err != nil {
+			log.Printf("[RawQUIC] Failed to update robot telemetry for %s: %v", robotID, err)
+		}
+	}
+}
+
+// convertTelemetryPayload converts TelemetryPayloadMsg to state.RobotTelemetry
+func convertTelemetryPayload(tp *TelemetryPayloadMsg) *state.RobotTelemetry {
+	telemetry := &state.RobotTelemetry{}
+
+	// Convert JointState
+	if tp.JointState != nil {
+		telemetry.JointState = &state.JointStateData{
+			Name:        tp.JointState.Name,
+			Position:    tp.JointState.Position,
+			Velocity:    tp.JointState.Velocity,
+			Effort:      tp.JointState.Effort,
+			TopicName:   tp.JointState.TopicName,
+			TimestampNs: tp.JointState.TimestampNs,
+		}
+	}
+
+	// Convert Odometry
+	if tp.Odometry != nil {
+		telemetry.Odometry = &state.OdometryData{
+			FrameID:      tp.Odometry.FrameID,
+			ChildFrameID: tp.Odometry.ChildFrameID,
+			TopicName:    tp.Odometry.TopicName,
+			TimestampNs:  tp.Odometry.TimestampNs,
+		}
+		if tp.Odometry.Pose != nil {
+			if tp.Odometry.Pose.Position != nil {
+				telemetry.Odometry.Pose.Position = state.Vector3{
+					X: tp.Odometry.Pose.Position.X,
+					Y: tp.Odometry.Pose.Position.Y,
+					Z: tp.Odometry.Pose.Position.Z,
+				}
+			}
+			if tp.Odometry.Pose.Orientation != nil {
+				telemetry.Odometry.Pose.Orientation = state.Quaternion{
+					X: tp.Odometry.Pose.Orientation.X,
+					Y: tp.Odometry.Pose.Orientation.Y,
+					Z: tp.Odometry.Pose.Orientation.Z,
+					W: tp.Odometry.Pose.Orientation.W,
+				}
+			}
+		}
+		if tp.Odometry.Twist != nil {
+			if tp.Odometry.Twist.Linear != nil {
+				telemetry.Odometry.Twist.Linear = state.Vector3{
+					X: tp.Odometry.Twist.Linear.X,
+					Y: tp.Odometry.Twist.Linear.Y,
+					Z: tp.Odometry.Twist.Linear.Z,
+				}
+			}
+			if tp.Odometry.Twist.Angular != nil {
+				telemetry.Odometry.Twist.Angular = state.Vector3{
+					X: tp.Odometry.Twist.Angular.X,
+					Y: tp.Odometry.Twist.Angular.Y,
+					Z: tp.Odometry.Twist.Angular.Z,
+				}
+			}
+		}
+	}
+
+	// Convert Transforms
+	for _, tf := range tp.Transforms {
+		transformData := state.TransformData{
+			FrameID:      tf.FrameID,
+			ChildFrameID: tf.ChildFrameID,
+			TimestampNs:  tf.TimestampNs,
+		}
+		if tf.Translation != nil {
+			transformData.Translation = state.Vector3{
+				X: tf.Translation.X,
+				Y: tf.Translation.Y,
+				Z: tf.Translation.Z,
+			}
+		}
+		if tf.Rotation != nil {
+			transformData.Rotation = state.Quaternion{
+				X: tf.Rotation.X,
+				Y: tf.Rotation.Y,
+				Z: tf.Rotation.Z,
+				W: tf.Rotation.W,
+			}
+		}
+		telemetry.Transforms = append(telemetry.Transforms, transformData)
+	}
+
+	return telemetry
 }
 
 // handleActionResult processes action result and notifies pending commands
@@ -2745,6 +4092,127 @@ func (h *RawQUICHandler) handleTaskLog(agentConn *agentConnection, taskLog *Task
 	log.Printf("[TaskLog] [%s] [%s] [%s/%s] %s: %s",
 		levelStr, taskLog.AgentID, taskLog.TaskID, taskLog.StepID,
 		taskLog.Component, taskLog.Message)
+}
+
+// handleTaskStateUpdate processes agent-driven task state updates
+// This is the primary state update mechanism for agent-driven execution
+func (h *RawQUICHandler) handleTaskStateUpdate(agentConn *agentConnection, update *TaskStateUpdateMsg) {
+	if update == nil || update.TaskID == "" {
+		return
+	}
+
+	log.Printf("[RawQUIC] TaskStateUpdate: task=%s, step=%s, state=%d, progress=%.2f",
+		update.TaskID, update.CurrentStepID, update.State, update.Progress)
+
+	// Convert TaskState enum to status string
+	taskStatus := taskStateToString(update.State)
+
+	// Update task state in database
+	// stepIndex is not tracked for agent-driven execution, use 0
+	if err := h.repo.UpdateTaskStatus(update.TaskID, taskStatus, update.CurrentStepID, 0, ""); err != nil {
+		log.Printf("[RawQUIC] Failed to update task state: %v", err)
+	}
+
+	// Update in-memory state manager (so WebSocket broadcasts reflect current step)
+	isExecuting := taskStatus == "running" || taskStatus == "executing"
+	if err := h.stateManager.UpdateRobotExecution(agentConn.agentID, isExecuting, update.TaskID, update.CurrentStepID); err != nil {
+		log.Printf("[RawQUIC] Failed to update state manager: %v", err)
+	}
+
+	// If task is terminal (completed/failed/cancelled), call CompleteExecution to fully clear state
+	if taskStatus == "completed" || taskStatus == "failed" || taskStatus == "cancelled" {
+		h.stateManager.CompleteExecution(agentConn.agentID, nil)
+		log.Printf("[RawQUIC] Task %s terminal state: %s - cleared execution state for agent %s",
+			update.TaskID, taskStatus, agentConn.agentID)
+
+		// Notify scheduler of task completion (for agent-driven execution)
+		if h.taskCompleteCallback != nil {
+			errorMsg := ""
+			if update.StepResult != nil {
+				errorMsg = update.StepResult.Error
+			}
+			h.taskCompleteCallback(update.TaskID, taskStatus, errorMsg)
+		}
+	}
+
+	// If step result is present, log it
+	if update.StepResult != nil {
+		log.Printf("[RawQUIC] Step result: step=%s, status=%d, duration=%dms",
+			update.StepResult.StepID, update.StepResult.Status, update.StepResult.DurationMs)
+
+		// Create action result from step result and process it
+		actionResult := &ActionResultMsg{
+			TaskID:        update.TaskID,
+			StepID:        update.StepResult.StepID,
+			Status:        update.StepResult.Status,
+			Result:        update.StepResult.ResultJSON,
+			Error:         update.StepResult.Error,
+			CompletedAtMs: update.TimestampMs,
+		}
+		h.handleActionResult(agentConn, actionResult)
+	}
+
+	// If blocking, log the reason
+	if update.BlockingReason != "" {
+		log.Printf("[RawQUIC] Task %s blocked: %s", update.TaskID, update.BlockingReason)
+	}
+
+	// Log variables for debugging
+	if len(update.Variables) > 0 {
+		log.Printf("[RawQUIC] Task %s variables: %v", update.TaskID, update.Variables)
+	}
+
+	// Broadcast to WebSocket clients
+	h.broadcastTaskUpdate(update)
+}
+
+// taskStateToString converts TaskState enum to status string
+func taskStateToString(state int32) string {
+	switch state {
+	case 0: // TASK_STATE_PENDING
+		return "pending"
+	case 1: // TASK_STATE_RUNNING
+		return "running"
+	case 2: // TASK_STATE_WAITING_PRECONDITION
+		return "waiting"
+	case 3: // TASK_STATE_EXECUTING_ACTION
+		return "executing"
+	case 4: // TASK_STATE_COMPLETED
+		return "completed"
+	case 5: // TASK_STATE_FAILED
+		return "failed"
+	case 6: // TASK_STATE_CANCELLED
+		return "cancelled"
+	default:
+		return "unknown"
+	}
+}
+
+// broadcastTaskUpdate sends task update to WebSocket clients
+func (h *RawQUICHandler) broadcastTaskUpdate(update *TaskStateUpdateMsg) {
+	if h.wsHub == nil {
+		return
+	}
+
+	broadcast := TaskStateUpdateBroadcast{
+		TaskID:         update.TaskID,
+		StepID:         update.CurrentStepID,
+		State:          taskStateToString(update.State),
+		Progress:       update.Progress,
+		BlockingReason: update.BlockingReason,
+		Variables:      update.Variables,
+	}
+
+	if update.StepResult != nil {
+		broadcast.StepResult = &StepResultBroadcast{
+			StepID:     update.StepResult.StepID,
+			Status:     update.StepResult.Status,
+			DurationMs: update.StepResult.DurationMs,
+			Error:      update.StepResult.Error,
+		}
+	}
+
+	h.wsHub.BroadcastTaskStateUpdate(broadcast)
 }
 
 // handleStatusUpdate processes agent status update
@@ -3015,8 +4483,12 @@ func (h *RawQUICHandler) resolveDuringStateOverrides(
 // handleDeployResponse resolves pending deploy waiters by correlation_id.
 func (h *RawQUICHandler) handleDeployResponse(resp *DeployGraphResponseMsg) {
 	if resp == nil || resp.CorrelationID == "" {
+		log.Printf("[RawQUIC] DeployResponse: nil or empty correlation_id")
 		return
 	}
+
+	log.Printf("[RawQUIC] DeployResponse received: graph=%s version=%d success=%v correlation=%s",
+		resp.GraphID, resp.DeployedVersion, resp.Success, resp.CorrelationID)
 
 	result := &DeployResult{
 		Success:         resp.Success,
@@ -3031,12 +4503,16 @@ func (h *RawQUICHandler) handleDeployResponse(resp *DeployGraphResponseMsg) {
 	ch, exists := h.deployWaiters[resp.CorrelationID]
 	h.deployMu.RUnlock()
 	if !exists {
+		log.Printf("[RawQUIC] DeployResponse: no waiter for correlation_id=%s (late response or timeout?)",
+			resp.CorrelationID)
 		return
 	}
 
 	select {
 	case ch <- result:
+		log.Printf("[RawQUIC] DeployResponse: delivered to waiter correlation_id=%s", resp.CorrelationID)
 	default:
+		log.Printf("[RawQUIC] DeployResponse: channel full, dropped correlation_id=%s", resp.CorrelationID)
 	}
 }
 
@@ -3439,6 +4915,65 @@ func (h *RawQUICHandler) buildServerMessage(messageID string, payloadField proto
 	msg = protowire.AppendBytes(msg, payloadData)
 
 	return msg
+}
+
+// ============================================================
+// Agent-Driven Task Execution
+// ============================================================
+
+// SendStartTask sends a StartTaskCommand to an agent for agent-driven execution
+func (h *RawQUICHandler) SendStartTask(agentID, taskID, graphID, robotID string, params map[string]string) error {
+	h.connMu.RLock()
+	conn, exists := h.connections[agentID]
+	h.connMu.RUnlock()
+
+	if !exists || !conn.registered {
+		return fmt.Errorf("agent %s not connected", agentID)
+	}
+
+	msgData := h.buildStartTaskMessage(taskID, graphID, robotID, params)
+	return h.sendToAgent(conn, msgData)
+}
+
+// buildStartTaskMessage builds a ServerMessage with StartTaskCommand
+// StartTaskCommand is field 18 in ServerMessage oneof
+// message StartTaskCommand {
+//   string task_id = 1;
+//   string graph_id = 2;
+//   string robot_id = 3;
+//   map<string, string> params = 4;
+// }
+func (h *RawQUICHandler) buildStartTaskMessage(taskID, graphID, robotID string, params map[string]string) []byte {
+	var cmd []byte
+
+	// Field 1: task_id
+	cmd = protowire.AppendTag(cmd, 1, protowire.BytesType)
+	cmd = protowire.AppendString(cmd, taskID)
+
+	// Field 2: graph_id
+	cmd = protowire.AppendTag(cmd, 2, protowire.BytesType)
+	cmd = protowire.AppendString(cmd, graphID)
+
+	// Field 3: robot_id
+	cmd = protowire.AppendTag(cmd, 3, protowire.BytesType)
+	cmd = protowire.AppendString(cmd, robotID)
+
+	// Field 4: params (map<string, string>)
+	// In protobuf, map<K,V> is encoded as repeated message { K key = 1; V value = 2; }
+	for key, value := range params {
+		var entry []byte
+		entry = protowire.AppendTag(entry, 1, protowire.BytesType)
+		entry = protowire.AppendString(entry, key)
+		entry = protowire.AppendTag(entry, 2, protowire.BytesType)
+		entry = protowire.AppendString(entry, value)
+
+		cmd = protowire.AppendTag(cmd, 4, protowire.BytesType)
+		cmd = protowire.AppendBytes(cmd, entry)
+	}
+
+	// Build ServerMessage wrapper with field 18 (start_task)
+	correlationID := fmt.Sprintf("task-%s", taskID)
+	return h.buildServerMessage(correlationID, 18, cmd)
 }
 
 // Helper for float32 to bits conversion

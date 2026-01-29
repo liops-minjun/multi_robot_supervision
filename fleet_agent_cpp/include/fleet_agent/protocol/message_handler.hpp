@@ -24,13 +24,14 @@ class ConfigUpdate;
 class PingRequest;
 class DeployGraphRequest;
 class FleetStateBroadcast;
+class StartTaskCommand;
 }
 }
 
 namespace fleet_agent {
 
 namespace transport { class QUICClient; }
-namespace executor { class CommandProcessor; }
+namespace executor { class CommandProcessor; class TaskExecutor; }
 
 namespace protocol {
 
@@ -54,6 +55,7 @@ public:
         state::FleetStateCache* fleet_state_cache{nullptr};
         graph::GraphStorage* graph_storage{nullptr};
         executor::CommandProcessor* command_processor{nullptr};
+        executor::TaskExecutor* task_executor{nullptr};
         CommandQueue* command_queue{nullptr};
         QuicOutboundQueue* quic_outbound_queue{nullptr};
         std::string agent_id;
@@ -130,6 +132,13 @@ public:
      * Updates local fleet state cache for cross-agent coordination.
      */
     HandleResult handle_fleet_state(const fleet::v1::FleetStateBroadcast& fleet_state);
+
+    /**
+     * Handle StartTaskCommand message.
+     *
+     * Starts agent-driven task execution.
+     */
+    HandleResult handle_start_task(const fleet::v1::StartTaskCommand& cmd);
 
     // ============================================================
     // Response Builders

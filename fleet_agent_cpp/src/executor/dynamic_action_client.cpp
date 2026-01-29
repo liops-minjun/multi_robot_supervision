@@ -10,6 +10,7 @@
 #include <rosidl_typesupport_introspection_cpp/field_types.hpp>
 #include <rosidl_typesupport_introspection_cpp/service_introspection.hpp>
 
+#include <cstdio>
 #include <cstring>
 #include <random>
 #include <thread>
@@ -615,9 +616,20 @@ std::shared_ptr<ActionGoalHandle> DynamicActionClient::send_goal(
         std::lock_guard<std::mutex> lock(goals_mutex_);
         handle->goal_id = "goal_" + std::to_string(sequence);
         active_goals_[sequence] = handle;
+
+        // Log UUID for debugging
+        std::string uuid_hex;
+        for (size_t i = 0; i < 16; ++i) {
+            char buf[4];
+            snprintf(buf, sizeof(buf), "%02x", handle->uuid[i]);
+            uuid_hex += buf;
+            if (i == 3 || i == 5 || i == 7 || i == 9) uuid_hex += "-";
+        }
+        log.info("[DEBUG] Stored goal handle: sequence={}, uuid={}, active_goals size={}",
+                 sequence, uuid_hex, active_goals_.size());
     }
 
-    log.info("Goal sent with sequence {}", sequence);
+    log.info("[DEBUG] Goal sent: sequence={}, action={}", sequence, action_name_);
     return handle;
 }
 
@@ -658,12 +670,22 @@ void DynamicActionClient::poll_for_responses() {
         if (result_response) {
             rcl_ret_t ret = rcl_action_take_result_response(&action_client_, &request_header, result_response);
             if (ret == RCL_RET_OK) {
-                log.info("Received result for sequence {}", request_header.sequence_number);
+                int64_t result_seq = request_header.sequence_number;
+                log.info("[DEBUG] Received result response: result_sequence={}", result_seq);
+
+                // Dump current active_goals state for debugging
+                {
+                    std::lock_guard<std::mutex> lock(goals_mutex_);
+                    log.info("[DEBUG] Current active_goals (size={}):", active_goals_.size());
+                    for (const auto& [seq, h] : active_goals_) {
+                        log.info("[DEBUG]   seq={} goal_id={} active={}", seq, h->goal_id, h->active.load());
+                    }
+                }
 
                 // GetResult_Response contains { status: int8, result: Result }
                 // We need to extract the result field and convert it
                 nlohmann::json response_json = MessageConverter::message_to_json(get_result_response_members_, result_response);
-                log.info("Result response JSON: {}", response_json.dump());
+                log.info("[DEBUG] Result response JSON: {}", response_json.dump());
 
                 // Extract result field if present, otherwise use whole response
                 nlohmann::json result_json = response_json;
@@ -676,24 +698,32 @@ void DynamicActionClient::poll_for_responses() {
                 if (response_json.contains("status")) {
                     status = response_json["status"].get<int8_t>();
                 }
-                log.info("Result status: {} (4=SUCCEEDED, 5=CANCELED, 6=ABORTED)", static_cast<int>(status));
+                log.info("[DEBUG] Result status: {} (4=SUCCEEDED, 5=CANCELED, 6=ABORTED)", static_cast<int>(status));
 
                 std::shared_ptr<ActionGoalHandle> handle;
                 {
                     std::lock_guard<std::mutex> lock(goals_mutex_);
-                    auto it = active_goals_.find(request_header.sequence_number);
+                    log.info("[DEBUG] Looking up sequence {} in active_goals_", result_seq);
+                    auto it = active_goals_.find(result_seq);
                     if (it != active_goals_.end()) {
+                        log.info("[DEBUG] FOUND handle for sequence {}, goal_id={}", result_seq, it->second->goal_id);
                         handle = it->second;
                         active_goals_.erase(it);
+                    } else {
+                        log.warn("[DEBUG] NOT FOUND: sequence {} not in active_goals_!", result_seq);
                     }
                 }
 
                 if (handle && handle->result_callback) {
                     // status == 4 means SUCCEEDED in action_msgs/msg/GoalStatus
                     bool success = (status == 4);
-                    log.info("Calling result callback: success={}", success);
+                    log.info("[DEBUG] Calling result callback: success={}, goal_id={}", success, handle->goal_id);
                     handle->active.store(false);
                     handle->result_callback(success, result_json.dump());
+                } else if (!handle) {
+                    log.error("[DEBUG] No handle found for result sequence {}!", result_seq);
+                } else {
+                    log.error("[DEBUG] Handle found but no result_callback set for sequence {}!", result_seq);
                 }
             }
             MessageConverter::deallocate_message(get_result_response_members_, result_response);
@@ -707,18 +737,39 @@ void DynamicActionClient::poll_for_responses() {
             rcl_ret_t ret = rcl_action_take_feedback(&action_client_, feedback_msg);
             if (ret == RCL_RET_OK) {
                 // FeedbackMessage = { goal_id: UUID, feedback: Feedback }
-                // Extract just the feedback part
                 nlohmann::json msg_json = MessageConverter::message_to_json(feedback_message_members_, feedback_msg);
+
+                // Extract goal_id.uuid to match the correct goal
+                std::array<uint8_t, 16> feedback_uuid{};
+                bool uuid_extracted = false;
+                if (msg_json.contains("goal_id") && msg_json["goal_id"].contains("uuid") &&
+                    msg_json["goal_id"]["uuid"].is_array()) {
+                    const auto& uuid_arr = msg_json["goal_id"]["uuid"];
+                    if (uuid_arr.size() == 16) {
+                        for (size_t i = 0; i < 16; ++i) {
+                            feedback_uuid[i] = uuid_arr[i].get<uint8_t>();
+                        }
+                        uuid_extracted = true;
+                    }
+                }
+
+                // Extract just the feedback part
                 nlohmann::json feedback_json = msg_json;
                 if (msg_json.contains("feedback")) {
                     feedback_json = msg_json["feedback"];
                 }
 
-                // Broadcast to all active goals (simplified - should match by goal_id)
+                // Find and notify the matching goal by UUID
                 std::lock_guard<std::mutex> lock(goals_mutex_);
                 for (auto& [seq, handle] : active_goals_) {
                     if (handle->active.load() && handle->feedback_callback) {
-                        handle->feedback_callback(feedback_json.dump());
+                        // Match by UUID if extracted, otherwise fall back to broadcast
+                        if (!uuid_extracted || handle->uuid == feedback_uuid) {
+                            handle->feedback_callback(feedback_json.dump());
+                            if (uuid_extracted) {
+                                break;  // Found the matching goal
+                            }
+                        }
                     }
                 }
             }
@@ -729,9 +780,22 @@ void DynamicActionClient::poll_for_responses() {
 
 void DynamicActionClient::process_goal_response(int64_t sequence) {
     std::lock_guard<std::mutex> lock(goals_mutex_);
+    log.info("[DEBUG] process_goal_response: goal_sequence={}, active_goals size={}", sequence, active_goals_.size());
+    for (const auto& [seq, h] : active_goals_) {
+        log.info("[DEBUG]   active_goal: seq={} goal_id={}", seq, h->goal_id);
+    }
     auto it = active_goals_.find(sequence);
     if (it != active_goals_.end()) {
-        log.info("Goal {} accepted", it->second->goal_id);
+        // Log UUID for debugging
+        std::string uuid_hex;
+        for (size_t i = 0; i < 16; ++i) {
+            char buf[4];
+            snprintf(buf, sizeof(buf), "%02x", it->second->uuid[i]);
+            uuid_hex += buf;
+            if (i == 3 || i == 5 || i == 7 || i == 9) uuid_hex += "-";
+        }
+        log.info("[DEBUG] Goal {} accepted (goal_sequence={}, uuid={})",
+                 it->second->goal_id, sequence, uuid_hex);
 
         // Send a result request to get the action result
         // We need to send a GetResult_Request containing the goal_id (UUID)
@@ -741,19 +805,42 @@ void DynamicActionClient::process_goal_response(int64_t sequence) {
                 // Fill the goal_id with the UUID we stored when sending the goal
                 if (!fill_goal_id_from_uuid(result_request, it->second->uuid)) {
                     log.warn("Failed to fill goal_id in result request");
+                } else {
+                    log.info("[DEBUG] Filled result request with uuid={}", uuid_hex);
                 }
 
-                int64_t result_sequence = sequence;
+                int64_t result_sequence = 0;  // RCL will assign a new sequence number
                 rcl_ret_t ret = rcl_action_send_result_request(&action_client_, result_request, &result_sequence);
                 if (ret != RCL_RET_OK) {
                     log.warn("Failed to send result request: {}", rcl_get_error_string().str);
                     rcl_reset_error();
                 } else {
-                    log.debug("Result request sent for goal {} with matching UUID", it->second->goal_id);
+                    log.info("[DEBUG] Result request sent: goal_id={}, goal_sequence={}, result_sequence={}",
+                             it->second->goal_id, sequence, result_sequence);
+
+                    // IMPORTANT: The result response will have result_sequence, not the goal sequence.
+                    // We need to remap the handle from goal_sequence to result_sequence.
+                    if (result_sequence != sequence) {
+                        auto handle = it->second;
+                        active_goals_.erase(it);
+                        active_goals_[result_sequence] = handle;
+                        log.info("[DEBUG] REMAPPED goal handle: {} -> {} (goal_id={})",
+                                 sequence, result_sequence, handle->goal_id);
+
+                        // Verify the remap
+                        log.info("[DEBUG] After remap, active_goals (size={}):", active_goals_.size());
+                        for (const auto& [s, h] : active_goals_) {
+                            log.info("[DEBUG]   seq={} goal_id={}", s, h->goal_id);
+                        }
+                    } else {
+                        log.info("[DEBUG] No remap needed: goal_sequence == result_sequence == {}", sequence);
+                    }
                 }
                 MessageConverter::deallocate_message(get_result_request_members_, result_request);
             }
         }
+    } else {
+        log.warn("[DEBUG] process_goal_response: sequence {} NOT FOUND in active_goals!", sequence);
     }
 }
 

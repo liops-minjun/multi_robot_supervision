@@ -15,7 +15,8 @@
 #include <vector>
 
 #include <action_msgs/msg/goal_status_array.hpp>
-#include <action_msgs/srv/cancel_goal.hpp>
+#include <lifecycle_msgs/srv/get_state.hpp>
+#include <lifecycle_msgs/msg/state.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 namespace fleet_agent {
@@ -140,6 +141,35 @@ public:
      */
     size_t count() const;
 
+    // ============================================================
+    // Lifecycle State Management
+    // ============================================================
+
+    /**
+     * Query the lifecycle state of a node.
+     *
+     * @param node_name Full node name (e.g., "/fibonacci_action_server")
+     * @return Lifecycle state (UNKNOWN if not a lifecycle node or query fails)
+     */
+    LifecycleState query_lifecycle_state(const std::string& node_name);
+
+    /**
+     * Check if a node is a lifecycle node.
+     *
+     * Checks for the presence of /get_state service.
+     *
+     * @param node_name Full node name
+     * @return true if the node supports lifecycle management
+     */
+    bool is_lifecycle_node(const std::string& node_name);
+
+    /**
+     * Update lifecycle states for all known capabilities.
+     *
+     * Queries lifecycle state for each capability's host node.
+     */
+    void update_lifecycle_states();
+
 private:
     rclcpp::Node::SharedPtr node_;
     std::string namespace_filter_;
@@ -153,12 +183,14 @@ private:
         status_subscriptions_;
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> status_last_seen_;
     std::unordered_map<std::string, bool> status_publishers_alive_;
-    std::unordered_map<std::string, rclcpp::Client<action_msgs::srv::CancelGoal>::SharedPtr>
-        cancel_clients_;
-    std::unordered_map<std::string, std::chrono::steady_clock::time_point> cancel_probe_last_;
-    std::unordered_map<std::string, int> cancel_probe_failures_;
-    std::unordered_map<std::string, bool> cancel_probe_alive_;
     mutable std::mutex status_mutex_;
+
+    // Lifecycle state tracking
+    std::unordered_map<std::string, rclcpp::Client<lifecycle_msgs::srv::GetState>::SharedPtr>
+        lifecycle_clients_;
+    std::unordered_map<std::string, bool> node_is_lifecycle_;  // Cache whether node is lifecycle
+    std::unordered_map<std::string, LifecycleState> node_lifecycle_state_;  // Cached state
+    mutable std::mutex lifecycle_mutex_;
 
     /**
      * Scan a single action server.
@@ -177,9 +209,6 @@ private:
         const std::string& server_name) const;
     std::optional<bool> get_status_publisher_alive(
         const std::string& server_name) const;
-    void ensure_cancel_client(const std::string& server_name);
-    std::optional<bool> probe_cancel_alive(const std::string& server_name);
-
     /**
      * Normalize action type string.
      *

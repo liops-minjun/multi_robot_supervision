@@ -218,6 +218,21 @@ private:
         const std::string& input,
         const ExecutionContext& ctx
     );
+
+    /**
+     * Resolve nested JSON path from variables.
+     *
+     * Supports paths like "step_id.pose.position.x" where
+     * "step_id.result" contains a JSON object.
+     *
+     * @param var_name Variable name with potential nested path
+     * @param ctx Execution context with variables
+     * @return Resolved value as string, or empty string if not found
+     */
+    std::string resolve_nested_path(
+        const std::string& var_name,
+        const ExecutionContext& ctx
+    );
 };
 
 }  // namespace graph

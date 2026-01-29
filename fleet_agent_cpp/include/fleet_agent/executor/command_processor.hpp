@@ -109,6 +109,16 @@ public:
     void remove_robot(const std::string& agent_id);
 
     /**
+     * Rename a robot (update robot ID mapping).
+     * Used when server assigns a new ID after registration.
+     *
+     * @param old_id Previous robot ID
+     * @param new_id New robot ID from server
+     * @return true if robot was found and renamed
+     */
+    bool rename_robot(const std::string& old_id, const std::string& new_id);
+
+    /**
      * Cancel action for a robot.
      *
      * @param agent_id Robot identifier
