@@ -103,41 +103,41 @@ GraphExecutor::~GraphExecutor() = default;
 GraphExecutor::ExecutionContext GraphExecutor::start_execution(
     const std::string& execution_id,
     const std::string& agent_id,
-    const fleet::v1::ActionGraph& graph,
+    const fleet::v1::BehaviorTree& behavior_tree,
     const std::unordered_map<std::string, std::string>& params) {
 
     ExecutionContext ctx;
     ctx.execution_id = execution_id;
-    ctx.graph_id = graph.metadata().id();
+    ctx.behavior_tree_id = behavior_tree.metadata().id();
     ctx.agent_id = agent_id;
-    ctx.current_vertex_id = graph.entry_point();
+    ctx.current_vertex_id = behavior_tree.entry_point();
     ctx.current_step_index = 0;
     ctx.state = static_cast<int>(fleet::v1::GRAPH_EXECUTION_RUNNING);
     ctx.variables = params;
     ctx.started_at = std::chrono::steady_clock::now();
     ctx.step_started_at = ctx.started_at;
 
-    log.info("Started execution {} of graph {} for robot {}",
-             execution_id, ctx.graph_id, agent_id);
+    log.info("Started execution {} of behavior tree {} for robot {}",
+             execution_id, ctx.behavior_tree_id, agent_id);
 
     return ctx;
 }
 
 std::unordered_map<std::string, const fleet::v1::Vertex*>
-GraphExecutor::build_vertex_map(const fleet::v1::ActionGraph& graph) {
+GraphExecutor::build_vertex_map(const fleet::v1::BehaviorTree& behavior_tree) {
     std::unordered_map<std::string, const fleet::v1::Vertex*> map;
-    for (const auto& vertex : graph.vertices()) {
+    for (const auto& vertex : behavior_tree.vertices()) {
         map[vertex.id()] = &vertex;
     }
     return map;
 }
 
 std::optional<std::string> GraphExecutor::find_next_vertex_id(
-    const fleet::v1::ActionGraph& graph,
+    const fleet::v1::BehaviorTree& behavior_tree,
     const std::string& from_vertex_id,
     fleet::v1::EdgeType edge_type) {
 
-    for (const auto& edge : graph.edges()) {
+    for (const auto& edge : behavior_tree.edges()) {
         if (edge.from_vertex() == from_vertex_id && edge.type() == edge_type) {
             return edge.to_vertex();
         }
@@ -145,7 +145,7 @@ std::optional<std::string> GraphExecutor::find_next_vertex_id(
 
     // If looking for on_success but not found, try unconditional edge
     if (edge_type == fleet::v1::EDGE_TYPE_ON_SUCCESS) {
-        for (const auto& edge : graph.edges()) {
+        for (const auto& edge : behavior_tree.edges()) {
             if (edge.from_vertex() == from_vertex_id &&
                 edge.type() == fleet::v1::EDGE_TYPE_UNKNOWN) {
                 return edge.to_vertex();
@@ -157,10 +157,10 @@ std::optional<std::string> GraphExecutor::find_next_vertex_id(
 }
 
 std::optional<fleet::v1::Vertex> GraphExecutor::get_vertex(
-    const fleet::v1::ActionGraph& graph,
+    const fleet::v1::BehaviorTree& behavior_tree,
     const std::string& vertex_id) {
 
-    for (const auto& vertex : graph.vertices()) {
+    for (const auto& vertex : behavior_tree.vertices()) {
         if (vertex.id() == vertex_id) {
             return vertex;
         }
@@ -180,7 +180,7 @@ bool GraphExecutor::is_execution_complete(const ExecutionContext& ctx) {
 
 std::optional<fleet::v1::Vertex> GraphExecutor::get_next_step(
     ExecutionContext& ctx,
-    const fleet::v1::ActionGraph& graph,
+    const fleet::v1::BehaviorTree& behavior_tree,
     const std::string& outcome,
     std::string* matched_condition) {
 
@@ -193,7 +193,7 @@ std::optional<fleet::v1::Vertex> GraphExecutor::get_next_step(
 
     // Conditional edges - match by outcome
     std::string default_id;
-    for (const auto& edge : graph.edges()) {
+    for (const auto& edge : behavior_tree.edges()) {
         if (edge.from_vertex() != ctx.current_vertex_id) {
             continue;
         }
@@ -237,10 +237,10 @@ std::optional<fleet::v1::Vertex> GraphExecutor::get_next_step(
             edge_type = fleet::v1::EDGE_TYPE_ON_TIMEOUT;
         }
 
-        next_id = find_next_vertex_id(graph, ctx.current_vertex_id, edge_type);
+        next_id = find_next_vertex_id(behavior_tree, ctx.current_vertex_id, edge_type);
 
         if (!next_id && edge_type == fleet::v1::EDGE_TYPE_ON_FAILURE) {
-            next_id = find_next_vertex_id(graph, ctx.current_vertex_id,
+            next_id = find_next_vertex_id(behavior_tree, ctx.current_vertex_id,
                                           fleet::v1::EDGE_TYPE_ON_SUCCESS);
         }
     }
@@ -251,7 +251,7 @@ std::optional<fleet::v1::Vertex> GraphExecutor::get_next_step(
     }
 
     // Get next vertex
-    auto next_vertex = get_vertex(graph, *next_id);
+    auto next_vertex = get_vertex(behavior_tree, *next_id);
     if (!next_vertex) {
         log.error("Next vertex {} not found", *next_id);
         return std::nullopt;

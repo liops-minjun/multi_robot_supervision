@@ -278,7 +278,7 @@ bool Agent::init_components() {
         node_, "", *capability_store_);
 
     graph_storage_ = std::make_unique<graph::GraphStorage>(
-        config_.storage.action_graphs_path);
+        config_.storage.behavior_trees_path);
 
     return true;
 }
@@ -852,42 +852,42 @@ void Agent::setup_quic_handler() {
 // ============================================================
 
 void Agent::handle_start_task(const std::string& task_id,
-                               const std::string& graph_id,
+                               const std::string& behavior_tree_id,
                                const std::unordered_map<std::string, std::string>& params) {
-    log.info("Starting task: {} (graph: {})", task_id, graph_id);
+    log.info("Starting task: {} (behavior tree: {})", task_id, behavior_tree_id);
 
     if (current_task_) {
         log.warn("Task already running: {}", current_task_->task_id);
         return;
     }
 
-    // Load graph
-    auto graph = graph_storage_->load(graph_id);
-    if (!graph) {
-        log.error("Graph not found: {}", graph_id);
+    // Load behavior tree
+    auto behavior_tree = graph_storage_->load(behavior_tree_id);
+    if (!behavior_tree) {
+        log.error("Behavior tree not found: {}", behavior_tree_id);
         return;
     }
 
-    // Find entry point directly from loaded graph
-    std::string entry_point = graph->entry_point();
-    if (entry_point.empty() && graph->vertices_size() > 0) {
+    // Find entry point directly from loaded behavior tree
+    std::string entry_point = behavior_tree->entry_point();
+    if (entry_point.empty() && behavior_tree->vertices_size() > 0) {
         // Fallback: use first vertex
-        entry_point = graph->vertices(0).id();
+        entry_point = behavior_tree->vertices(0).id();
     }
     if (entry_point.empty()) {
-        log.error("No entry point in graph (vertices={}, entry_point='{}')",
-                  graph->vertices_size(), graph->entry_point());
+        log.error("No entry point in behavior tree (vertices={}, entry_point='{}')",
+                  behavior_tree->vertices_size(), behavior_tree->entry_point());
         return;
     }
 
-    log.info("Task entry point: {} (graph has {} vertices, {} edges)",
-             entry_point, graph->vertices_size(), graph->edges_size());
+    log.info("Task entry point: {} (behavior tree has {} vertices, {} edges)",
+             entry_point, behavior_tree->vertices_size(), behavior_tree->edges_size());
 
     // Initialize task context
     TaskContext ctx;
     ctx.task_id = task_id;
-    ctx.graph_id = graph_id;
-    ctx.graph = std::make_unique<fleet::v1::ActionGraph>(*graph);
+    ctx.behavior_tree_id = behavior_tree_id;
+    ctx.behavior_tree = std::make_unique<fleet::v1::BehaviorTree>(*behavior_tree);
     ctx.variables = params;
     ctx.started_at = std::chrono::steady_clock::now();
     ctx.status = TaskContext::Status::RUNNING;
@@ -921,12 +921,12 @@ void Agent::handle_cancel_task(const std::string& task_id, const std::string& re
 }
 
 void Agent::handle_deploy_graph(const fleet::v1::DeployGraphRequest& req) {
-    const auto& graph = req.graph();
+    const auto& behavior_tree = req.graph();
     const auto& correlation_id = req.correlation_id();
-    const auto& id = graph.metadata().id();
-    int32_t version = graph.metadata().version();
+    const auto& id = behavior_tree.metadata().id();
+    int32_t version = behavior_tree.metadata().version();
 
-    log.info("Deploying graph: {} (correlation: {}, force: {})",
+    log.info("Deploying behavior tree: {} (correlation: {}, force: {})",
              id, correlation_id, req.force());
 
     // Build response message
@@ -940,22 +940,22 @@ void Agent::handle_deploy_graph(const fleet::v1::DeployGraphRequest& req) {
 
     bool success = false;
     if (graph_storage_) {
-        success = graph_storage_->store(graph);
+        success = graph_storage_->store(behavior_tree);
     }
 
     if (success) {
-        log.info("Graph stored successfully: {} v{}", id, version);
+        log.info("Behavior tree stored successfully: {} v{}", id, version);
         resp->set_success(true);
-        resp->set_checksum(graph.checksum());
+        resp->set_checksum(behavior_tree.checksum());
     } else {
-        log.error("Failed to store graph: {}", id);
+        log.error("Failed to store behavior tree: {}", id);
         resp->set_success(false);
-        resp->set_error("Failed to store graph");
+        resp->set_error("Failed to store behavior tree");
     }
 
     // Send response back to server
     queue_message(resp_msg);
-    log.info("Deploy response sent for graph: {} success={}", id, success);
+    log.info("Deploy response sent for behavior tree: {} success={}", id, success);
 }
 
 void Agent::handle_ping(const std::string& ping_id, int64_t server_ts) {
@@ -1270,9 +1270,9 @@ void Agent::complete_task(bool success, const std::string& error) {
 }
 
 std::optional<fleet::v1::Vertex> Agent::find_vertex(const std::string& step_id) {
-    if (!current_task_ || !current_task_->graph) return std::nullopt;
+    if (!current_task_ || !current_task_->behavior_tree) return std::nullopt;
 
-    for (const auto& v : current_task_->graph->vertices()) {
+    for (const auto& v : current_task_->behavior_tree->vertices()) {
         if (v.id() == step_id) {
             return v;
         }
@@ -1281,24 +1281,24 @@ std::optional<fleet::v1::Vertex> Agent::find_vertex(const std::string& step_id) 
 }
 
 std::optional<std::string> Agent::get_entry_point() {
-    if (!current_task_ || !current_task_->graph) return std::nullopt;
+    if (!current_task_ || !current_task_->behavior_tree) return std::nullopt;
 
-    if (!current_task_->graph->entry_point().empty()) {
-        return current_task_->graph->entry_point();
+    if (!current_task_->behavior_tree->entry_point().empty()) {
+        return current_task_->behavior_tree->entry_point();
     }
 
     // Fallback: first vertex
-    if (!current_task_->graph->vertices().empty()) {
-        return current_task_->graph->vertices(0).id();
+    if (!current_task_->behavior_tree->vertices().empty()) {
+        return current_task_->behavior_tree->vertices(0).id();
     }
 
     return std::nullopt;
 }
 
 std::optional<std::string> Agent::get_next_step(const std::string& current, bool success) {
-    if (!current_task_ || !current_task_->graph) return std::nullopt;
+    if (!current_task_ || !current_task_->behavior_tree) return std::nullopt;
 
-    for (const auto& edge : current_task_->graph->edges()) {
+    for (const auto& edge : current_task_->behavior_tree->edges()) {
         if (edge.from_vertex() != current) continue;
 
         if (success && edge.type() == fleet::v1::EDGE_TYPE_ON_SUCCESS) {

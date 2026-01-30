@@ -46,7 +46,7 @@ const edgeTypes = {
   deletable: DeletableEdge,
 }
 
-const START_NODE_ID = '__action_graph_start__'
+const START_NODE_ID = '__behavior_tree_start__'
 const START_NODE_COLOR = '#22c55e'
 
 // Color palette for different action types

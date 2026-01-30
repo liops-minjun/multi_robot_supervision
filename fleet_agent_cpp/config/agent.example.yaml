@@ -27,7 +27,7 @@ server:
 
 # Storage paths
 storage:
-  action_graphs_path: "/var/lib/fleet_agent/graphs"
+  behavior_trees_path: "/var/lib/fleet_agent/graphs"
   state_persistence_path: "/var/lib/fleet_agent/state"
 
 # Logging

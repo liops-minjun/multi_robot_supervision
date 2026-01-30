@@ -1,5 +1,5 @@
 // Copyright 2026 Multi-Robot Supervision System
-// Action Graph message definitions
+// Behavior Tree message definitions
 
 syntax = "proto3";
 
@@ -10,12 +10,12 @@ import "fleet/v1/common.proto";
 option cc_enable_arenas = true;
 
 // ============================================================
-// Canonical Action Graph Format
+// Canonical Behavior Tree Format
 // ============================================================
 
-message ActionGraph {
+message BehaviorTree {
   string schema_version = 1;       // "1.0.0"
-  ActionGraphMetadata metadata = 2;
+  BehaviorTreeMetadata metadata = 2;
   repeated Vertex vertices = 3;
   repeated Edge edges = 4;
   string entry_point = 5;          // Starting vertex ID
@@ -23,7 +23,7 @@ message ActionGraph {
   string graph_json = 20;          // Canonical JSON payload (server-side)
 }
 
-message ActionGraphMetadata {
+message BehaviorTreeMetadata {
   string id = 1;
   string name = 2;
   int32 version = 3;
@@ -143,12 +143,12 @@ enum EdgeType {
 }
 
 // ============================================================
-// Graph Deployment Messages
+// Behavior Tree Deployment Messages
 // ============================================================
 
 message DeployGraphRequest {
   string correlation_id = 1;
-  ActionGraph graph = 2;
+  BehaviorTree graph = 2;
   bool force = 3;              // Overwrite if exists
 }
 
@@ -162,7 +162,7 @@ message DeployGraphResponse {
 }
 
 // ============================================================
-// Graph Execution Messages
+// Behavior Tree Execution Messages
 // ============================================================
 
 message ExecuteGraphRequest {

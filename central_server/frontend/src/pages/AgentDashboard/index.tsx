@@ -35,7 +35,7 @@ import {
 import { agentApi, actionGraphApi, fleetApi, stateDefinitionApi, taskApi, logsApi, telemetryApi } from '../../api/client'
 import type { AgentCapabilityInfo, AgentConnectionStatus, ActionGraph, RobotStateSnapshot, StateDefinition, ExecutionPhase, TaskLogEntry, TaskLogLevel, RobotTelemetry, LifecycleState } from '../../types'
 import { getLifecycleStateInfo } from '../../types'
-import ActionGraphViewer from '../../components/ActionGraphViewer'
+import { ActionGraphViewer } from '../../components/BehaviorTreeViewer'
 import { useTranslation } from '../../i18n'
 
 // Status badge component

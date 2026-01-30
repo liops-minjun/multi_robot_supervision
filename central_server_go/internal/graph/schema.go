@@ -1,8 +1,8 @@
-// Package graph defines the canonical Action Graph schema
+// Package graph defines the canonical Behavior Tree schema
 // shared between Central Server and Robot Agents.
 //
-// This schema is the single source of truth for Action Graph structure.
-// Both the server's Neo4j storage and the agent's NetworkX graph
+// This schema is the single source of truth for Behavior Tree structure.
+// Both the server's Neo4j storage and the agent's graph executor
 // use this canonical format for serialization/deserialization.
 package graph
 
@@ -20,7 +20,7 @@ const SchemaVersion = "1.0.0"
 // Vertex Types
 // =============================================================================
 
-// VertexType defines the type of vertex in the action graph
+// VertexType defines the type of vertex in the behavior tree
 type VertexType string
 
 const (
@@ -58,7 +58,7 @@ const (
 // Edge Types
 // =============================================================================
 
-// EdgeType defines the type of edge (transition) in the action graph
+// EdgeType defines the type of edge (transition) in the behavior tree
 type EdgeType string
 
 const (
@@ -74,13 +74,13 @@ const (
 // Canonical Graph Structure
 // =============================================================================
 
-// CanonicalGraph is the complete action graph in canonical format
+// CanonicalGraph is the complete behavior tree in canonical format
 // This is the format used for QUIC transport and storage serialization
 type CanonicalGraph struct {
 	SchemaVersion string `json:"schema_version"`
 
 	// Graph metadata
-	ActionGraph ActionGraphMeta `json:"action_graph"`
+	BehaviorTree BehaviorTreeMeta `json:"behavior_tree"`
 
 	// Graph structure
 	Vertices   []Vertex `json:"vertices"`
@@ -91,8 +91,8 @@ type CanonicalGraph struct {
 	Checksum string `json:"checksum,omitempty"`
 }
 
-// ActionGraphMeta contains action graph metadata
-type ActionGraphMeta struct {
+// BehaviorTreeMeta contains behavior tree metadata
+type BehaviorTreeMeta struct {
 	ID          string               `json:"id"`
 	Name        string               `json:"name"`
 	Version     int                  `json:"version"`
@@ -113,7 +113,7 @@ type RobotRequirements struct {
 // Vertex Definitions
 // =============================================================================
 
-// Vertex represents a node in the action graph
+// Vertex represents a node in the behavior tree
 type Vertex struct {
 	ID   string     `json:"id"`
 	Type VertexType `json:"type"`
@@ -544,8 +544,8 @@ func (g *CanonicalGraph) Validate() error {
 	if g.SchemaVersion == "" {
 		return fmt.Errorf("schema_version is required")
 	}
-	if g.ActionGraph.ID == "" {
-		return fmt.Errorf("action_graph.id is required")
+	if g.BehaviorTree.ID == "" {
+		return fmt.Errorf("behavior_tree.id is required")
 	}
 	if g.EntryPoint == "" {
 		return fmt.Errorf("entry_point is required")

@@ -105,24 +105,24 @@ func (s *Server) setupRouter() {
 			r.Get("/action-type/*", s.GetCapabilitiesByActionType) // Moved to explicit path
 		})
 
-		// Action Graphs
-		r.Route("/action-graphs", func(r chi.Router) {
-			r.Get("/", s.ListActionGraphs)
-			r.Post("/", s.CreateActionGraph)
-			r.Post("/import", s.ImportActionGraph) // Import canonical graph (before {graphID} routes)
-			r.Get("/{graphID}", s.GetActionGraph)
-			r.Put("/{graphID}", s.UpdateActionGraph)
-			r.Delete("/{graphID}", s.DeleteActionGraph)
+		// Behavior Trees
+		r.Route("/behavior-trees", func(r chi.Router) {
+			r.Get("/", s.ListBehaviorTrees)
+			r.Post("/", s.CreateBehaviorTree)
+			r.Post("/import", s.ImportBehaviorTree) // Import canonical graph (before {graphID} routes)
+			r.Get("/{graphID}", s.GetBehaviorTree)
+			r.Put("/{graphID}", s.UpdateBehaviorTree)
+			r.Delete("/{graphID}", s.DeleteBehaviorTree)
 			r.Get("/{graphID}/check-executability", s.CheckExecutability) // Safety check before execution
-			r.Post("/{graphID}/execute", s.ExecuteActionGraph)
-			r.Post("/{graphID}/execute-multi", s.ExecuteMultiActionGraph) // Multi-agent simultaneous execution
-			r.Post("/{graphID}/validate", s.ValidateActionGraph)
-			r.Get("/{graphID}/export", s.ExportActionGraph) // Export canonical graph
+			r.Post("/{graphID}/execute", s.ExecuteBehaviorTree)
+			r.Post("/{graphID}/execute-multi", s.ExecuteMultiBehaviorTree) // Multi-agent simultaneous execution
+			r.Post("/{graphID}/validate", s.ValidateBehaviorTree)
+			r.Get("/{graphID}/export", s.ExportBehaviorTree) // Export canonical graph
 
 			// Canonical Graph endpoints (new graph-optimized format)
 			r.Get("/{graphID}/canonical", s.GetCanonicalGraph)
 			r.Post("/{graphID}/validate-canonical", s.ValidateCanonicalGraph)
-			r.Post("/{graphID}/deploy/{agentID}", s.DeployActionGraphToAgent)
+			r.Post("/{graphID}/deploy/{agentID}", s.DeployBehaviorTreeToAgent)
 		})
 
 		// Agents
@@ -138,12 +138,12 @@ func (s *Server) setupRouter() {
 			r.Get("/{agentID}/logs", s.GetAgentLogs)                                // Execution logs for agent
 			r.Post("/{agentID}/reset-state", s.ResetAgentState)                     // Reset agent state to idle
 
-			r.Route("/{agentID}/action-graphs", func(r chi.Router) {
-				r.Get("/", s.ListAgentActionGraphs)
-				r.Post("/", s.AssignActionGraph)
-				r.Get("/{graphID}", s.GetAgentActionGraph)
-				r.Delete("/{graphID}", s.RemoveAgentActionGraph)
-				r.Post("/{graphID}/deploy", s.DeployActionGraph)
+			r.Route("/{agentID}/behavior-trees", func(r chi.Router) {
+				r.Get("/", s.ListAgentBehaviorTrees)
+				r.Post("/", s.AssignBehaviorTree)
+				r.Get("/{graphID}", s.GetAgentBehaviorTree)
+				r.Delete("/{graphID}", s.RemoveAgentBehaviorTree)
+				r.Post("/{graphID}/deploy", s.DeployBehaviorTree)
 				r.Get("/{graphID}/logs", s.GetDeploymentLogs)
 			})
 		})
@@ -223,9 +223,9 @@ func (s *Server) setupRouter() {
 		r.Post("/robots/{robotID}/teach", s.TeachWaypoint)
 
 		// Block copy/paste
-		r.Post("/action-graphs/{graphID}/copy-blocks", s.CopyActionGraphBlocks)
-		r.Post("/action-graphs/{graphID}/paste-blocks", s.PasteActionGraphBlocks)
-		r.Post("/action-graphs/{graphID}/copy", s.CopyActionGraph)
+		r.Post("/behavior-trees/{graphID}/copy-blocks", s.CopyBehaviorTreeBlocks)
+		r.Post("/behavior-trees/{graphID}/paste-blocks", s.PasteBehaviorTreeBlocks)
+		r.Post("/behavior-trees/{graphID}/copy", s.CopyBehaviorTree)
 
 		// Agent compatible templates
 		r.Get("/agents/{agentID}/compatible-templates", s.GetAgentCompatibleTemplates)

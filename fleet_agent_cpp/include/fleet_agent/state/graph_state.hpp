@@ -53,9 +53,9 @@ inline StatePhase string_to_phase(const std::string& str) {
 // ============================================================
 
 /**
- * GraphState - State definition for action graph execution
+ * GraphState - State definition for behavior tree execution
  *
- * States are auto-generated from action graph steps with naming convention:
+ * States are auto-generated from behavior tree steps with naming convention:
  * - {step_id}:executing - During step execution
  * - {step_id}:success   - Step completed successfully
  * - {step_id}:failed    - Step failed
@@ -131,7 +131,7 @@ struct FleetStateEntry {
     std::string agent_id;
     std::string state_code;
     std::vector<std::string> semantic_tags;
-    std::string current_graph_id;
+    std::string current_behavior_tree_id;
     bool is_online{false};
     bool is_executing{false};
     std::chrono::system_clock::time_point updated_at;
@@ -148,7 +148,7 @@ inline void from_json(const nlohmann::json& j, FleetStateEntry& entry) {
     j.at("agent_id").get_to(entry.agent_id);
     if (j.contains("state_code")) j.at("state_code").get_to(entry.state_code);
     if (j.contains("semantic_tags")) j.at("semantic_tags").get_to(entry.semantic_tags);
-    if (j.contains("current_graph_id")) j.at("current_graph_id").get_to(entry.current_graph_id);
+    if (j.contains("current_behavior_tree_id")) j.at("current_behavior_tree_id").get_to(entry.current_behavior_tree_id);
     if (j.contains("is_online")) j.at("is_online").get_to(entry.is_online);
     if (j.contains("is_executing")) j.at("is_executing").get_to(entry.is_executing);
     entry.updated_at = std::chrono::system_clock::now();
@@ -179,7 +179,7 @@ enum class PreconditionOperator {
  * PreconditionFilter - Filter for matching agents
  */
 struct PreconditionFilter {
-    std::string graph_id;           // Filter by action graph ID
+    std::string behavior_tree_id;   // Filter by behavior tree ID
     std::string capability;         // Filter by capability
     std::vector<std::string> tags;  // Filter by semantic tags
     bool online_only{false};        // Only check online agents
@@ -300,12 +300,12 @@ public:
     std::vector<std::string> get_online_agents() const;
 
     /**
-     * Get all agents executing a specific graph.
+     * Get all agents executing a specific behavior tree.
      *
-     * @param graph_id Graph ID to match
+     * @param behavior_tree_id Behavior tree ID to match
      * @return List of agent IDs
      */
-    std::vector<std::string> get_agents_by_graph(const std::string& graph_id) const;
+    std::vector<std::string> get_agents_by_behavior_tree(const std::string& behavior_tree_id) const;
 
     /**
      * Get all cached entries.
@@ -362,7 +362,7 @@ private:
     // Indexes for O(1) lookups
     std::unordered_map<std::string, std::unordered_set<std::string>> state_index_;  // state_code -> agent_ids
     std::unordered_map<std::string, std::unordered_set<std::string>> tag_index_;    // tag -> agent_ids
-    std::unordered_map<std::string, std::unordered_set<std::string>> graph_index_;  // graph_id -> agent_ids
+    std::unordered_map<std::string, std::unordered_set<std::string>> behavior_tree_index_;  // behavior_tree_id -> agent_ids
 
     std::chrono::system_clock::time_point last_update_;
     StateUpdateCallback update_callback_;
@@ -407,21 +407,21 @@ public:
     std::vector<std::string> current_semantic_tags() const;
 
     /**
-     * Get current graph ID.
+     * Get current behavior tree ID.
      */
-    std::string current_graph_id() const;
+    std::string current_behavior_tree_id() const;
 
     /**
      * Set current state.
      *
      * @param state_code State code
      * @param semantic_tags Semantic tags
-     * @param graph_id Currently executing graph ID
+     * @param behavior_tree_id Currently executing behavior tree ID
      */
     void set_state(
         const std::string& state_code,
         const std::vector<std::string>& semantic_tags = {},
-        const std::string& graph_id = ""
+        const std::string& behavior_tree_id = ""
     );
 
     /**
@@ -447,13 +447,13 @@ public:
     // ============================================================
 
     /**
-     * Load graph states for action graph.
+     * Load graph states for behavior tree.
      *
-     * @param graph_id Graph ID
+     * @param behavior_tree_id Behavior tree ID
      * @param states Graph states
      */
     void load_graph_states(
-        const std::string& graph_id,
+        const std::string& behavior_tree_id,
         const std::vector<GraphState>& states
     );
 
@@ -525,7 +525,7 @@ private:
     // Current state
     std::string current_state_code_{"idle"};
     std::vector<std::string> current_semantic_tags_;
-    std::string current_graph_id_;
+    std::string current_behavior_tree_id_;
     std::chrono::system_clock::time_point state_updated_at_;
 
     // Graph states cache

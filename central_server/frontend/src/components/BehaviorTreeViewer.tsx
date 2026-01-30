@@ -22,7 +22,7 @@ const ACTION_COLORS: Record<string, string> = {
   'std_srvs/Trigger': '#06b6d4',
 }
 
-const START_NODE_ID = '__action_graph_start__'
+const START_NODE_ID = '__behavior_tree_start__'
 const START_NODE_COLOR = '#22c55e'
 
 const getActionColor = (actionType: string): string => {
@@ -209,8 +209,8 @@ const nodeTypes = {
   event: ViewerEventNode,
 }
 
-interface ActionGraphViewerProps {
-  actionGraph: ActionGraph | null
+interface BehaviorTreeViewerProps {
+  behaviorTree: ActionGraph | null
   stateDef?: StateDefinition | null
   currentStepId?: string | null
   completedSteps?: string[]
@@ -221,8 +221,22 @@ interface ActionGraphViewerProps {
   showMiniMap?: boolean
 }
 
-function ActionGraphViewerInner({
-  actionGraph,
+// Backward compatibility alias - allows either behaviorTree or actionGraph prop
+interface ActionGraphViewerProps {
+  behaviorTree?: ActionGraph | null
+  actionGraph?: ActionGraph | null
+  stateDef?: StateDefinition | null
+  currentStepId?: string | null
+  completedSteps?: string[]
+  failedSteps?: string[]
+  className?: string
+  compact?: boolean
+  showControls?: boolean
+  showMiniMap?: boolean
+}
+
+function BehaviorTreeViewerInner({
+  behaviorTree,
   stateDef,
   currentStepId,
   completedSteps = [],
@@ -231,14 +245,14 @@ function ActionGraphViewerInner({
   compact = false,
   showControls = true,
   showMiniMap = false,
-}: ActionGraphViewerProps) {
-  const convertActionGraphToGraph = useCallback((): { nodes: Node[]; edges: Edge[] } => {
-    if (!actionGraph) return { nodes: [], edges: [] }
+}: BehaviorTreeViewerProps) {
+  const convertBehaviorTreeToGraph = useCallback((): { nodes: Node[]; edges: Edge[] } => {
+    if (!behaviorTree) return { nodes: [], edges: [] }
 
     const nodes: Node[] = []
     const edges: Edge[] = []
     const actionMappings = stateDef?.action_mappings || []
-    const entryPoint = actionGraph.entry_point || actionGraph.steps[0]?.id
+    const entryPoint = behaviorTree.entry_point || behaviorTree.steps[0]?.id
 
     nodes.push({
       id: START_NODE_ID,
@@ -251,7 +265,7 @@ function ActionGraphViewerInner({
       },
     })
 
-    actionGraph.steps.forEach((step, index) => {
+    behaviorTree.steps.forEach((step, index) => {
       const cols = compact ? 2 : 3
       const x = 50 + (index % cols) * (compact ? 200 : 280)
       const y = 50 + Math.floor(index / cols) * (compact ? 100 : 150)
@@ -355,16 +369,16 @@ function ActionGraphViewerInner({
     }
 
     return { nodes, edges }
-  }, [actionGraph, stateDef, currentStepId, completedSteps, failedSteps, compact])
+  }, [behaviorTree, stateDef, currentStepId, completedSteps, failedSteps, compact])
 
   // Use computed nodes/edges directly (no state hooks needed since nodes aren't draggable)
   // This ensures nodes update immediately when currentStepId changes
-  const { nodes, edges } = useMemo(() => convertActionGraphToGraph(), [convertActionGraphToGraph])
+  const { nodes, edges } = useMemo(() => convertBehaviorTreeToGraph(), [convertBehaviorTreeToGraph])
 
-  if (!actionGraph) {
+  if (!behaviorTree) {
     return (
       <div className={`flex items-center justify-center bg-[#0f0f1a] text-gray-500 ${className}`}>
-        <p className="text-sm">No action graph selected</p>
+        <p className="text-sm">No behavior tree selected</p>
       </div>
     )
   }
@@ -408,39 +422,49 @@ function ActionGraphViewerInner({
   )
 }
 
-export default function ActionGraphViewer(props: ActionGraphViewerProps) {
+export default function BehaviorTreeViewer(props: BehaviorTreeViewerProps) {
   return (
     <ReactFlowProvider>
-      <ActionGraphViewerInner {...props} />
+      <BehaviorTreeViewerInner {...props} />
+    </ReactFlowProvider>
+  )
+}
+
+// Backward compatibility wrapper that accepts actionGraph prop
+export function ActionGraphViewer(props: ActionGraphViewerProps) {
+  const behaviorTree = props.behaviorTree || props.actionGraph || null
+  return (
+    <ReactFlowProvider>
+      <BehaviorTreeViewerInner {...props} behaviorTree={behaviorTree} />
     </ReactFlowProvider>
   )
 }
 
 // Mini version for embedding in cards
-export function ActionGraphMini({
-  actionGraph,
+export function BehaviorTreeMini({
+  behaviorTree,
   currentStepId,
   completedSteps,
 }: {
-  actionGraph: ActionGraph | null
+  behaviorTree: ActionGraph | null
   currentStepId?: string | null
   completedSteps?: string[]
 }) {
-  if (!actionGraph) return null
+  if (!behaviorTree) return null
 
-  const totalSteps = actionGraph.steps.length
-  const currentIndex = actionGraph.steps.findIndex(s => s.id === currentStepId)
+  const totalSteps = behaviorTree.steps.length
+  const currentIndex = behaviorTree.steps.findIndex(s => s.id === currentStepId)
 
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between text-xs">
-        <span className="text-gray-400">{actionGraph.name}</span>
+        <span className="text-gray-400">{behaviorTree.name}</span>
         <span className="text-blue-400">
           {currentIndex + 1} / {totalSteps}
         </span>
       </div>
       <div className="flex gap-1">
-        {actionGraph.steps.map((step) => {
+        {behaviorTree.steps.map((step) => {
           const isCurrent = step.id === currentStepId
           const isCompleted = completedSteps?.includes(step.id)
 
@@ -459,9 +483,28 @@ export function ActionGraphMini({
       </div>
       {currentStepId && (
         <p className="text-[10px] text-gray-500 truncate">
-          Current: {actionGraph.steps.find(s => s.id === currentStepId)?.job_name || actionGraph.steps.find(s => s.id === currentStepId)?.name || currentStepId}
+          Current: {behaviorTree.steps.find(s => s.id === currentStepId)?.job_name || behaviorTree.steps.find(s => s.id === currentStepId)?.name || currentStepId}
         </p>
       )}
     </div>
+  )
+}
+
+// Backward compatibility alias
+export function ActionGraphMini({
+  actionGraph,
+  currentStepId,
+  completedSteps,
+}: {
+  actionGraph: ActionGraph | null
+  currentStepId?: string | null
+  completedSteps?: string[]
+}) {
+  return (
+    <BehaviorTreeMini
+      behaviorTree={actionGraph}
+      currentStepId={currentStepId}
+      completedSteps={completedSteps}
+    />
   )
 }

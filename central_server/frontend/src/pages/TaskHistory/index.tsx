@@ -298,7 +298,7 @@ function TaskDetail({
           <div className="bg-slate-700/30 rounded-xl p-4">
             <div className="flex items-center gap-2 mb-2">
               <Workflow className="w-4 h-4 text-purple-400" />
-              <p className="text-sm text-slate-400">ActionGraph</p>
+              <p className="text-sm text-slate-400">Behavior Tree</p>
             </div>
             <p className="text-white font-medium">{task.flow_name || task.flow_id}</p>
           </div>

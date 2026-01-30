@@ -102,7 +102,7 @@ type GlobalStateManager struct {
 	// Zone expiry time
 	zoneExpiryDuration time.Duration
 
-	// Action Graph cache for fast lookup (avoids DB I/O during task execution)
+	// Behavior Tree cache for fast lookup (avoids DB I/O during task execution)
 	graphCache *GraphCache
 
 	// Metadata cache for agent/capability/graph metadata (avoids N+1 queries)
@@ -338,7 +338,7 @@ func (m *GlobalStateManager) CleanupStaleAgents(maxOfflineAge time.Duration) int
 	return count
 }
 
-// GraphCache returns the action graph cache
+// GraphCache returns the behavior tree cache
 func (m *GlobalStateManager) GraphCache() *GraphCache {
 	return m.graphCache
 }

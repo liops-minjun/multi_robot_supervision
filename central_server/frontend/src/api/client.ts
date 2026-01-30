@@ -100,23 +100,43 @@ export const agentApi = {
     return data
   },
 
-  // Get action graphs assigned to an agent
-  getAssignedActionGraphs: async (agentId: string): Promise<AgentActionGraphInfo[]> => {
-    const { data } = await api.get(`/agents/${agentId}/action-graphs`)
+  // Get behavior trees assigned to an agent
+  getAssignedBehaviorTrees: async (agentId: string): Promise<AgentActionGraphInfo[]> => {
+    const { data } = await api.get(`/agents/${agentId}/behavior-trees`)
     return data
   },
 
-  // Deploy an action graph to an agent via QUIC
-  deployActionGraph: async (graphId: string, agentId: string): Promise<{
+  // Backward compatibility alias
+  getAssignedActionGraphs: async (agentId: string): Promise<AgentActionGraphInfo[]> => {
+    const { data } = await api.get(`/agents/${agentId}/behavior-trees`)
+    return data
+  },
+
+  // Deploy a behavior tree to an agent via QUIC
+  deployBehaviorTree: async (graphId: string, agentId: string): Promise<{
     success: boolean
-    action_graph_id: string
+    behavior_tree_id: string
     agent_id: string
     version: number
     checksum: string
     error: string
     deployment_status: string
   }> => {
-    const { data } = await api.post(`/action-graphs/${graphId}/deploy/${agentId}`)
+    const { data } = await api.post(`/behavior-trees/${graphId}/deploy/${agentId}`)
+    return data
+  },
+
+  // Backward compatibility alias
+  deployActionGraph: async (graphId: string, agentId: string): Promise<{
+    success: boolean
+    behavior_tree_id: string
+    agent_id: string
+    version: number
+    checksum: string
+    error: string
+    deployment_status: string
+  }> => {
+    const { data } = await api.post(`/behavior-trees/${graphId}/deploy/${agentId}`)
     return data
   },
 }
@@ -212,8 +232,8 @@ export const stateDefinitionApi = {
   },
 }
 
-// Action Graph APIs
-export const actionGraphApi = {
+// Behavior Tree APIs
+export const behaviorTreeApi = {
   list: async (params?: {
     agentId?: string
     includeTemplates?: boolean
@@ -221,39 +241,39 @@ export const actionGraphApi = {
     const queryParams: Record<string, string | boolean> = {}
     if (params?.agentId) queryParams.agent_id = params.agentId
     if (params?.includeTemplates !== undefined) queryParams.include_templates = params.includeTemplates
-    const { data } = await api.get('/action-graphs', { params: queryParams })
+    const { data } = await api.get('/behavior-trees', { params: queryParams })
     return data
   },
 
   get: async (id: string): Promise<ActionGraph> => {
-    const { data } = await api.get(`/action-graphs/${id}`)
+    const { data } = await api.get(`/behavior-trees/${id}`)
     return data
   },
 
-  create: async (actionGraph: GraphCreateRequest): Promise<ActionGraph> => {
-    const { data } = await api.post('/action-graphs', actionGraph)
+  create: async (behaviorTree: GraphCreateRequest): Promise<ActionGraph> => {
+    const { data } = await api.post('/behavior-trees', behaviorTree)
     return data
   },
 
-  update: async (id: string, actionGraph: Partial<ActionGraph>): Promise<ActionGraph> => {
-    const { data } = await api.put(`/action-graphs/${id}`, actionGraph)
+  update: async (id: string, behaviorTree: Partial<ActionGraph>): Promise<ActionGraph> => {
+    const { data } = await api.put(`/behavior-trees/${id}`, behaviorTree)
     return data
   },
 
   delete: async (id: string): Promise<void> => {
-    await api.delete(`/action-graphs/${id}`)
+    await api.delete(`/behavior-trees/${id}`)
   },
 
   execute: async (id: string, agentId: string, params?: Record<string, unknown>): Promise<unknown> => {
-    const { data } = await api.post(`/action-graphs/${id}/execute`, null, {
+    const { data } = await api.post(`/behavior-trees/${id}/execute`, null, {
       params: { agent_id: agentId, ...params }
     })
     return data
   },
 
-  // Check if action graph can be executed on an agent (safety check)
+  // Check if behavior tree can be executed on an agent (safety check)
   checkExecutability: async (graphId: string, agentId: string): Promise<{
-    action_graph_id: string
+    behavior_tree_id: string
     agent_id: string
     can_execute: boolean
     capabilities_valid: boolean
@@ -262,7 +282,7 @@ export const actionGraphApi = {
     unavailable_servers: string[] | null
     message: string
   }> => {
-    const { data } = await api.get(`/action-graphs/${graphId}/check-executability`, {
+    const { data } = await api.get(`/behavior-trees/${graphId}/check-executability`, {
       params: { agent_id: agentId }
     })
     return data
@@ -279,7 +299,7 @@ export const actionGraphApi = {
       timeoutSec?: number
     }
   ): Promise<MultiAgentExecuteResponse> => {
-    const { data } = await api.post(`/action-graphs/${graphId}/execute-multi`, {
+    const { data } = await api.post(`/behavior-trees/${graphId}/execute-multi`, {
       agent_ids: agentIds,
       params: options?.commonParams,
       agent_params: options?.agentParams,
@@ -290,10 +310,13 @@ export const actionGraphApi = {
   },
 
   validate: async (id: string): Promise<{ valid: boolean; errors: string[]; warnings: string[] }> => {
-    const { data } = await api.post(`/action-graphs/${id}/validate`)
+    const { data } = await api.post(`/behavior-trees/${id}/validate`)
     return data
   },
 }
+
+// Backward compatibility alias
+export const actionGraphApi = behaviorTreeApi
 
 // Task APIs
 export const taskApi = {
@@ -403,7 +426,7 @@ export const actionApi = {
   },
 }
 
-// Action Graph Template APIs
+// Behavior Tree Template APIs
 export const templateApi = {
   // List all templates
   list: async (): Promise<TemplateListItem[]> => {

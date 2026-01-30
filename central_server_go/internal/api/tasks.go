@@ -252,12 +252,12 @@ func taskToResponse(task *db.Task, repo *db.Repository) TaskResponse {
 		CreatedAt:        task.CreatedAt,
 	}
 
-	if task.ActionGraphID.Valid {
-		response.ActionGraphID = task.ActionGraphID.String
-		// Get action graph name
-		graph, _ := repo.GetActionGraph(task.ActionGraphID.String)
+	if task.BehaviorTreeID.Valid {
+		response.BehaviorTreeID = task.BehaviorTreeID.String
+		// Get behavior tree name
+		graph, _ := repo.GetBehaviorTree(task.BehaviorTreeID.String)
 		if graph != nil {
-			response.ActionGraphName = graph.Name
+			response.BehaviorTreeName = graph.Name
 		}
 	}
 	if task.AgentID.Valid {

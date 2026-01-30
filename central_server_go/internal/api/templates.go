@@ -36,8 +36,8 @@ type TemplateAssignmentInfo struct {
 	ID               string     `json:"id"`
 	AgentID          string     `json:"agent_id"`
 	AgentName        string     `json:"agent_name"`
-	ActionGraphID    string     `json:"action_graph_id"`
-	ActionGraphName  string     `json:"action_graph_name"`
+	BehaviorTreeID   string     `json:"behavior_tree_id"`
+	BehaviorTreeName string     `json:"behavior_tree_name"`
 	ServerVersion    int        `json:"server_version"`
 	DeployedVersion  *int       `json:"deployed_version,omitempty"`
 	DeploymentStatus string     `json:"deployment_status"`
@@ -103,9 +103,9 @@ func (s *Server) ListTemplates(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// CreateTemplate creates a new action graph template
+// CreateTemplate creates a new behavior tree template
 func (s *Server) CreateTemplate(w http.ResponseWriter, r *http.Request) {
-	var req ActionGraphCreateRequest
+	var req BehaviorTreeCreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid request body")
 		return
@@ -118,14 +118,14 @@ func (s *Server) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if ID already exists
-	existing, _ := s.repo.GetActionGraph(req.ID)
+	existing, _ := s.repo.GetBehaviorTree(req.ID)
 	if existing != nil {
-		writeError(w, http.StatusConflict, "Action Graph already exists: "+req.ID)
+		writeError(w, http.StatusConflict, "Behavior Tree already exists: "+req.ID)
 		return
 	}
 
-	// Create action graph as template
-	graph := &db.ActionGraph{
+	// Create behavior tree as template
+	graph := &db.BehaviorTree{
 		ID:          req.ID,
 		Name:        req.Name,
 		Version:     1,
@@ -141,12 +141,12 @@ func (s *Server) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Steps != nil {
-		normalizedSteps := normalizeActionGraphSteps(req.Steps)
+		normalizedSteps := normalizeBehaviorTreeSteps(req.Steps)
 		stepsJSON, _ := json.Marshal(normalizedSteps)
 		graph.Steps = stepsJSON
 
 		// Extract required action types from steps (capability-based)
-		var steps []db.ActionGraphStep
+		var steps []db.BehaviorTreeStep
 		json.Unmarshal(stepsJSON, &steps)
 		requiredTypes := db.ExtractActionTypesFromSteps(steps)
 		if len(requiredTypes) > 0 {
@@ -160,12 +160,12 @@ func (s *Server) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 		graph.Preconditions = preconJSON
 	}
 
-	if err := s.repo.CreateActionGraph(graph); err != nil {
+	if err := s.repo.CreateBehaviorTree(graph); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, actionGraphToResponse(graph, s.repo))
+	writeJSON(w, http.StatusCreated, behaviorTreeToResponse(graph, s.repo))
 }
 
 // GetTemplate returns a specific template
@@ -182,7 +182,7 @@ func (s *Server) GetTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, actionGraphToResponse(template, s.repo))
+	writeJSON(w, http.StatusOK, behaviorTreeToResponse(template, s.repo))
 }
 
 // UpdateTemplate updates a template
@@ -199,7 +199,7 @@ func (s *Server) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req ActionGraphUpdateRequest
+	var req BehaviorTreeUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid request body")
 		return
@@ -217,12 +217,12 @@ func (s *Server) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		template.EntryPoint = sql.NullString{String: req.EntryPoint, Valid: true}
 	}
 	if req.Steps != nil {
-		normalizedSteps := normalizeActionGraphSteps(req.Steps)
+		normalizedSteps := normalizeBehaviorTreeSteps(req.Steps)
 		stepsJSON, _ := json.Marshal(normalizedSteps)
 		template.Steps = stepsJSON
 
 		// Re-extract required action types from updated steps (capability-based)
-		var steps []db.ActionGraphStep
+		var steps []db.BehaviorTreeStep
 		json.Unmarshal(stepsJSON, &steps)
 		requiredTypes := db.ExtractActionTypesFromSteps(steps)
 		if len(requiredTypes) > 0 {
@@ -240,7 +240,7 @@ func (s *Server) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
 	template.Version++
 	template.UpdatedAt = time.Now()
 
-	if err := s.repo.UpdateActionGraph(template); err != nil {
+	if err := s.repo.UpdateBehaviorTree(template); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -248,7 +248,7 @@ func (s *Server) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
 	// Mark all assignments as outdated
 	s.repo.MarkTemplateAssignmentsOutdated(templateID, template.Version)
 
-	writeJSON(w, http.StatusOK, actionGraphToResponse(template, s.repo))
+	writeJSON(w, http.StatusOK, behaviorTreeToResponse(template, s.repo))
 }
 
 // DeleteTemplate deletes a template and all its assignments
@@ -269,7 +269,7 @@ func (s *Server) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
 	s.repo.DeleteTemplateAssignments(templateID)
 
 	// Delete template
-	if err := s.repo.DeleteActionGraph(templateID); err != nil {
+	if err := s.repo.DeleteBehaviorTree(templateID); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -297,7 +297,7 @@ func (s *Server) GetTemplateAssignments(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	assignments, err := s.repo.GetAgentActionGraphsByGraphID(templateID)
+	assignments, err := s.repo.GetAgentBehaviorTreesByGraphID(templateID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -327,8 +327,8 @@ func (s *Server) GetTemplateAssignments(w http.ResponseWriter, r *http.Request) 
 			ID:               a.ID,
 			AgentID:          a.AgentID,
 			AgentName:        agentName,
-			ActionGraphID:    templateID,
-			ActionGraphName:  template.Name,
+			BehaviorTreeID:    templateID,
+			BehaviorTreeName:  template.Name,
 			ServerVersion:    a.ServerVersion,
 			DeployedVersion:  deployedVersion,
 			DeploymentStatus: a.DeploymentStatus,
@@ -368,7 +368,7 @@ func (s *Server) GetTemplateCompatibleAgents(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Get already assigned agent IDs
-	assignments, _ := s.repo.GetAgentActionGraphsByGraphID(templateID)
+	assignments, _ := s.repo.GetAgentBehaviorTreesByGraphID(templateID)
 	assignedAgents := make(map[string]bool)
 	for _, a := range assignments {
 		assignedAgents[a.AgentID] = true
@@ -460,39 +460,39 @@ func (s *Server) AssignTemplateToAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if already assigned
-	existing, _ := s.repo.GetAgentActionGraph(req.AgentID, templateID)
+	existing, _ := s.repo.GetAgentBehaviorTree(req.AgentID, templateID)
 	if existing != nil {
 		writeError(w, http.StatusConflict, "Template already assigned to agent")
 		return
 	}
 
 	// Create assignment
-	assignment := &db.AgentActionGraph{
+	assignment := &db.AgentBehaviorTree{
 		ID:               uuid.New().String(),
 		AgentID:          req.AgentID,
-		ActionGraphID:    templateID,
+		BehaviorTreeID:    templateID,
 		ServerVersion:    template.Version,
 		DeploymentStatus: "pending",
 		Enabled:          req.Enabled,
 		Priority:         req.Priority,
 	}
 
-	if err := s.repo.CreateAgentActionGraph(assignment); err != nil {
+	if err := s.repo.CreateAgentBehaviorTree(assignment); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	// Trigger deployment if agent is online and enabled
 	if agent.Status == "online" && req.Enabled {
-		go s.deployActionGraphToAgent(assignment.ID)
+		go s.deployBehaviorTreeToAgent(assignment.ID)
 	}
 
 	writeJSON(w, http.StatusCreated, TemplateAssignmentInfo{
 		ID:               assignment.ID,
 		AgentID:          assignment.AgentID,
 		AgentName:        agent.Name,
-		ActionGraphID:    templateID,
-		ActionGraphName:  template.Name,
+		BehaviorTreeID:    templateID,
+		BehaviorTreeName:  template.Name,
 		ServerVersion:    assignment.ServerVersion,
 		DeploymentStatus: assignment.DeploymentStatus,
 		Enabled:          assignment.Enabled,
@@ -516,7 +516,7 @@ func (s *Server) DeployTemplateAssignment(w http.ResponseWriter, r *http.Request
 	templateID := chi.URLParam(r, "templateID")
 	agentID := chi.URLParam(r, "agentID")
 
-	assignment, err := s.repo.GetAgentActionGraph(agentID, templateID)
+	assignment, err := s.repo.GetAgentBehaviorTree(agentID, templateID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -527,7 +527,7 @@ func (s *Server) DeployTemplateAssignment(w http.ResponseWriter, r *http.Request
 	}
 
 	// Trigger deployment with request context
-	result := s.deployActionGraphToAgentSync(r.Context(), assignment.ID)
+	result := s.deployBehaviorTreeToAgentSync(r.Context(), assignment.ID)
 
 	writeJSON(w, http.StatusOK, result)
 }
@@ -537,7 +537,7 @@ func (s *Server) UnassignTemplate(w http.ResponseWriter, r *http.Request) {
 	templateID := chi.URLParam(r, "templateID")
 	agentID := chi.URLParam(r, "agentID")
 
-	assignment, err := s.repo.GetAgentActionGraph(agentID, templateID)
+	assignment, err := s.repo.GetAgentBehaviorTree(agentID, templateID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -551,7 +551,7 @@ func (s *Server) UnassignTemplate(w http.ResponseWriter, r *http.Request) {
 	s.repo.DeleteDeploymentLogsForAssignment(assignment.ID)
 
 	// Delete assignment
-	if err := s.repo.DeleteAgentActionGraph(agentID, templateID); err != nil {
+	if err := s.repo.DeleteAgentBehaviorTree(agentID, templateID); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -601,25 +601,25 @@ func (s *Server) GetAgentsOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get all agent action graph assignments in one query
-	allAssignments, err := s.repo.GetAllAgentActionGraphs()
+	// Get all agent behavior tree assignments in one query
+	allAssignments, err := s.repo.GetAllAgentBehaviorTrees()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	// Collect all action graph IDs we need to fetch
+	// Collect all behavior tree IDs we need to fetch
 	graphIDSet := make(map[string]bool)
 	for _, a := range allAssignments {
-		graphIDSet[a.ActionGraphID] = true
+		graphIDSet[a.BehaviorTreeID] = true
 	}
 	graphIDs := make([]string, 0, len(graphIDSet))
 	for id := range graphIDSet {
 		graphIDs = append(graphIDs, id)
 	}
 
-	// Get all action graphs by IDs in one query
-	graphsMap, err := s.repo.GetActionGraphsByIDs(graphIDs)
+	// Get all behavior trees by IDs in one query
+	graphsMap, err := s.repo.GetBehaviorTreesByIDs(graphIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -633,7 +633,7 @@ func (s *Server) GetAgentsOverview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Assignments by agent ID
-	assignmentsByAgent := make(map[string][]db.AgentActionGraph)
+	assignmentsByAgent := make(map[string][]db.AgentBehaviorTree)
 	for _, a := range allAssignments {
 		assignmentsByAgent[a.AgentID] = append(assignmentsByAgent[a.AgentID], a)
 	}
@@ -667,7 +667,7 @@ func (s *Server) GetAgentsOverview(w http.ResponseWriter, r *http.Request) {
 
 		assignedTemplates := make([]map[string]interface{}, 0, len(assignments))
 		for _, a := range assignments {
-			graph := graphsMap[a.ActionGraphID]
+			graph := graphsMap[a.BehaviorTreeID]
 			if graph != nil {
 				var deployedVersion interface{}
 				if a.DeployedVersion > 0 {
@@ -780,15 +780,15 @@ func (s *Server) GetAvailableTemplatesForAgent(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, result)
 }
 
-// deployActionGraphToAgent triggers async deployment
-func (s *Server) deployActionGraphToAgent(assignmentID string) {
+// deployBehaviorTreeToAgent triggers async deployment
+func (s *Server) deployBehaviorTreeToAgent(assignmentID string) {
 	ctx := context.Background()
-	s.deployActionGraphToAgentSync(ctx, assignmentID)
+	s.deployBehaviorTreeToAgentSync(ctx, assignmentID)
 }
 
-// deployActionGraphToAgentSync performs synchronous deployment
-func (s *Server) deployActionGraphToAgentSync(ctx context.Context, assignmentID string) map[string]interface{} {
-	assignment, err := s.repo.GetAgentActionGraphByID(assignmentID)
+// deployBehaviorTreeToAgentSync performs synchronous deployment
+func (s *Server) deployBehaviorTreeToAgentSync(ctx context.Context, assignmentID string) map[string]interface{} {
+	assignment, err := s.repo.GetAgentBehaviorTreeByID(assignmentID)
 	if err != nil || assignment == nil {
 		return map[string]interface{}{
 			"status": "failed",
@@ -796,11 +796,11 @@ func (s *Server) deployActionGraphToAgentSync(ctx context.Context, assignmentID 
 		}
 	}
 
-	graph, err := s.repo.GetActionGraph(assignment.ActionGraphID)
+	graph, err := s.repo.GetBehaviorTree(assignment.BehaviorTreeID)
 	if err != nil || graph == nil {
 		return map[string]interface{}{
 			"status": "failed",
-			"error":  "Action graph not found",
+			"error":  "Behavior tree not found",
 		}
 	}
 
@@ -815,7 +815,7 @@ func (s *Server) deployActionGraphToAgentSync(ctx context.Context, assignmentID 
 	// Check if agent is online
 	if agent.Status != "online" {
 		assignment.DeploymentStatus = "pending"
-		s.repo.UpdateAgentActionGraph(assignment)
+		s.repo.UpdateAgentBehaviorTree(assignment)
 		return map[string]interface{}{
 			"status": "queued",
 		}
@@ -824,13 +824,13 @@ func (s *Server) deployActionGraphToAgentSync(ctx context.Context, assignmentID 
 	// Update status to deploying
 	assignment.DeploymentStatus = "deploying"
 	assignment.ServerVersion = graph.Version
-	s.repo.UpdateAgentActionGraph(assignment)
+	s.repo.UpdateAgentBehaviorTree(assignment)
 
 	// Create deployment log
 	correlationID := uuid.New().String()
-	deployLog := &db.ActionGraphDeploymentLog{
+	deployLog := &db.BehaviorTreeDeploymentLog{
 		ID:                 uuid.New().String(),
-		AgentActionGraphID: assignmentID,
+		AgentBehaviorTreeID: assignmentID,
 		Action:             "deploy",
 		Version:            graph.Version,
 		Status:             "initiated",
@@ -850,7 +850,7 @@ func (s *Server) deployActionGraphToAgentSync(ctx context.Context, assignmentID 
 			deployLog.ErrorMessage.Valid = true
 			deployLog.CompletedAt.Time = time.Now()
 			deployLog.CompletedAt.Valid = true
-			s.repo.UpdateAgentActionGraph(assignment)
+			s.repo.UpdateAgentBehaviorTree(assignment)
 			s.repo.UpdateDeploymentLog(deployLog)
 			return map[string]interface{}{
 				"correlation_id": correlationID,
@@ -860,7 +860,7 @@ func (s *Server) deployActionGraphToAgentSync(ctx context.Context, assignmentID 
 		}
 
 		// Set the target agent
-		canonicalGraph.ActionGraph.AgentID = assignment.AgentID
+		canonicalGraph.BehaviorTree.AgentID = assignment.AgentID
 
 		// Serialize to JSON
 		graphJSON, err := json.Marshal(canonicalGraph)
@@ -873,7 +873,7 @@ func (s *Server) deployActionGraphToAgentSync(ctx context.Context, assignmentID 
 			deployLog.ErrorMessage.Valid = true
 			deployLog.CompletedAt.Time = time.Now()
 			deployLog.CompletedAt.Valid = true
-			s.repo.UpdateAgentActionGraph(assignment)
+			s.repo.UpdateAgentBehaviorTree(assignment)
 			s.repo.UpdateDeploymentLog(deployLog)
 			return map[string]interface{}{
 				"correlation_id": correlationID,
@@ -908,7 +908,7 @@ func (s *Server) deployActionGraphToAgentSync(ctx context.Context, assignmentID 
 
 		deployLog.CompletedAt.Time = time.Now()
 		deployLog.CompletedAt.Valid = true
-		s.repo.UpdateAgentActionGraph(assignment)
+		s.repo.UpdateAgentBehaviorTree(assignment)
 		s.repo.UpdateDeploymentLog(deployLog)
 
 		return map[string]interface{}{
@@ -927,7 +927,7 @@ func (s *Server) deployActionGraphToAgentSync(ctx context.Context, assignmentID 
 	deployLog.CompletedAt.Time = time.Now()
 	deployLog.CompletedAt.Valid = true
 
-	s.repo.UpdateAgentActionGraph(assignment)
+	s.repo.UpdateAgentBehaviorTree(assignment)
 	s.repo.UpdateDeploymentLog(deployLog)
 
 	return map[string]interface{}{

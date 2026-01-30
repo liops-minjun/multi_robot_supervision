@@ -30,11 +30,11 @@ type Agent struct {
 	CurrentGraphID   sql.NullString `gorm:"size:50"`               // Currently executing graph ID
 
 	// Relationships
-	AgentActionGraphs []AgentActionGraph `gorm:"foreignKey:AgentID"`
-	ActionGraphs      []ActionGraph      `gorm:"foreignKey:AgentID"`
-	Capabilities      []AgentCapability  `gorm:"foreignKey:AgentID"`
-	Tasks             []Task             `gorm:"foreignKey:AgentID"`
-	Commands          []CommandQueue     `gorm:"foreignKey:AgentID"`
+	AgentBehaviorTrees []AgentBehaviorTree `gorm:"foreignKey:AgentID"`
+	BehaviorTrees      []BehaviorTree      `gorm:"foreignKey:AgentID"`
+	Capabilities       []AgentCapability   `gorm:"foreignKey:AgentID"`
+	Tasks              []Task              `gorm:"foreignKey:AgentID"`
+	Commands           []CommandQueue      `gorm:"foreignKey:AgentID"`
 }
 
 func (Agent) TableName() string {
@@ -124,7 +124,7 @@ func (StateDefinition) TableName() string {
 	return "state_definitions"
 }
 
-// GraphState represents a state that can be reported during action graph execution
+// GraphState represents a state that can be reported during behavior tree execution
 type GraphState struct {
 	Code         string   `json:"code"`                    // Unique code: "pick:executing", "idle"
 	Name         string   `json:"name"`                    // Display name: "Picking - Executing"
@@ -145,8 +145,8 @@ var SystemStates = []GraphState{
 	{Code: "paused", Name: "Paused", Type: "system", Color: "#6b7280"},
 }
 
-// ActionGraph represents a workflow of steps (template or agent-specific)
-type ActionGraph struct {
+// BehaviorTree represents a workflow of steps (template or agent-specific)
+type BehaviorTree struct {
 	ID               string         `gorm:"primaryKey;size:50"`
 	Name             string         `gorm:"size:100;not null"`
 	Description      sql.NullString `gorm:"type:text"`
@@ -168,17 +168,18 @@ type ActionGraph struct {
 	AutoGenerateStates bool           `gorm:"default:true"` // Auto-generate states from steps
 
 	// Relationships
-	Agent             *Agent             `gorm:"foreignKey:AgentID"`
-	Tasks             []Task             `gorm:"foreignKey:ActionGraphID"`
-	AgentActionGraphs []AgentActionGraph `gorm:"foreignKey:ActionGraphID"`
+	Agent              *Agent              `gorm:"foreignKey:AgentID"`
+	Tasks              []Task              `gorm:"foreignKey:BehaviorTreeID"`
+	AgentBehaviorTrees []AgentBehaviorTree `gorm:"foreignKey:BehaviorTreeID"`
 }
 
-func (ActionGraph) TableName() string {
+// TableName returns "action_graphs" to keep the same DB table (avoid migration)
+func (BehaviorTree) TableName() string {
 	return "action_graphs"
 }
 
-// ExtractActionTypesFromSteps extracts unique action types from action graph steps
-func ExtractActionTypesFromSteps(steps []ActionGraphStep) []string {
+// ExtractActionTypesFromSteps extracts unique action types from behavior tree steps
+func ExtractActionTypesFromSteps(steps []BehaviorTreeStep) []string {
 	actionTypeSet := make(map[string]bool)
 	for _, step := range steps {
 		if step.Action != nil && step.Action.Type != "" {
@@ -207,17 +208,17 @@ type ActionTypeWithCount struct {
 
 // TemplateCompatibilityInfo summarizes template compatibility for an agent.
 type TemplateCompatibilityInfo struct {
-	Template            ActionGraph
+	Template            BehaviorTree
 	RequiredActionTypes []string
 	MissingCapabilities []string
 	IsFullyCompatible   bool
 	AlreadyAssigned     bool
 }
 
-// Task represents a running or completed action graph execution
+// Task represents a running or completed behavior tree execution
 type Task struct {
 	ID               string         `gorm:"primaryKey;size:50"`
-	ActionGraphID    sql.NullString `gorm:"size:50"`
+	BehaviorTreeID   sql.NullString `gorm:"size:50;column:action_graph_id"` // Keep DB column name for migration
 	AgentID          sql.NullString `gorm:"size:50"`
 	Status           string         `gorm:"size:20;not null;default:pending"` // pending, running, completed, failed, cancelled, paused, waiting_precondition
 	CurrentStepID    sql.NullString `gorm:"size:50"`
@@ -235,8 +236,8 @@ type Task struct {
 	PreconditionTimeoutSec      int            `gorm:"default:300"` // Default 5 minutes
 
 	// Relationships
-	ActionGraph *ActionGraph `gorm:"foreignKey:ActionGraphID"`
-	Agent       *Agent       `gorm:"foreignKey:AgentID"`
+	BehaviorTree *BehaviorTree `gorm:"foreignKey:BehaviorTreeID"`
+	Agent        *Agent        `gorm:"foreignKey:AgentID"`
 }
 
 // BlockingConditionInfo describes why a precondition is blocking
@@ -273,14 +274,14 @@ func (CommandQueue) TableName() string {
 	return "command_queue"
 }
 
-// AgentActionGraph tracks which action graphs are deployed to which agents
-type AgentActionGraph struct {
-	ID            string `gorm:"primaryKey;size:50"`
-	AgentID       string `gorm:"size:50;not null"`
-	ActionGraphID string `gorm:"size:50;not null"`
+// AgentBehaviorTree tracks which behavior trees are deployed to which agents
+type AgentBehaviorTree struct {
+	ID             string `gorm:"primaryKey;size:50"`
+	AgentID        string `gorm:"size:50;not null"`
+	BehaviorTreeID string `gorm:"size:50;not null;column:action_graph_id"` // Keep DB column name
 
 	// Version tracking
-	ServerVersion   int `gorm:"not null"`        // Current version on server
+	ServerVersion   int `gorm:"not null"`                // Current version on server
 	DeployedVersion int `gorm:"column:deployed_version"` // Version deployed to agent (0 = never)
 
 	// Deployment status: pending, deploying, deployed, failed, outdated
@@ -300,30 +301,32 @@ type AgentActionGraph struct {
 
 	// Relationships
 	Agent          *Agent                       `gorm:"foreignKey:AgentID"`
-	ActionGraph    *ActionGraph                 `gorm:"foreignKey:ActionGraphID"`
-	DeploymentLogs []ActionGraphDeploymentLog `gorm:"foreignKey:AgentActionGraphID"`
+	BehaviorTree   *BehaviorTree                `gorm:"foreignKey:BehaviorTreeID"`
+	DeploymentLogs []BehaviorTreeDeploymentLog  `gorm:"foreignKey:AgentBehaviorTreeID"`
 }
 
-func (AgentActionGraph) TableName() string {
+// TableName returns "agent_action_graphs" to keep the same DB table (avoid migration)
+func (AgentBehaviorTree) TableName() string {
 	return "agent_action_graphs"
 }
 
-// ActionGraphDeploymentLog is an audit log for deployments
-type ActionGraphDeploymentLog struct {
-	ID                 string    `gorm:"primaryKey;size:50"`
-	AgentActionGraphID string    `gorm:"size:50;not null"`
-	Action             string    `gorm:"size:20;not null"` // deploy, undeploy, update, retry
-	Version            int       `gorm:"not null"`
-	Status             string    `gorm:"size:20;not null"` // success, failed, timeout
-	ErrorMessage       sql.NullString `gorm:"type:text"`
-	InitiatedAt        time.Time `gorm:"autoCreateTime"`
-	CompletedAt        sql.NullTime
+// BehaviorTreeDeploymentLog is an audit log for deployments
+type BehaviorTreeDeploymentLog struct {
+	ID                  string         `gorm:"primaryKey;size:50"`
+	AgentBehaviorTreeID string         `gorm:"size:50;not null;column:agent_action_graph_id"` // Keep DB column name
+	Action              string         `gorm:"size:20;not null"`                              // deploy, undeploy, update, retry
+	Version             int            `gorm:"not null"`
+	Status              string         `gorm:"size:20;not null"` // success, failed, timeout
+	ErrorMessage        sql.NullString `gorm:"type:text"`
+	InitiatedAt         time.Time      `gorm:"autoCreateTime"`
+	CompletedAt         sql.NullTime
 
 	// Relationships
-	AgentActionGraph *AgentActionGraph `gorm:"foreignKey:AgentActionGraphID"`
+	AgentBehaviorTree *AgentBehaviorTree `gorm:"foreignKey:AgentBehaviorTreeID"`
 }
 
-func (ActionGraphDeploymentLog) TableName() string {
+// TableName returns "action_graph_deployment_logs" to keep the same DB table (avoid migration)
+func (BehaviorTreeDeploymentLog) TableName() string {
 	return "action_graph_deployment_logs"
 }
 
@@ -331,8 +334,8 @@ func (ActionGraphDeploymentLog) TableName() string {
 // Parsed Types for Steps (not stored in DB directly)
 // ============================================================
 
-// ActionGraphStep represents a step in an action graph
-type ActionGraphStep struct {
+// BehaviorTreeStep represents a step in a behavior tree
+type BehaviorTreeStep struct {
 	ID           string `json:"id"`
 	Name         string `json:"name,omitempty"`
 	JobName      string `json:"job_name,omitempty"`      // User-defined job name for this step
@@ -457,7 +460,7 @@ type StartCondition struct {
 	Message string `json:"message,omitempty"`
 }
 
-// Precondition represents an action graph precondition
+// Precondition represents a behavior tree precondition
 type Precondition struct {
 	Type      string `json:"type"`      // agent_state, zone_free, etc.
 	Condition string `json:"condition"` // Expression to evaluate
@@ -502,8 +505,8 @@ type PreconditionFilter struct {
 // State Generation Helpers
 // ============================================================
 
-// GenerateStatesFromSteps creates auto-generated states from action graph steps
-func GenerateStatesFromSteps(steps []ActionGraphStep, existingStates []GraphState) []GraphState {
+// GenerateStatesFromSteps creates auto-generated states from behavior tree steps
+func GenerateStatesFromSteps(steps []BehaviorTreeStep, existingStates []GraphState) []GraphState {
 	states := make([]GraphState, 0)
 
 	// 1. Add system states

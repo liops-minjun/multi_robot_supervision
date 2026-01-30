@@ -21,7 +21,7 @@ namespace fleet {
 namespace v1 {
 class AgentMessage;
 class ServerMessage;
-class ActionGraph;
+class BehaviorTree;
 enum RobotState : int;
 enum ActionStatus : int;
 enum GraphExecutionState : int;

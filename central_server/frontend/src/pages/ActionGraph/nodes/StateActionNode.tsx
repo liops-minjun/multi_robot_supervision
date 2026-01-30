@@ -246,7 +246,7 @@ interface StateActionNodeData {
   // Auto-generate states toggle
   autoGenerateStates?: boolean
   generatedStates?: GraphState[]  // Stores the auto-generated states
-  // New State ActionGraph Configuration
+  // New State BehaviorTree Configuration
   startStates?: StartStateConfig[]
   duringStates?: string[]
   duringStateTargets?: DuringStateTarget[]

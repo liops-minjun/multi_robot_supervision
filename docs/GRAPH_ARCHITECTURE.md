@@ -1,8 +1,8 @@
-# Action Graph - Neo4j Graph-First Architecture
+# Behavior Tree - Neo4j Graph-First Architecture
 
 ## Overview
 
-This document defines the graph-first architecture for Action Graphs using Neo4j
+This document defines the graph-first architecture for Behavior Trees using Neo4j
 as the single source of truth for graphs, executions, deployments, and state.
 
 Key decisions:
@@ -46,7 +46,7 @@ Key decisions:
 ### Core Nodes
 
 ```
-(:ActionGraph {id, name, version, checksum, execution_mode, created_at})
+(:BehaviorTree {id, name, version, checksum, execution_mode, created_at})
 (:Step {id, step_type, action_json, wait_json, condition_json})
 (:Terminal {id, terminal_type, message, alert})
 (:Condition {id, quantifier, target_type, robot_id, agent_id,
@@ -70,8 +70,8 @@ Key decisions:
 ### Relationships
 
 ```
-(ActionGraph)-[:ENTRY_POINT]->(Step)
-(ActionGraph)-[:CONTAINS]->(Step|Terminal)
+(BehaviorTree)-[:ENTRY_POINT]->(Step)
+(BehaviorTree)-[:CONTAINS]->(Step|Terminal)
 (Step)-[:ON_SUCCESS|ON_FAILURE|ON_TIMEOUT|ON_CONFIRM|ON_CANCEL]->(Step|Terminal)
 (Step)-[:GATED_BY {order, operator}]->(Condition)
 (Step)-[:SETS_DURING|SETS_SUCCESS|SETS_FAILURE]->(State)
@@ -80,11 +80,11 @@ Key decisions:
 (StateDefinition)-[:MAPS_ACTION {action_type}]->(State)
 
 (Agent)-[:MANAGES]->(Robot)
-(ActionGraph)-[:DEPLOYED_TO]->(Agent)
-(Deployment)-[:OF_GRAPH]->(ActionGraph)
+(BehaviorTree)-[:DEPLOYED_TO]->(Agent)
+(Deployment)-[:OF_GRAPH]->(BehaviorTree)
 (Deployment)-[:TO_AGENT]->(Agent)
 
-(Execution)-[:OF_GRAPH]->(ActionGraph)
+(Execution)-[:OF_GRAPH]->(BehaviorTree)
 (Execution)-[:RUNS_ON]->(Robot)
 (Execution)-[:HAS_STEP_EXECUTION]->(StepExecution)
 (StepExecution)-[:OF_STEP]->(Step)
@@ -137,8 +137,8 @@ The agent always performs state transitions and publishes telemetry.
 ## Neo4j Constraints and Indexes (DDL)
 
 ```cypher
-CREATE CONSTRAINT action_graph_id IF NOT EXISTS
-FOR (g:ActionGraph) REQUIRE g.id IS UNIQUE;
+CREATE CONSTRAINT behavior_tree_id IF NOT EXISTS
+FOR (g:BehaviorTree) REQUIRE g.id IS UNIQUE;
 
 CREATE CONSTRAINT step_id IF NOT EXISTS
 FOR (s:Step) REQUIRE s.id IS UNIQUE;
@@ -154,7 +154,7 @@ FOR (a:Agent) REQUIRE a.id IS UNIQUE;
 
 CREATE INDEX robot_state IF NOT EXISTS FOR (r:Robot) ON (r.state);
 CREATE INDEX robot_last_seen IF NOT EXISTS FOR (r:Robot) ON (r.last_seen);
-CREATE INDEX graph_id IF NOT EXISTS FOR (g:ActionGraph) ON (g.id);
+CREATE INDEX graph_id IF NOT EXISTS FOR (g:BehaviorTree) ON (g.id);
 CREATE INDEX execution_state IF NOT EXISTS FOR (e:Execution) ON (e.state);
 ```
 
@@ -163,7 +163,7 @@ CREATE INDEX execution_state IF NOT EXISTS FOR (e:Execution) ON (e.state);
 Find next step on success:
 
 ```cypher
-MATCH (g:ActionGraph {id:$graph_id, version:$version})-[:ENTRY_POINT]->(start:Step)
+MATCH (g:BehaviorTree {id:$graph_id, version:$version})-[:ENTRY_POINT]->(start:Step)
 MATCH (start)-[:ON_SUCCESS]->(next)
 RETURN next
 ```

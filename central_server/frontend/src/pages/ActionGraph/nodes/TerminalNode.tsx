@@ -64,7 +64,7 @@ const TerminalNode = memo(({ data, selected }: NodeProps<TerminalNodeData>) => {
             <p className={`text-[10px] font-medium uppercase tracking-wider ${
               isSuccess ? 'text-emerald-200/60' : 'text-red-200/60'
             }`}>
-              {isSuccess ? 'ActionGraph Complete' : 'ActionGraph Failed'}
+              {isSuccess ? 'Behavior Tree Complete' : 'Behavior Tree Failed'}
             </p>
           </div>
         </div>

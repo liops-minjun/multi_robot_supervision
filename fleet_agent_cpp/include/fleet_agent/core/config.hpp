@@ -103,7 +103,7 @@ struct ExecutionConfig {
 // ============================================================
 
 struct StorageConfig {
-    std::string action_graphs_path{"/var/lib/fleet_agent/graphs"};
+    std::string behavior_trees_path{"/var/lib/fleet_agent/graphs"};
     std::string state_definitions_path{"/var/lib/fleet_agent/state_definitions"};
     std::string state_persistence_path{"/var/lib/fleet_agent/state"};
     std::string message_queue_path{"/var/lib/fleet_agent/queue"};

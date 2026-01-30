@@ -215,7 +215,7 @@ message AgentConfig {
 // ============================================================
 
 message ExecuteTaskRequest {
-  string action_graph_id = 1;
+  string behavior_tree_id = 1;
   string agent_id = 2;
   bytes params = 3;              // JSON-encoded parameters
   string requester = 4;

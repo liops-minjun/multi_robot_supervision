@@ -7,7 +7,7 @@
 - **실시간 모니터링**: WebSocket을 통한 로봇 상태 실시간 모니터링
 - **Capability Auto-Discovery**: ROS2 Action Server 자동 탐지 및 등록
 - **State Management**: Robot Type별 상태 정의 및 Action Mapping
-- **Action Graph**: 시각적 그래프 편집기를 통한 작업 시나리오 구성
+- **Behavior Tree**: 시각적 그래프 편집기를 통한 작업 시나리오 구성
 - **Task 실행**: Graph 기반 작업 실행 및 진행 상황 추적
 
 ## 아키텍처
@@ -15,7 +15,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           Web Frontend (React)                               │
-│              Dashboard / Monitoring / Action Graph Editor                    │
+│              Dashboard / Monitoring / Behavior Tree Editor                    │
 └─────────────────────────────────┬───────────────────────────────────────────┘
                                   │ REST API / WebSocket
                                   ▼
@@ -349,9 +349,9 @@ POST   /api/robots                    # 로봇 등록
 GET    /api/robots/{id}/capabilities  # 로봇 capabilities
 
 GET    /api/agents                    # Agent 목록
-GET    /api/action-graphs             # Action Graph 목록
-POST   /api/action-graphs             # Action Graph 생성
-POST   /api/action-graphs/{id}/execute # Graph 실행
+GET    /api/behavior-trees             # Behavior Tree 목록
+POST   /api/behavior-trees             # Behavior Tree 생성
+POST   /api/behavior-trees/{id}/execute # Graph 실행
 
 GET    /api/fleet/state               # Fleet 전체 상태
 WS     /ws/monitor                    # 실시간 모니터링

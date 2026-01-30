@@ -2,7 +2,7 @@ package api
 
 import "strings"
 
-func normalizeActionGraphSteps(raw []map[string]interface{}) []map[string]interface{} {
+func normalizeBehaviorTreeSteps(raw []map[string]interface{}) []map[string]interface{} {
 	if raw == nil {
 		return nil
 	}
@@ -15,13 +15,13 @@ func normalizeActionGraphSteps(raw []map[string]interface{}) []map[string]interf
 		for k, v := range step {
 			cloned[k] = v
 		}
-		normalizeActionGraphStep(cloned)
+		normalizeBehaviorTreeStep(cloned)
 		normalized = append(normalized, cloned)
 	}
 	return normalized
 }
 
-func normalizeActionGraphStep(step map[string]interface{}) {
+func normalizeBehaviorTreeStep(step map[string]interface{}) {
 	startConditions := normalizeStartConditions(step["start_conditions"])
 	if len(startConditions) == 0 {
 		startConditions = normalizeStartConditions(step["startConditions"])

@@ -43,7 +43,7 @@ namespace factory { class AgentFactory; struct AgentComponents; }
 namespace fleet::v1 {
 class ServerMessage;
 class AgentMessage;
-class ActionGraph;
+class BehaviorTree;
 class Vertex;
 class DeployGraphRequest;
 class ExecuteCommand;
@@ -218,8 +218,8 @@ private:
     // Current task execution state (single task at a time, mutex protected)
     struct TaskContext {
         std::string task_id;
-        std::string graph_id;
-        std::unique_ptr<fleet::v1::ActionGraph> graph;
+        std::string behavior_tree_id;
+        std::unique_ptr<fleet::v1::BehaviorTree> behavior_tree;
 
         std::string current_step_id;
         std::string current_action_type;
@@ -293,7 +293,7 @@ private:
     // Command Handling
     // ============================================================
     void handle_start_task(const std::string& task_id,
-                           const std::string& graph_id,
+                           const std::string& behavior_tree_id,
                            const std::unordered_map<std::string, std::string>& params);
     void handle_cancel_task(const std::string& task_id, const std::string& reason);
     void handle_deploy_graph(const fleet::v1::DeployGraphRequest& req);

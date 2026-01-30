@@ -194,7 +194,7 @@ StorageConfig parse_storage_config(const YAML::Node& node, const YAML::Node& pat
     StorageConfig config;
 
     if (node) {
-        config.action_graphs_path = get_string(node, "action_graphs_path", config.action_graphs_path);
+        config.behavior_trees_path = get_string(node, "behavior_trees_path", config.behavior_trees_path);
         config.state_definitions_path = get_string(node, "state_definitions_path", config.state_definitions_path);
         config.state_persistence_path = get_string(node, "state_persistence_path", config.state_persistence_path);
         config.message_queue_path = get_string(node, "message_queue_path", config.message_queue_path);
@@ -205,7 +205,7 @@ StorageConfig parse_storage_config(const YAML::Node& node, const YAML::Node& pat
 
     // Also check paths section
     if (paths) {
-        config.action_graphs_path = get_string(paths, "action_graphs", config.action_graphs_path);
+        config.behavior_trees_path = get_string(paths, "behavior_trees", config.behavior_trees_path);
         config.agent_id_path = get_string(paths, "agent_id", config.agent_id_path);
     }
 
@@ -417,7 +417,7 @@ bool save_config(const AgentConfig& config, const std::string& config_path) {
 
     // Paths section
     out << YAML::Key << "paths" << YAML::Value << YAML::BeginMap;
-    out << YAML::Key << "action_graphs" << YAML::Value << config.storage.action_graphs_path;
+    out << YAML::Key << "behavior_trees" << YAML::Value << config.storage.behavior_trees_path;
     out << YAML::EndMap;
 
     // Timeouts section
@@ -469,7 +469,7 @@ server:
     enable_datagrams: true
 
 paths:
-  action_graphs: "/var/lib/fleet_agent/graphs"
+  behavior_trees: "/var/lib/fleet_agent/graphs"
   agent_id: "/var/lib/fleet_agent/agent_id"  # Stores server-assigned ID for persistence
 
 logging:

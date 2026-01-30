@@ -54,7 +54,7 @@ export interface Robot {
 }
 
 // ============================================
-// State ActionGraph Configuration Types
+// State BehaviorTree Configuration Types
 // ============================================
 
 // Logical operator for combining conditions
@@ -182,7 +182,7 @@ export const SystemStates: GraphState[] = [
   { code: 'offline', name: 'Offline', type: 'system', phase: 'idle', color: '#9CA3AF', description: 'Agent is offline', semantic_tags: ['unavailable'] },
 ]
 
-// ActionGraph Types
+// BehaviorTree Types
 export interface GraphStep {
   id: string
   name?: string
@@ -192,7 +192,7 @@ export interface GraphStep {
   terminal_type?: 'success' | 'failure'
   // Legacy preconditions (simple string-based)
   preconditions?: Precondition[]
-  // New State ActionGraph Configuration
+  // New State BehaviorTree Configuration
   startStates?: StartStateConfig[]  // Pre-conditions with agent conditions
   start_conditions?: StartCondition[]
   duringStates?: string[]           // States during execution
@@ -686,7 +686,7 @@ export interface OutcomeTransition {
   state?: string
 }
 
-export interface ActionGraph {
+export interface BehaviorTree {
   id: string
   name: string
   description: string | null
@@ -703,6 +703,9 @@ export interface ActionGraph {
   created_at: string
   updated_at: string | null
 }
+
+// Backward compatibility alias
+export type ActionGraph = BehaviorTree
 
 export interface GraphListItem {
   id: string

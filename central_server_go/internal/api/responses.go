@@ -52,10 +52,10 @@ type RobotConnectRequest struct {
 }
 
 // ============================================================
-// Action Graph Response Models
+// Behavior Tree Response Models
 // ============================================================
 
-type ActionGraphListResponse struct {
+type BehaviorTreeListResponse struct {
 	ID               string    `json:"id"`
 	Name             string    `json:"name"`
 	Description      string    `json:"description,omitempty"`
@@ -83,7 +83,7 @@ type GraphStateResponse struct {
 	SemanticTags []string `json:"semantic_tags,omitempty"`
 }
 
-type ActionGraphResponse struct {
+type BehaviorTreeResponse struct {
 	ID                 string                   `json:"id"`
 	Name               string                   `json:"name"`
 	Description        string                   `json:"description,omitempty"`
@@ -101,7 +101,7 @@ type ActionGraphResponse struct {
 	UpdatedAt          time.Time                `json:"updated_at"`
 }
 
-type ActionGraphCreateRequest struct {
+type BehaviorTreeCreateRequest struct {
 	ID                 string                   `json:"id"`
 	Name               string                   `json:"name"`
 	Description        string                   `json:"description,omitempty"`
@@ -113,7 +113,7 @@ type ActionGraphCreateRequest struct {
 	AutoGenerateStates *bool                    `json:"auto_generate_states,omitempty"` // Pointer to detect if set
 }
 
-type ActionGraphUpdateRequest struct {
+type BehaviorTreeUpdateRequest struct {
 	Name               string                   `json:"name,omitempty"`
 	Description        string                   `json:"description,omitempty"`
 	EntryPoint         string                   `json:"entry_point,omitempty"`
@@ -123,7 +123,7 @@ type ActionGraphUpdateRequest struct {
 	AutoGenerateStates *bool                    `json:"auto_generate_states,omitempty"` // Pointer to detect if set
 }
 
-type ActionGraphExecuteRequest struct {
+type BehaviorTreeExecuteRequest struct {
 	AgentID string                 `json:"agent_id"`
 	Params  map[string]interface{} `json:"params,omitempty"`
 }
@@ -132,7 +132,7 @@ type ActionGraphExecuteRequest struct {
 // Multi-Agent Execution Request/Response Models
 // ============================================================
 
-// MultiAgentExecuteRequest represents a request to execute an action graph on multiple agents simultaneously
+// MultiAgentExecuteRequest represents a request to execute a behavior tree on multiple agents simultaneously
 type MultiAgentExecuteRequest struct {
 	AgentIDs    []string                          `json:"agent_ids"`
 	Params      map[string]interface{}            `json:"params,omitempty"`       // Common params for all agents
@@ -173,7 +173,7 @@ type MultiAgentExecuteErrorResponse struct {
 }
 
 // ============================================================
-// Agent Action Graph Response Models
+// Agent Behavior Tree Response Models
 // ============================================================
 
 type AgentResponse struct {
@@ -192,11 +192,11 @@ type AgentResponse struct {
 	Robots           []string   `json:"robots,omitempty"` // In 1:1 model, contains single agent ID
 }
 
-type AgentActionGraphResponse struct {
+type AgentBehaviorTreeResponse struct {
 	ID               string     `json:"id"`
 	AgentID          string     `json:"agent_id"`
-	ActionGraphID    string     `json:"action_graph_id"`
-	ActionGraphName  string     `json:"action_graph_name,omitempty"`
+	BehaviorTreeID   string     `json:"behavior_tree_id"`
+	BehaviorTreeName string     `json:"behavior_tree_name,omitempty"`
 	ServerVersion    int        `json:"server_version"`
 	DeployedVersion  int        `json:"deployed_version"`
 	DeploymentStatus string     `json:"deployment_status"`
@@ -208,21 +208,21 @@ type AgentActionGraphResponse struct {
 	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
-type AssignActionGraphRequest struct {
-	ActionGraphID string `json:"action_graph_id"`
-	Enabled       bool   `json:"enabled"`
-	Priority      int    `json:"priority"`
+type AssignBehaviorTreeRequest struct {
+	BehaviorTreeID string `json:"behavior_tree_id"`
+	Enabled        bool   `json:"enabled"`
+	Priority       int    `json:"priority"`
 }
 
 type DeploymentLogResponse struct {
-	ID                 string     `json:"id"`
-	AgentActionGraphID string     `json:"agent_action_graph_id"`
-	Action             string     `json:"action"`
-	Version            int        `json:"version"`
-	Status             string     `json:"status"`
-	ErrorMessage       string     `json:"error_message,omitempty"`
-	InitiatedAt        time.Time  `json:"initiated_at"`
-	CompletedAt        *time.Time `json:"completed_at,omitempty"`
+	ID                  string     `json:"id"`
+	AgentBehaviorTreeID string     `json:"agent_behavior_tree_id"`
+	Action              string     `json:"action"`
+	Version             int        `json:"version"`
+	Status              string     `json:"status"`
+	ErrorMessage        string     `json:"error_message,omitempty"`
+	InitiatedAt         time.Time  `json:"initiated_at"`
+	CompletedAt         *time.Time `json:"completed_at,omitempty"`
 }
 
 // ============================================================
@@ -230,19 +230,19 @@ type DeploymentLogResponse struct {
 // ============================================================
 
 type TaskResponse struct {
-	ID               string                   `json:"id"`
-	ActionGraphID    string                   `json:"action_graph_id,omitempty"`
-	ActionGraphName  string                   `json:"action_graph_name,omitempty"`
-	AgentID          string                   `json:"agent_id,omitempty"`
-	AgentName        string                   `json:"agent_name,omitempty"`
-	Status           string                   `json:"status"`
-	CurrentStepID    string                   `json:"current_step_id,omitempty"`
-	CurrentStepIndex int                      `json:"current_step_index"`
-	StepResults      []map[string]interface{} `json:"step_results,omitempty"`
-	ErrorMessage     string                   `json:"error_message,omitempty"`
-	CreatedAt        time.Time                `json:"created_at"`
-	StartedAt        *time.Time               `json:"started_at,omitempty"`
-	CompletedAt      *time.Time               `json:"completed_at,omitempty"`
+	ID                string                   `json:"id"`
+	BehaviorTreeID    string                   `json:"behavior_tree_id,omitempty"`
+	BehaviorTreeName  string                   `json:"behavior_tree_name,omitempty"`
+	AgentID           string                   `json:"agent_id,omitempty"`
+	AgentName         string                   `json:"agent_name,omitempty"`
+	Status            string                   `json:"status"`
+	CurrentStepID     string                   `json:"current_step_id,omitempty"`
+	CurrentStepIndex  int                      `json:"current_step_index"`
+	StepResults       []map[string]interface{} `json:"step_results,omitempty"`
+	ErrorMessage      string                   `json:"error_message,omitempty"`
+	CreatedAt         time.Time                `json:"created_at"`
+	StartedAt         *time.Time               `json:"started_at,omitempty"`
+	CompletedAt       *time.Time               `json:"completed_at,omitempty"`
 
 	// Precondition waiting status
 	IsWaitingForPrecondition    bool                            `json:"is_waiting_for_precondition,omitempty"`

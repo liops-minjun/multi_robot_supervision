@@ -134,12 +134,12 @@ void parse_start_conditions(
 
 bool parse_canonical_graph_json(
     const std::string& json_str,
-    fleet::v1::ActionGraph* graph,
+    fleet::v1::BehaviorTree* behavior_tree,
     std::string* error) {
 
-    if (!graph) {
+    if (!behavior_tree) {
         if (error) {
-            *error = "graph output is null";
+            *error = "behavior_tree output is null";
         }
         return false;
     }
@@ -156,20 +156,20 @@ bool parse_canonical_graph_json(
 
     if (!root.is_object()) {
         if (error) {
-            *error = "graph JSON must be an object";
+            *error = "behavior tree JSON must be an object";
         }
         return false;
     }
 
-    graph->set_graph_json(json_str);
+    behavior_tree->set_graph_json(json_str);
 
     if (root.contains("schema_version") && root["schema_version"].is_string()) {
-        graph->set_schema_version(root["schema_version"].get<std::string>());
+        behavior_tree->set_schema_version(root["schema_version"].get<std::string>());
     }
 
-    if (root.contains("action_graph") && root["action_graph"].is_object()) {
-        const auto& meta = root["action_graph"];
-        auto* out_meta = graph->mutable_metadata();
+    if (root.contains("behavior_tree") && root["behavior_tree"].is_object()) {
+        const auto& meta = root["behavior_tree"];
+        auto* out_meta = behavior_tree->mutable_metadata();
         if (meta.contains("id") && meta["id"].is_string()) {
             out_meta->set_id(meta["id"].get<std::string>());
         }
@@ -185,10 +185,10 @@ bool parse_canonical_graph_json(
     }
 
     if (root.contains("entry_point") && root["entry_point"].is_string()) {
-        graph->set_entry_point(root["entry_point"].get<std::string>());
+        behavior_tree->set_entry_point(root["entry_point"].get<std::string>());
     }
     if (root.contains("checksum") && root["checksum"].is_string()) {
-        graph->set_checksum(root["checksum"].get<std::string>());
+        behavior_tree->set_checksum(root["checksum"].get<std::string>());
     }
 
     if (root.contains("vertices") && root["vertices"].is_array()) {
@@ -197,7 +197,7 @@ bool parse_canonical_graph_json(
                 continue;
             }
 
-            auto* vertex = graph->add_vertices();
+            auto* vertex = behavior_tree->add_vertices();
             if (vertex_json.contains("id") && vertex_json["id"].is_string()) {
                 vertex->set_id(vertex_json["id"].get<std::string>());
             }
@@ -337,7 +337,7 @@ bool parse_canonical_graph_json(
                 continue;
             }
 
-            auto* edge = graph->add_edges();
+            auto* edge = behavior_tree->add_edges();
             if (edge_json.contains("from") && edge_json["from"].is_string()) {
                 edge->set_from_vertex(edge_json["from"].get<std::string>());
             } else if (edge_json.contains("from_vertex") && edge_json["from_vertex"].is_string()) {
@@ -367,14 +367,14 @@ bool parse_canonical_graph_json(
         }
     }
 
-    if (graph->metadata().id().empty()) {
+    if (behavior_tree->metadata().id().empty()) {
         if (error) {
-            *error = "missing action_graph.id in canonical payload";
+            *error = "missing behavior_tree.id in canonical payload";
         }
         return false;
     }
 
-    if (graph->entry_point().empty()) {
+    if (behavior_tree->entry_point().empty()) {
         if (error) {
             *error = "missing entry_point in canonical payload";
         }
@@ -542,12 +542,12 @@ MessageHandler::HandleResult MessageHandler::handle_deploy_graph(
     const fleet::v1::DeployGraphRequest& deploy) {
 
     const auto& graph_msg = deploy.graph();
-    fleet::v1::ActionGraph graph;
+    fleet::v1::BehaviorTree behavior_tree;
 
     if (graph_msg.metadata().id().empty() && !graph_msg.graph_json().empty()) {
         std::string parse_error;
-        if (!parse_canonical_graph_json(graph_msg.graph_json(), &graph, &parse_error)) {
-            log.error("Failed to parse canonical graph JSON: {}", parse_error);
+        if (!parse_canonical_graph_json(graph_msg.graph_json(), &behavior_tree, &parse_error)) {
+            log.error("Failed to parse canonical behavior tree JSON: {}", parse_error);
             auto response = build_deploy_response(
                 deploy.correlation_id(),
                 "",
@@ -560,40 +560,40 @@ MessageHandler::HandleResult MessageHandler::handle_deploy_graph(
             return HandleResult{false, parse_error, response};
         }
     } else {
-        graph = graph_msg;
+        behavior_tree = graph_msg;
     }
 
-    if (graph.metadata().id().empty()) {
+    if (behavior_tree.metadata().id().empty()) {
         auto response = build_deploy_response(
             deploy.correlation_id(),
             "",
             0,
             "",
             false,
-            "Graph metadata.id is missing"
+            "BehaviorTree metadata.id is missing"
         );
         send_response(response);
-        return HandleResult{false, "Graph metadata.id is missing", response};
+        return HandleResult{false, "BehaviorTree metadata.id is missing", response};
     }
 
-    log.info("Deploy graph: id={}, name={}, version={}, force={}",
-             graph.metadata().id(), graph.metadata().name(),
-             graph.metadata().version(), deploy.force());
+    log.info("Deploy behavior tree: id={}, name={}, version={}, force={}",
+             behavior_tree.metadata().id(), behavior_tree.metadata().name(),
+             behavior_tree.metadata().version(), deploy.force());
 
     // Check if already exists (unless force)
     if (!deploy.force() && deps_.graph_storage &&
-        deps_.graph_storage->exists(graph.metadata().id())) {
+        deps_.graph_storage->exists(behavior_tree.metadata().id())) {
 
-        auto existing_version = deps_.graph_storage->get_version(graph.metadata().id());
-        if (existing_version && *existing_version >= graph.metadata().version()) {
-            log.info("Graph {} already at version {} (requested {}), skipping",
-                     graph.metadata().id(), *existing_version, graph.metadata().version());
+        auto existing_version = deps_.graph_storage->get_version(behavior_tree.metadata().id());
+        if (existing_version && *existing_version >= behavior_tree.metadata().version()) {
+            log.info("Behavior tree {} already at version {} (requested {}), skipping",
+                     behavior_tree.metadata().id(), *existing_version, behavior_tree.metadata().version());
 
             auto response = build_deploy_response(
                 deploy.correlation_id(),
-                graph.metadata().id(),
+                behavior_tree.metadata().id(),
                 *existing_version,
-                graph.checksum(),
+                behavior_tree.checksum(),
                 true,
                 ""
             );
@@ -602,39 +602,39 @@ MessageHandler::HandleResult MessageHandler::handle_deploy_graph(
         }
     }
 
-    // Store the graph
+    // Store the behavior tree
     bool stored = false;
     if (deps_.graph_storage) {
-        stored = deps_.graph_storage->store(graph);
+        stored = deps_.graph_storage->store(behavior_tree);
     }
 
     if (!stored) {
-        log.error("Failed to store graph: {}", graph.metadata().id());
+        log.error("Failed to store behavior tree: {}", behavior_tree.metadata().id());
         auto response = build_deploy_response(
             deploy.correlation_id(),
-            graph.metadata().id(),
-            graph.metadata().version(),
+            behavior_tree.metadata().id(),
+            behavior_tree.metadata().version(),
             "",
             false,
-            "Failed to store graph"
+            "Failed to store behavior tree"
         );
         send_response(response);
-        return HandleResult{false, "Failed to store graph", response};
+        return HandleResult{false, "Failed to store behavior tree", response};
     }
 
     // Send success response
     auto response = build_deploy_response(
         deploy.correlation_id(),
-        graph.metadata().id(),
-        graph.metadata().version(),
-        graph.checksum(),
+        behavior_tree.metadata().id(),
+        behavior_tree.metadata().version(),
+        behavior_tree.checksum(),
         true,
         ""
     );
     send_response(response);
 
-    log.info("Successfully deployed graph: {} (v{})",
-             graph.metadata().id(), graph.metadata().version());
+    log.info("Successfully deployed behavior tree: {} (v{})",
+             behavior_tree.metadata().id(), behavior_tree.metadata().version());
 
     return HandleResult{true, "", response};
 }
@@ -664,7 +664,7 @@ MessageHandler::HandleResult MessageHandler::handle_fleet_state(
 
         // Parse optional fields
         if (agent.has_current_task_id()) {
-            entry.current_graph_id = agent.current_task_id();
+            entry.current_behavior_tree_id = agent.current_task_id();
         }
 
         entries.push_back(std::move(entry));

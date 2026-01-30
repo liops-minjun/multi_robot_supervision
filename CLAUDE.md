@@ -50,7 +50,7 @@ ros2 launch fleet_agent_cpp fleet_agent.launch.py server_ip:=192.168.0.100
 ./scripts/dev.sh                  # Start backend + frontend (no Docker)
 ./scripts/run_test.sh             # Integration test with ROS2 action servers
 ./scripts/test_capability_api.sh  # Test capability APIs
-./scripts/test_graph_api.sh       # Test action graph APIs
+./scripts/test_graph_api.sh       # Test behavior tree APIs
 ```
 
 ### Regenerate Protobuf (when modifying proto files)
@@ -181,10 +181,10 @@ server:
 | `/api/robots/{id}/capabilities` | GET | Get robot capabilities |
 | `/api/robots/{id}/capabilities` | PUT | Register/sync capabilities |
 | `/api/capabilities` | GET | List all capabilities (fleet-wide) |
-| `/api/action-graphs` | CRUD | Action Graph management |
-| `/api/action-graphs/{id}/execute` | POST | Execute on robot |
-| `/api/action-graphs/{id}/canonical` | GET | Get graph in canonical format |
-| `/api/action-graphs/{id}/deploy/{agentID}` | POST | Deploy to agent |
+| `/api/behavior-trees` | CRUD | Behavior Tree management |
+| `/api/behavior-trees/{id}/execute` | POST | Execute on robot |
+| `/api/behavior-trees/{id}/canonical` | GET | Get graph in canonical format |
+| `/api/behavior-trees/{id}/deploy/{agentID}` | POST | Deploy to agent |
 | `/api/tasks` | GET | List tasks |
 | `/api/tasks/{id}/cancel` | POST | Cancel task |
 | `/api/fleet/state` | GET | Get fleet state |
@@ -224,7 +224,7 @@ The Fleet Agent supports **Hybrid control** for multi-robot coordination:
 ```json
 {
   "schema_version": "1.0.0",
-  "action_graph": {
+  "behavior_tree": {
     "id": "pick_and_place_001",
     "name": "Pick and Place",
     "version": 3
@@ -252,9 +252,9 @@ The Fleet Agent supports **Hybrid control** for multi-robot coordination:
 }
 ```
 
-### Action Graph Caching
+### Behavior Tree Caching
 
-Both Central Server and Fleet Agent maintain in-memory caches for deployed Action Graphs to minimize DB/file I/O during task execution.
+Both Central Server and Fleet Agent maintain in-memory caches for deployed Behavior Trees to minimize DB/file I/O during task execution.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -309,7 +309,7 @@ central_server_go/
 │   │   ├── router.go           # HTTP routes
 │   │   ├── websocket.go        # WebSocket handler (optimized broadcast)
 │   │   ├── robots.go           # Robot CRUD
-│   │   ├── action_graphs.go    # Action Graph CRUD + execution + caching
+│   │   ├── action_graphs.go    # Behavior Tree CRUD + execution + caching
 │   │   ├── tasks.go            # Task management
 │   │   ├── system.go           # Cache stats & management endpoints
 │   │   └── responses.go        # Response models
@@ -318,7 +318,7 @@ central_server_go/
 │   │   └── repository.go       # Database operations
 │   ├── state/
 │   │   ├── manager.go          # In-memory fleet state (thread-safe)
-│   │   └── graph_cache.go      # Action Graph in-memory cache
+│   │   └── graph_cache.go      # Behavior Tree in-memory cache
 │   ├── executor/
 │   │   └── scheduler.go        # Task scheduler (uses graph cache)
 │   ├── graph/
@@ -389,22 +389,22 @@ Queue Architecture:
 - `agents` - Fleet agents (1 agent = N robots)
 - `robots` - Individual robots (with namespace, tags fields)
 - `robot_capabilities` - Auto-discovered capabilities per robot
-- `action_graphs` - Action Graph definitions (templates)
-- `agent_action_graphs` - Action Graph assignments to agents
-- `action_graph_deployment_logs` - Deployment audit trail
+- `behavior_trees` - Behavior Tree definitions (templates)
+- `agent_behavior_trees` - Behavior Tree assignments to agents
+- `behavior_tree_deployment_logs` - Deployment audit trail
 - `tasks` - Running/completed tasks
 - `waypoints` - Saved positions/poses
 - `state_definitions` - Robot type configurations (Legacy, optional)
 
 ## Update Checklist
 
-### When Adding New Action Graph Step Fields
+### When Adding New Behavior Tree Step Fields
 
-1. [ ] Update `internal/db/models.go` - ActionGraph.Steps JSON structure
+1. [ ] Update `internal/db/models.go` - BehaviorTree.Steps JSON structure
 2. [ ] Update `internal/graph/schema.go` - Canonical graph types
 3. [ ] Update `fleet_agent_cpp/include/fleet_agent/graph/storage.hpp`
 4. [ ] Update `fleet_agent_cpp/src/graph/executor.cpp`
-5. [ ] Update frontend Action Graph Editor (if UI needed)
+5. [ ] Update frontend Behavior Tree Editor (if UI needed)
 
 ### When Modifying gRPC Messages
 
@@ -496,7 +496,7 @@ server:
     enable_datagrams: true
 
 paths:
-  action_graphs: "/opt/fleet_agent/action_graphs"
+  behavior_trees: "/opt/fleet_agent/behavior_trees"
   resumption_ticket: "/var/lib/fleet_agent/quic_ticket"
 
 telemetry:
@@ -510,9 +510,9 @@ discovery:
 
 ## Common Pitfalls
 
-### 1. Action Graph Version Mismatch
-- Server increments `ActionGraph.version` on every save
-- `AgentActionGraph.server_version` must be updated
+### 1. Behavior Tree Version Mismatch
+- Server increments `BehaviorTree.version` on every save
+- `AgentBehaviorTree.server_version` must be updated
 - Agent stores `deployed_version` for comparison
 
 ### 2. QUIC Connection Issues
@@ -522,7 +522,7 @@ discovery:
 
 ### 3. Step Transition Logic
 - `on_success` can be string (step_id) or dict (conditional)
-- Terminal steps complete the action graph
+- Terminal steps complete the behavior tree
 - Preconditions must be satisfied before step execution
 
 ### 4. WebSocket Data Format

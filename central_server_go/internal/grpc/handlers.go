@@ -455,10 +455,10 @@ func (h *FleetControlHandler) UnregisterCommandHandler(commandID string) {
 
 // ExecuteTaskRequest represents a task execution request
 type ExecuteTaskRequest struct {
-	ActionGraphID string
-	AgentID       string
-	Params        map[string]interface{}
-	Requester     string
+	BehaviorTreeID string
+	AgentID        string
+	Params         map[string]interface{}
+	Requester      string
 }
 
 // ExecuteTaskResponse represents a task execution response

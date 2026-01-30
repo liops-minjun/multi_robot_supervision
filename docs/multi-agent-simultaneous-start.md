@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the design for a feature that allows multiple agents to start executing the same action graph simultaneously. This is useful for coordinated multi-robot operations like synchronized pick-and-place, formation movements, or parallel processing tasks.
+This document describes the design for a feature that allows multiple agents to start executing the same behavior tree simultaneously. This is useful for coordinated multi-robot operations like synchronized pick-and-place, formation movements, or parallel processing tasks.
 
 ## Requirements
 
@@ -17,7 +17,7 @@ This document describes the design for a feature that allows multiple agents to 
 ### New Endpoint
 
 ```
-POST /api/action-graphs/{graphID}/execute-multi
+POST /api/behavior-trees/{graphID}/execute-multi
 ```
 
 ### Request Body
@@ -88,7 +88,7 @@ type ExecutionGroup struct {
 // StartMultiAgentTask starts synchronized execution for multiple agents
 func (s *Scheduler) StartMultiAgentTask(
     ctx context.Context,
-    actionGraphID string,
+    behaviorTreeID string,
     agentIDs []string,
     commonParams map[string]interface{},
     agentParams map[string]map[string]interface{},
@@ -251,7 +251,7 @@ func (m *GlobalStateManager) TryStartMultiExecution(
 ```typescript
 // central_server/frontend/src/api/client.ts
 
-export const actionGraphApi = {
+export const behaviorTreeApi = {
   // ... existing methods ...
 
   executeMulti: async (
@@ -264,7 +264,7 @@ export const actionGraphApi = {
       timeoutSec?: number
     }
   ): Promise<ExecutionGroupResponse> => {
-    const { data } = await api.post(`/action-graphs/${graphId}/execute-multi`, {
+    const { data } = await api.post(`/behavior-trees/${graphId}/execute-multi`, {
       agent_ids: agentIds,
       params: params?.commonParams,
       agent_params: params?.agentParams,
@@ -283,13 +283,13 @@ export const actionGraphApi = {
 ```sql
 CREATE TABLE execution_groups (
     id TEXT PRIMARY KEY,
-    action_graph_id TEXT NOT NULL,
+    behavior_tree_id TEXT NOT NULL,
     sync_mode TEXT NOT NULL DEFAULT 'barrier',
     status TEXT NOT NULL DEFAULT 'pending',
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (action_graph_id) REFERENCES action_graphs(id)
+    FOREIGN KEY (behavior_tree_id) REFERENCES behavior_trees(id)
 );
 ```
 

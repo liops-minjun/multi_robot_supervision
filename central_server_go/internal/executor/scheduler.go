@@ -69,10 +69,10 @@ const (
 
 // RunningTask represents an actively executing task
 type RunningTask struct {
-	ID            string
-	ActionGraphID string
-	AgentID       string
-	Steps         []db.ActionGraphStep
+	ID             string
+	BehaviorTreeID string
+	AgentID        string
+	Steps         []db.BehaviorTreeStep
 	StepIndex     map[string]int // Step ID -> index for O(1) lookup
 	CurrentStep   int
 	Status        TaskStatus
@@ -183,19 +183,19 @@ func (s *Scheduler) NotifyTaskComplete(taskID string, status TaskStatus, errorMs
 // ============================================================
 
 // ValidateCapabilities checks if all required action servers in the graph are available on the agent
-// This is a critical safety check before executing any action graph
-func (s *Scheduler) ValidateCapabilities(actionGraphID, agentID string) (*CapabilityValidationResult, error) {
-	// Get action graph
-	dbGraph, err := s.repo.GetActionGraph(actionGraphID)
+// This is a critical safety check before executing any behavior tree
+func (s *Scheduler) ValidateCapabilities(behaviorTreeID, agentID string) (*CapabilityValidationResult, error) {
+	// Get behavior tree
+	dbGraph, err := s.repo.GetBehaviorTree(behaviorTreeID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get action graph: %w", err)
+		return nil, fmt.Errorf("failed to get behavior tree: %w", err)
 	}
 	if dbGraph == nil {
-		return nil, fmt.Errorf("action graph %s not found", actionGraphID)
+		return nil, fmt.Errorf("behavior tree %s not found", behaviorTreeID)
 	}
 
 	// Parse steps from graph
-	var steps []db.ActionGraphStep
+	var steps []db.BehaviorTreeStep
 	if err := json.Unmarshal(dbGraph.Steps, &steps); err != nil {
 		return nil, fmt.Errorf("failed to parse steps: %w", err)
 	}
@@ -311,8 +311,8 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 	}
 	log.Printf("Capability validation passed for graph=%s agent=%s", actionGraphID, agentID)
 
-	// Try to get action graph from cache first
-	var steps []db.ActionGraphStep
+	// Try to get behavior tree from cache first
+	var steps []db.BehaviorTreeStep
 	var preconditions []state.Precondition
 	var graphVersion int
 	var entryPoint string
@@ -329,12 +329,12 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 		// Cache miss - load from database
 		log.Printf("Cache MISS for graph %s (agent=%s), loading from DB", actionGraphID, agentID)
 
-		dbGraph, err := s.repo.GetActionGraph(actionGraphID)
+		dbGraph, err := s.repo.GetBehaviorTree(actionGraphID)
 		if err != nil {
-			return "", fmt.Errorf("failed to get action graph: %w", err)
+			return "", fmt.Errorf("failed to get behavior tree: %w", err)
 		}
 		if dbGraph == nil {
-			return "", fmt.Errorf("action graph %s not found", actionGraphID)
+			return "", fmt.Errorf("behavior tree %s not found", actionGraphID)
 		}
 
 		graphVersion = dbGraph.Version
@@ -374,7 +374,7 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 
 	// Validate steps
 	if len(steps) == 0 {
-		return "", fmt.Errorf("action graph has no steps")
+		return "", fmt.Errorf("behavior tree has no steps")
 	}
 
 	// Debug: Log parsed steps and their action servers
@@ -424,7 +424,7 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 	// Save to database
 	dbTask := &db.Task{
 		ID:               taskID,
-		ActionGraphID:    sql.NullString{String: actionGraphID, Valid: true},
+		BehaviorTreeID:    sql.NullString{String: actionGraphID, Valid: true},
 		AgentID:          sql.NullString{String: agentID, Valid: true},
 		Status:           string(TaskRunning),
 		CurrentStepID:    sql.NullString{String: entryStepID, Valid: true},
@@ -441,7 +441,7 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 	// Create running task
 	task := &RunningTask{
 		ID:            taskID,
-		ActionGraphID: actionGraphID,
+		BehaviorTreeID: actionGraphID,
 		AgentID:       agentID,
 		Steps:         steps,
 		StepIndex:     stepIndex,
@@ -512,9 +512,9 @@ func (s *Scheduler) runTask(ctx context.Context, task *RunningTask) {
 
 	// Send StartTask to agent (Agent-driven execution)
 	log.Printf("[Scheduler] Sending StartTask to agent: task=%s graph=%s agent=%s",
-		task.ID, task.ActionGraphID, task.AgentID)
+		task.ID, task.BehaviorTreeID, task.AgentID)
 
-	err := s.quicHandler.SendStartTask(task.AgentID, task.ID, task.ActionGraphID, task.AgentID, nil)
+	err := s.quicHandler.SendStartTask(task.AgentID, task.ID, task.BehaviorTreeID, task.AgentID, nil)
 	if err != nil {
 		log.Printf("[Scheduler] Failed to send StartTask: %v", err)
 		task.Status = TaskFailed
@@ -537,7 +537,7 @@ func (s *Scheduler) runTask(ctx context.Context, task *RunningTask) {
 }
 
 // executeStep executes a single step
-func (s *Scheduler) executeStep(ctx context.Context, task *RunningTask, step *db.ActionGraphStep) *StepResult {
+func (s *Scheduler) executeStep(ctx context.Context, task *RunningTask, step *db.BehaviorTreeStep) *StepResult {
 	log.Printf("Executing step: task=%s step=%s type=%s", task.ID, step.ID, step.Type)
 
 	// Apply during states at step start
@@ -746,7 +746,7 @@ func (s *Scheduler) waitForPreStates(ctx context.Context, agentID string, preSta
 }
 
 // executeAction executes an action step
-func (s *Scheduler) executeAction(ctx context.Context, task *RunningTask, step *db.ActionGraphStep) *StepResult {
+func (s *Scheduler) executeAction(ctx context.Context, task *RunningTask, step *db.BehaviorTreeStep) *StepResult {
 	action := step.Action
 
 	// Get timeout
@@ -907,7 +907,7 @@ func (s *Scheduler) executeAction(ctx context.Context, task *RunningTask, step *
 }
 
 // executeWaitFor executes a wait_for step
-func (s *Scheduler) executeWaitFor(ctx context.Context, task *RunningTask, step *db.ActionGraphStep) *StepResult {
+func (s *Scheduler) executeWaitFor(ctx context.Context, task *RunningTask, step *db.BehaviorTreeStep) *StepResult {
 	// Currently no wait_for types implemented
 	// Can be extended for future wait types (e.g., wait_for_state, wait_for_event)
 	return &StepResult{
@@ -917,7 +917,7 @@ func (s *Scheduler) executeWaitFor(ctx context.Context, task *RunningTask, step 
 }
 
 // handleStepResult processes step result and determines next step
-func (s *Scheduler) handleStepResult(task *RunningTask, step *db.ActionGraphStep, result *StepResult) string {
+func (s *Scheduler) handleStepResult(task *RunningTask, step *db.BehaviorTreeStep, result *StepResult) string {
 	log.Printf("[DEBUG] handleStepResult: task=%s step=%s stepType=%s result.Status=%v",
 		task.ID, step.ID, step.Type, result.Status)
 
@@ -1342,7 +1342,7 @@ func outcomeMatches(actual, expected string) bool {
 
 
 // extractRequiredZones extracts zone requirements from a step
-func (s *Scheduler) extractRequiredZones(step db.ActionGraphStep) []string {
+func (s *Scheduler) extractRequiredZones(step db.BehaviorTreeStep) []string {
 	// This would parse the step to determine required zones
 	// For now, return empty
 	return nil
@@ -1565,11 +1565,11 @@ func (s *Scheduler) cleanupLogs() {
 // ============================================================
 
 // canonicalToDBSteps converts canonical graph vertices to DB step format
-func (s *Scheduler) canonicalToDBSteps(g *graph.CanonicalGraph) []db.ActionGraphStep {
-	steps := make([]db.ActionGraphStep, 0, len(g.Vertices))
+func (s *Scheduler) canonicalToDBSteps(g *graph.CanonicalGraph) []db.BehaviorTreeStep {
+	steps := make([]db.BehaviorTreeStep, 0, len(g.Vertices))
 
 	for _, v := range g.Vertices {
-		step := db.ActionGraphStep{
+		step := db.BehaviorTreeStep{
 			ID:   v.ID,
 			Name: v.Name,
 		}
@@ -1783,7 +1783,7 @@ func (s *Scheduler) StartMultiAgentTask(
 	executionGroupID := uuid.New().String()
 
 	// Load and validate graph (same for all agents)
-	var steps []db.ActionGraphStep
+	var steps []db.BehaviorTreeStep
 	var preconditions []state.Precondition
 	var graphVersion int
 	var entryPoint string
@@ -1796,12 +1796,12 @@ func (s *Scheduler) StartMultiAgentTask(
 		preconditions = s.canonicalToPreconditions(cached.Graph)
 		entryPoint = cached.Graph.EntryPoint
 	} else {
-		dbGraph, err := s.repo.GetActionGraph(actionGraphID)
+		dbGraph, err := s.repo.GetBehaviorTree(actionGraphID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get action graph: %w", err)
+			return nil, fmt.Errorf("failed to get behavior tree: %w", err)
 		}
 		if dbGraph == nil {
-			return nil, fmt.Errorf("action graph %s not found", actionGraphID)
+			return nil, fmt.Errorf("behavior tree %s not found", actionGraphID)
 		}
 
 		graphVersion = dbGraph.Version
@@ -1840,7 +1840,7 @@ func (s *Scheduler) StartMultiAgentTask(
 	}
 
 	if len(steps) == 0 {
-		return nil, fmt.Errorf("action graph has no steps")
+		return nil, fmt.Errorf("behavior tree has no steps")
 	}
 
 	// Build step index
@@ -1899,7 +1899,7 @@ func (s *Scheduler) StartMultiAgentTask(
 		// Save to database
 		dbTask := &db.Task{
 			ID:               taskID,
-			ActionGraphID:    sql.NullString{String: actionGraphID, Valid: true},
+			BehaviorTreeID:    sql.NullString{String: actionGraphID, Valid: true},
 			AgentID:          sql.NullString{String: agentID, Valid: true},
 			Status:           string(TaskRunning),
 			CurrentStepID:    sql.NullString{String: entryStepID, Valid: true},
@@ -1916,7 +1916,7 @@ func (s *Scheduler) StartMultiAgentTask(
 		// Create running task
 		task := &RunningTask{
 			ID:            taskID,
-			ActionGraphID: actionGraphID,
+			BehaviorTreeID: actionGraphID,
 			AgentID:       agentID,
 			Steps:         steps,
 			StepIndex:     stepIndex,
@@ -1971,7 +1971,7 @@ func (s *Scheduler) runMultiAgentTask(ctx context.Context, task *RunningTask, sy
 }
 
 // applyStepDuringStates applies during_states for a step execution
-func (s *Scheduler) applyStepDuringStates(task *RunningTask, step *db.ActionGraphStep) {
+func (s *Scheduler) applyStepDuringStates(task *RunningTask, step *db.BehaviorTreeStep) {
 	if s.stateManager == nil {
 		return
 	}
@@ -2021,7 +2021,7 @@ func (s *Scheduler) applyStepDuringStates(task *RunningTask, step *db.ActionGrap
 }
 
 // clearStepDuringStates clears during_states after step execution
-func (s *Scheduler) clearStepDuringStates(task *RunningTask, step *db.ActionGraphStep) {
+func (s *Scheduler) clearStepDuringStates(task *RunningTask, step *db.BehaviorTreeStep) {
 	if s.stateManager == nil {
 		return
 	}

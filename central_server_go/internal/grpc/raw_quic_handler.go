@@ -1872,7 +1872,7 @@ type ConfigUpdateResult struct {
 	CorrelationID string
 }
 
-// DeployCanonicalGraph deploys an action graph to an agent via QUIC
+// DeployCanonicalGraph deploys a behavior tree to an agent via QUIC
 func (h *RawQUICHandler) DeployCanonicalGraph(ctx context.Context, agentID string, graphJSON []byte) (*DeployResult, error) {
 	h.connMu.RLock()
 	conn, exists := h.connections[agentID]
@@ -1986,11 +1986,11 @@ func (h *RawQUICHandler) SendExecuteGraph(ctx context.Context, agentID, executio
 func (h *RawQUICHandler) buildDeployGraphMessage(correlationID string, graphJSON []byte) []byte {
 	// Parse canonical JSON
 	var canonical struct {
-		ActionGraph struct {
+		BehaviorTree struct {
 			ID      string `json:"id"`
 			Name    string `json:"name"`
 			Version int    `json:"version"`
-		} `json:"action_graph"`
+		} `json:"behavior_tree"`
 		Vertices []struct {
 			ID   string `json:"id"`
 			Type string `json:"type"`
@@ -2027,10 +2027,10 @@ func (h *RawQUICHandler) buildDeployGraphMessage(correlationID string, graphJSON
 		return nil
 	}
 
-	// Build ActionGraph protobuf
-	// message ActionGraph {
+	// Build BehaviorTree protobuf
+	// message BehaviorTree {
 	//   string schema_version = 1;
-	//   ActionGraphMetadata metadata = 2;
+	//   BehaviorTreeMetadata metadata = 2;
 	//   repeated Vertex vertices = 3;
 	//   repeated Edge edges = 4;
 	//   string entry_point = 5;
@@ -2044,17 +2044,17 @@ func (h *RawQUICHandler) buildDeployGraphMessage(correlationID string, graphJSON
 
 	// Field 2: metadata
 	var metadata []byte
-	if canonical.ActionGraph.ID != "" {
+	if canonical.BehaviorTree.ID != "" {
 		metadata = protowire.AppendTag(metadata, 1, protowire.BytesType)
-		metadata = protowire.AppendString(metadata, canonical.ActionGraph.ID)
+		metadata = protowire.AppendString(metadata, canonical.BehaviorTree.ID)
 	}
-	if canonical.ActionGraph.Name != "" {
+	if canonical.BehaviorTree.Name != "" {
 		metadata = protowire.AppendTag(metadata, 2, protowire.BytesType)
-		metadata = protowire.AppendString(metadata, canonical.ActionGraph.Name)
+		metadata = protowire.AppendString(metadata, canonical.BehaviorTree.Name)
 	}
-	if canonical.ActionGraph.Version > 0 {
+	if canonical.BehaviorTree.Version > 0 {
 		metadata = protowire.AppendTag(metadata, 3, protowire.VarintType)
-		metadata = protowire.AppendVarint(metadata, uint64(canonical.ActionGraph.Version))
+		metadata = protowire.AppendVarint(metadata, uint64(canonical.BehaviorTree.Version))
 	}
 	if len(metadata) > 0 {
 		graphMsg = protowire.AppendTag(graphMsg, 2, protowire.BytesType)
@@ -4319,13 +4319,13 @@ func (h *RawQUICHandler) updateGraphStateOverrides(executionID, graphID, agentID
 		h.clearDuringStateTargets(executionID, prev.AgentIDs)
 	}
 
-	steps, err := h.repo.GetActionGraphSteps(graphID)
+	steps, err := h.repo.GetBehaviorTreeSteps(graphID)
 	if err != nil {
 		log.Printf("[RawQUIC] Failed to load graph steps for %s: %v", graphID, err)
 		return
 	}
 
-	var step *db.ActionGraphStep
+	var step *db.BehaviorTreeStep
 	for i := range steps {
 		if steps[i].ID == stepID {
 			step = &steps[i]

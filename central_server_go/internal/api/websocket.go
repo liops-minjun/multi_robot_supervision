@@ -309,7 +309,7 @@ func (s *Server) buildFleetStateJSON() []byte {
 		robots = append(robots, r)
 	}
 
-	// Get active tasks (with preloaded ActionGraph to avoid N+1)
+	// Get active tasks (with preloaded BehaviorTree to avoid N+1)
 	tasks := make([]TaskStateWS, 0)
 	if dbTasks, err := s.repo.GetActiveTasks(); err == nil {
 		for _, task := range dbTasks {
@@ -318,8 +318,8 @@ func (s *Server) buildFleetStateJSON() []byte {
 				Status:        task.Status,
 				CurrentStep:   task.CurrentStepIndex + 1,
 			}
-			if task.ActionGraphID.Valid {
-				t.ActionGraphID = task.ActionGraphID.String
+			if task.BehaviorTreeID.Valid {
+				t.BehaviorTreeID = task.BehaviorTreeID.String
 			}
 			if task.AgentID.Valid {
 				t.AgentID = task.AgentID.String
@@ -330,10 +330,10 @@ func (s *Server) buildFleetStateJSON() []byte {
 			if task.StartedAt.Valid {
 				t.StartedAt = task.StartedAt.Time.Format(time.RFC3339)
 			}
-			// Step count from preloaded ActionGraph
-			if task.ActionGraph != nil {
+			// Step count from preloaded BehaviorTree
+			if task.BehaviorTree != nil {
 				var steps []interface{}
-				json.Unmarshal(task.ActionGraph.Steps, &steps)
+				json.Unmarshal(task.BehaviorTree.Steps, &steps)
 				t.TotalSteps = len(steps)
 			}
 			tasks = append(tasks, t)
@@ -397,14 +397,14 @@ type TaskInfoWS struct {
 }
 
 type TaskStateWS struct {
-	ID            string `json:"id"`
-	ActionGraphID string `json:"action_graph_id,omitempty"`
-	AgentID       string `json:"agent_id,omitempty"`
-	Status        string `json:"status"`
-	CurrentStepID string `json:"current_step_id,omitempty"`
-	CurrentStep   int    `json:"current_step"`
-	TotalSteps    int    `json:"total_steps"`
-	StartedAt     string `json:"started_at,omitempty"`
+	ID             string `json:"id"`
+	BehaviorTreeID string `json:"behavior_tree_id,omitempty"`
+	AgentID        string `json:"agent_id,omitempty"`
+	Status         string `json:"status"`
+	CurrentStepID  string `json:"current_step_id,omitempty"`
+	CurrentStep    int    `json:"current_step"`
+	TotalSteps     int    `json:"total_steps"`
+	StartedAt      string `json:"started_at,omitempty"`
 }
 
 // broadcastFleetState - legacy per-client broadcast (kept for backward compatibility)

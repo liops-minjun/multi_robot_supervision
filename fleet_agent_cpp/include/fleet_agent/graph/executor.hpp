@@ -1,5 +1,5 @@
 // Copyright 2026 Multi-Robot Supervision System
-// Graph Executor - DAG traversal and execution
+// Behavior Tree Executor - DAG traversal and execution
 
 #pragma once
 
@@ -16,7 +16,7 @@
 // Forward declarations
 namespace fleet {
 namespace v1 {
-class ActionGraph;
+class BehaviorTree;
 class Vertex;
 class StepVertex;
 class ConditionStep;
@@ -30,7 +30,7 @@ namespace state { class StateTrackerManager; }
 namespace graph {
 
 /**
- * GraphExecutor - Manages Action Graph execution.
+ * GraphExecutor - Manages Behavior Tree execution.
  *
  * Handles DAG traversal, step execution, and transition logic:
  * - Entry point determination
@@ -46,11 +46,11 @@ namespace graph {
 class GraphExecutor {
 public:
     /**
-     * Execution context for a running graph.
+     * Execution context for a running behavior tree.
      */
     struct ExecutionContext {
         std::string execution_id;
-        std::string graph_id;
+        std::string behavior_tree_id;
         std::string agent_id;
 
         // Current position
@@ -85,18 +85,18 @@ public:
     // ============================================================
 
     /**
-     * Start a new graph execution.
+     * Start a new behavior tree execution.
      *
      * @param execution_id Unique execution identifier
      * @param agent_id Robot to execute on
-     * @param graph Action graph to execute
+     * @param behavior_tree Behavior tree to execute
      * @param params Initial parameters
      * @return Execution context
      */
     ExecutionContext start_execution(
         const std::string& execution_id,
         const std::string& agent_id,
-        const fleet::v1::ActionGraph& graph,
+        const fleet::v1::BehaviorTree& behavior_tree,
         const std::unordered_map<std::string, std::string>& params = {}
     );
 
@@ -106,14 +106,14 @@ public:
      * Follows edges based on current step result.
      *
      * @param ctx Execution context
-     * @param graph Action graph
+     * @param behavior_tree Behavior tree
      * @param outcome Outcome string for current step (e.g., "success", "failed")
      * @param matched_condition Optional output for matched conditional edge expression
      * @return Next vertex, or nullopt if terminal reached
      */
     std::optional<fleet::v1::Vertex> get_next_step(
         ExecutionContext& ctx,
-        const fleet::v1::ActionGraph& graph,
+        const fleet::v1::BehaviorTree& behavior_tree,
         const std::string& outcome,
         std::string* matched_condition = nullptr
     );
@@ -173,10 +173,10 @@ public:
     // ============================================================
 
     /**
-     * Get vertex by ID from graph.
+     * Get vertex by ID from behavior tree.
      */
     std::optional<fleet::v1::Vertex> get_vertex(
-        const fleet::v1::ActionGraph& graph,
+        const fleet::v1::BehaviorTree& behavior_tree,
         const std::string& vertex_id
     );
 
@@ -199,13 +199,13 @@ private:
      * Build vertex lookup map for fast access.
      */
     std::unordered_map<std::string, const fleet::v1::Vertex*>
-    build_vertex_map(const fleet::v1::ActionGraph& graph);
+    build_vertex_map(const fleet::v1::BehaviorTree& behavior_tree);
 
     /**
      * Find outgoing edge from vertex.
      */
     std::optional<std::string> find_next_vertex_id(
-        const fleet::v1::ActionGraph& graph,
+        const fleet::v1::BehaviorTree& behavior_tree,
         const std::string& from_vertex_id,
         fleet::v1::EdgeType edge_type
     );

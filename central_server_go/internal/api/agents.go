@@ -142,8 +142,8 @@ func (s *Server) DeleteAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Delete related agent_action_graphs first
-	if err := s.repo.DeleteAgentActionGraphsByAgent(agentID); err != nil {
+	// Delete related agent_behavior_trees first
+	if err := s.repo.DeleteAgentBehaviorTreesByAgent(agentID); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -158,36 +158,36 @@ func (s *Server) DeleteAgent(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ListAgentActionGraphs returns all action graphs assigned to an agent
-func (s *Server) ListAgentActionGraphs(w http.ResponseWriter, r *http.Request) {
+// ListAgentBehaviorTrees returns all behavior trees assigned to an agent
+func (s *Server) ListAgentBehaviorTrees(w http.ResponseWriter, r *http.Request) {
 	agentID := chi.URLParam(r, "agentID")
 
-	aags, err := s.repo.GetAgentActionGraphs(agentID)
+	abts, err := s.repo.GetAgentBehaviorTrees(agentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	responses := make([]AgentActionGraphResponse, len(aags))
-	for i, aag := range aags {
-		responses[i] = agentActionGraphToResponse(&aag, s.repo)
+	responses := make([]AgentBehaviorTreeResponse, len(abts))
+	for i, abt := range abts {
+		responses[i] = agentBehaviorTreeToResponse(&abt, s.repo)
 	}
 
 	writeJSON(w, http.StatusOK, responses)
 }
 
-// AssignActionGraph assigns an action graph to an agent
-func (s *Server) AssignActionGraph(w http.ResponseWriter, r *http.Request) {
+// AssignBehaviorTree assigns a behavior tree to an agent
+func (s *Server) AssignBehaviorTree(w http.ResponseWriter, r *http.Request) {
 	agentID := chi.URLParam(r, "agentID")
 
-	var req AssignActionGraphRequest
+	var req AssignBehaviorTreeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
-	if req.ActionGraphID == "" {
-		writeError(w, http.StatusBadRequest, "action_graph_id is required")
+	if req.BehaviorTreeID == "" {
+		writeError(w, http.StatusBadRequest, "behavior_tree_id is required")
 		return
 	}
 
@@ -198,24 +198,24 @@ func (s *Server) AssignActionGraph(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if action graph exists
-	graph, _ := s.repo.GetActionGraph(req.ActionGraphID)
+	// Check if behavior tree exists
+	graph, _ := s.repo.GetBehaviorTree(req.BehaviorTreeID)
 	if graph == nil {
-		writeError(w, http.StatusNotFound, "Action Graph not found")
+		writeError(w, http.StatusNotFound, "Behavior Tree not found")
 		return
 	}
 
 	// Check if already assigned
-	existing, _ := s.repo.GetAgentActionGraph(agentID, req.ActionGraphID)
+	existing, _ := s.repo.GetAgentBehaviorTree(agentID, req.BehaviorTreeID)
 	if existing != nil {
-		writeError(w, http.StatusConflict, "Action Graph already assigned to this agent")
+		writeError(w, http.StatusConflict, "Behavior Tree already assigned to this agent")
 		return
 	}
 
-	aag := &db.AgentActionGraph{
+	abt := &db.AgentBehaviorTree{
 		ID:               uuid.New().String(),
 		AgentID:          agentID,
-		ActionGraphID:    req.ActionGraphID,
+		BehaviorTreeID:   req.BehaviorTreeID,
 		ServerVersion:    graph.Version,
 		DeployedVersion:  0,
 		DeploymentStatus: "pending",
@@ -225,38 +225,38 @@ func (s *Server) AssignActionGraph(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt:        time.Now(),
 	}
 
-	if err := s.repo.CreateAgentActionGraph(aag); err != nil {
+	if err := s.repo.CreateAgentBehaviorTree(abt); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, agentActionGraphToResponse(aag, s.repo))
+	writeJSON(w, http.StatusCreated, agentBehaviorTreeToResponse(abt, s.repo))
 }
 
-// GetAgentActionGraph returns a specific agent-action graph assignment
-func (s *Server) GetAgentActionGraph(w http.ResponseWriter, r *http.Request) {
+// GetAgentBehaviorTree returns a specific agent-behavior tree assignment
+func (s *Server) GetAgentBehaviorTree(w http.ResponseWriter, r *http.Request) {
 	agentID := chi.URLParam(r, "agentID")
 	graphID := chi.URLParam(r, "graphID")
 
-	aag, err := s.repo.GetAgentActionGraph(agentID, graphID)
+	abt, err := s.repo.GetAgentBehaviorTree(agentID, graphID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if aag == nil {
+	if abt == nil {
 		writeError(w, http.StatusNotFound, "Assignment not found")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, agentActionGraphToResponse(aag, s.repo))
+	writeJSON(w, http.StatusOK, agentBehaviorTreeToResponse(abt, s.repo))
 }
 
-// RemoveAgentActionGraph removes an action graph assignment
-func (s *Server) RemoveAgentActionGraph(w http.ResponseWriter, r *http.Request) {
+// RemoveAgentBehaviorTree removes a behavior tree assignment
+func (s *Server) RemoveAgentBehaviorTree(w http.ResponseWriter, r *http.Request) {
 	agentID := chi.URLParam(r, "agentID")
 	graphID := chi.URLParam(r, "graphID")
 
-	if err := s.repo.DeleteAgentActionGraph(agentID, graphID); err != nil {
+	if err := s.repo.DeleteAgentBehaviorTree(agentID, graphID); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -266,35 +266,35 @@ func (s *Server) RemoveAgentActionGraph(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// DeployActionGraph deploys an action graph to an agent
-func (s *Server) DeployActionGraph(w http.ResponseWriter, r *http.Request) {
+// DeployBehaviorTree deploys a behavior tree to an agent
+func (s *Server) DeployBehaviorTree(w http.ResponseWriter, r *http.Request) {
 	agentID := chi.URLParam(r, "agentID")
 	graphID := chi.URLParam(r, "graphID")
 
 	// Get assignment
-	aag, err := s.repo.GetAgentActionGraph(agentID, graphID)
+	abt, err := s.repo.GetAgentBehaviorTree(agentID, graphID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if aag == nil {
+	if abt == nil {
 		writeError(w, http.StatusNotFound, "Assignment not found")
 		return
 	}
 
-	// Get action graph
-	graph, err := s.repo.GetActionGraph(graphID)
+	// Get behavior tree
+	graph, err := s.repo.GetBehaviorTree(graphID)
 	if err != nil || graph == nil {
-		writeError(w, http.StatusNotFound, "Action Graph not found")
+		writeError(w, http.StatusNotFound, "Behavior Tree not found")
 		return
 	}
 
 	// Check if agent is online
 	if !s.stateManager.IsAgentOnline(agentID) {
 		// Mark as pending for when agent comes online
-		aag.DeploymentStatus = "pending"
-		aag.UpdatedAt = time.Now()
-		s.repo.UpdateAgentActionGraph(aag)
+		abt.DeploymentStatus = "pending"
+		abt.UpdatedAt = time.Now()
+		s.repo.UpdateAgentBehaviorTree(abt)
 
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"status":  "pending",
@@ -304,29 +304,29 @@ func (s *Server) DeployActionGraph(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update status to deploying
-	aag.DeploymentStatus = "deploying"
-	aag.UpdatedAt = time.Now()
-	s.repo.UpdateAgentActionGraph(aag)
+	abt.DeploymentStatus = "deploying"
+	abt.UpdatedAt = time.Now()
+	s.repo.UpdateAgentBehaviorTree(abt)
 
 	// Create deployment log
 	logID := uuid.New().String()
-	deployLog := &db.ActionGraphDeploymentLog{
-		ID:                 logID,
-		AgentActionGraphID: aag.ID,
-		Action:             "deploy",
-		Version:            graph.Version,
-		Status:             "pending",
-		InitiatedAt:        time.Now(),
+	deployLog := &db.BehaviorTreeDeploymentLog{
+		ID:                  logID,
+		AgentBehaviorTreeID: abt.ID,
+		Action:              "deploy",
+		Version:             graph.Version,
+		Status:              "pending",
+		InitiatedAt:         time.Now(),
 	}
 	s.repo.CreateDeploymentLog(deployLog)
 
 	// TODO: Send deploy message via QUIC
 	// For now, simulate immediate deployment success
-	aag.DeploymentStatus = "deployed"
-	aag.DeployedVersion = graph.Version
-	aag.DeployedAt = sql.NullTime{Time: time.Now(), Valid: true}
-	aag.UpdatedAt = time.Now()
-	s.repo.UpdateAgentActionGraph(aag)
+	abt.DeploymentStatus = "deployed"
+	abt.DeployedVersion = graph.Version
+	abt.DeployedAt = sql.NullTime{Time: time.Now(), Valid: true}
+	abt.UpdatedAt = time.Now()
+	s.repo.UpdateAgentBehaviorTree(abt)
 
 	// Update deployment log
 	deployLog.Status = "success"
@@ -337,27 +337,27 @@ func (s *Server) DeployActionGraph(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":           "deployed",
 		"deployed_version": graph.Version,
-		"message":          "Action Graph deployed successfully",
+		"message":          "Behavior Tree deployed successfully",
 	})
 }
 
-// GetDeploymentLogs returns deployment logs for an agent-action graph
+// GetDeploymentLogs returns deployment logs for an agent-behavior tree
 func (s *Server) GetDeploymentLogs(w http.ResponseWriter, r *http.Request) {
 	agentID := chi.URLParam(r, "agentID")
 	graphID := chi.URLParam(r, "graphID")
 
 	// Get assignment first
-	aag, err := s.repo.GetAgentActionGraph(agentID, graphID)
+	abt, err := s.repo.GetAgentBehaviorTree(agentID, graphID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if aag == nil {
+	if abt == nil {
 		writeError(w, http.StatusNotFound, "Assignment not found")
 		return
 	}
 
-	logs, err := s.repo.GetDeploymentLogs(aag.ID)
+	logs, err := s.repo.GetDeploymentLogs(abt.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -366,12 +366,12 @@ func (s *Server) GetDeploymentLogs(w http.ResponseWriter, r *http.Request) {
 	responses := make([]DeploymentLogResponse, len(logs))
 	for i, log := range logs {
 		responses[i] = DeploymentLogResponse{
-			ID:                 log.ID,
-			AgentActionGraphID: log.AgentActionGraphID,
-			Action:             log.Action,
-			Version:            log.Version,
-			Status:             log.Status,
-			InitiatedAt:        log.InitiatedAt,
+			ID:                  log.ID,
+			AgentBehaviorTreeID: log.AgentBehaviorTreeID,
+			Action:              log.Action,
+			Version:             log.Version,
+			Status:              log.Status,
+			InitiatedAt:         log.InitiatedAt,
 		}
 		if log.ErrorMessage.Valid {
 			responses[i].ErrorMessage = log.ErrorMessage.String
@@ -611,10 +611,10 @@ type BlockCopyRequest struct {
 
 // BlockCopyResponse represents the response from copying blocks
 type BlockCopyResponse struct {
-	SourceActionGraphID   string                   `json:"source_action_graph_id"`
-	SourceActionGraphName string                   `json:"source_action_graph_name"`
-	Blocks                []map[string]interface{} `json:"blocks"`
-	Connections           []map[string]interface{} `json:"connections"`
+	SourceBehaviorTreeID   string                   `json:"source_behavior_tree_id"`
+	SourceBehaviorTreeName string                   `json:"source_behavior_tree_name"`
+	Blocks                 []map[string]interface{} `json:"blocks"`
+	Connections            []map[string]interface{} `json:"connections"`
 }
 
 // BlockPasteRequest represents a request to paste blocks
@@ -626,23 +626,23 @@ type BlockPasteRequest struct {
 
 // BlockPasteResponse represents the response from pasting blocks
 type BlockPasteResponse struct {
-	ActionGraphID string            `json:"action_graph_id"`
-	NewVersion    int               `json:"new_version"`
-	PastedStepIDs []string          `json:"pasted_step_ids"`
-	IDMapping     map[string]string `json:"id_mapping"`
+	BehaviorTreeID string            `json:"behavior_tree_id"`
+	NewVersion     int               `json:"new_version"`
+	PastedStepIDs  []string          `json:"pasted_step_ids"`
+	IDMapping      map[string]string `json:"id_mapping"`
 }
 
-// CopyActionGraphBlocks copies selected blocks from an action graph
-func (s *Server) CopyActionGraphBlocks(w http.ResponseWriter, r *http.Request) {
+// CopyBehaviorTreeBlocks copies selected blocks from a behavior tree
+func (s *Server) CopyBehaviorTreeBlocks(w http.ResponseWriter, r *http.Request) {
 	graphID := chi.URLParam(r, "graphID")
 
-	graph, err := s.repo.GetActionGraph(graphID)
+	graph, err := s.repo.GetBehaviorTree(graphID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if graph == nil {
-		writeError(w, http.StatusNotFound, "Action Graph not found: "+graphID)
+		writeError(w, http.StatusNotFound, "Behavior Tree not found: "+graphID)
 		return
 	}
 
@@ -715,24 +715,24 @@ func (s *Server) CopyActionGraphBlocks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, BlockCopyResponse{
-		SourceActionGraphID:   graphID,
-		SourceActionGraphName: graph.Name,
-		Blocks:                selectedBlocks,
-		Connections:           connections,
+		SourceBehaviorTreeID:   graphID,
+		SourceBehaviorTreeName: graph.Name,
+		Blocks:                 selectedBlocks,
+		Connections:            connections,
 	})
 }
 
-// PasteActionGraphBlocks pastes blocks into an action graph
-func (s *Server) PasteActionGraphBlocks(w http.ResponseWriter, r *http.Request) {
+// PasteBehaviorTreeBlocks pastes blocks into a behavior tree
+func (s *Server) PasteBehaviorTreeBlocks(w http.ResponseWriter, r *http.Request) {
 	graphID := chi.URLParam(r, "graphID")
 
-	graph, err := s.repo.GetActionGraph(graphID)
+	graph, err := s.repo.GetBehaviorTree(graphID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if graph == nil {
-		writeError(w, http.StatusNotFound, "Action Graph not found: "+graphID)
+		writeError(w, http.StatusNotFound, "Behavior Tree not found: "+graphID)
 		return
 	}
 
@@ -811,13 +811,13 @@ func (s *Server) PasteActionGraphBlocks(w http.ResponseWriter, r *http.Request) 
 	newStepsList = append(newStepsList, newSteps...)
 	newStepsList = append(newStepsList, steps[insertIndex:]...)
 
-	// Update action graph
+	// Update behavior tree
 	stepsJSON, _ := json.Marshal(newStepsList)
 	graph.Steps = stepsJSON
 	graph.Version++
 	graph.UpdatedAt = time.Now()
 
-	if err := s.repo.UpdateActionGraph(graph); err != nil {
+	if err := s.repo.UpdateBehaviorTree(graph); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -831,65 +831,65 @@ func (s *Server) PasteActionGraphBlocks(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, http.StatusOK, BlockPasteResponse{
-		ActionGraphID: graphID,
-		NewVersion:    graph.Version,
-		PastedStepIDs: pastedIDs,
-		IDMapping:     idMapping,
+		BehaviorTreeID: graphID,
+		NewVersion:     graph.Version,
+		PastedStepIDs:  pastedIDs,
+		IDMapping:      idMapping,
 	})
 }
 
 // ============================================
-// Action Graph Copy
+// Behavior Tree Copy
 // ============================================
 
-// ActionGraphCopyRequest represents a request to copy an entire action graph
-type ActionGraphCopyRequest struct {
+// BehaviorTreeCopyRequest represents a request to copy an entire behavior tree
+type BehaviorTreeCopyRequest struct {
 	NewID         string `json:"new_id"`
 	NewName       string `json:"new_name"`
 	TargetAgentID string `json:"target_agent_id,omitempty"`
 }
 
-// ActionGraphCopyResponse represents the response from copying an action graph
-type ActionGraphCopyResponse struct {
-	NewActionGraphID   string  `json:"new_action_graph_id"`
-	NewActionGraphName string  `json:"new_action_graph_name"`
-	StepCount          int     `json:"step_count"`
-	AssignedToAgent    *string `json:"assigned_to_agent,omitempty"`
+// BehaviorTreeCopyResponse represents the response from copying a behavior tree
+type BehaviorTreeCopyResponse struct {
+	NewBehaviorTreeID   string  `json:"new_behavior_tree_id"`
+	NewBehaviorTreeName string  `json:"new_behavior_tree_name"`
+	StepCount           int     `json:"step_count"`
+	AssignedToAgent     *string `json:"assigned_to_agent,omitempty"`
 }
 
-// CopyActionGraph copies an entire action graph
-func (s *Server) CopyActionGraph(w http.ResponseWriter, r *http.Request) {
-	sourceGraphID := r.URL.Query().Get("source_action_graph_id")
+// CopyBehaviorTree copies an entire behavior tree
+func (s *Server) CopyBehaviorTree(w http.ResponseWriter, r *http.Request) {
+	sourceGraphID := r.URL.Query().Get("source_behavior_tree_id")
 	if sourceGraphID == "" {
-		writeError(w, http.StatusBadRequest, "source_action_graph_id is required")
+		writeError(w, http.StatusBadRequest, "source_behavior_tree_id is required")
 		return
 	}
 
-	sourceGraph, err := s.repo.GetActionGraph(sourceGraphID)
+	sourceGraph, err := s.repo.GetBehaviorTree(sourceGraphID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if sourceGraph == nil {
-		writeError(w, http.StatusNotFound, "Source action graph not found: "+sourceGraphID)
+		writeError(w, http.StatusNotFound, "Source behavior tree not found: "+sourceGraphID)
 		return
 	}
 
-	var req ActionGraphCopyRequest
+	var req BehaviorTreeCopyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	// Check new ID doesn't exist
-	existing, _ := s.repo.GetActionGraph(req.NewID)
+	existing, _ := s.repo.GetBehaviorTree(req.NewID)
 	if existing != nil {
-		writeError(w, http.StatusConflict, "Action Graph ID already exists: "+req.NewID)
+		writeError(w, http.StatusConflict, "Behavior Tree ID already exists: "+req.NewID)
 		return
 	}
 
-	// Create new action graph
-	newGraph := &db.ActionGraph{
+	// Create new behavior tree
+	newGraph := &db.BehaviorTree{
 		ID:            req.NewID,
 		Name:          req.NewName,
 		Description:   sourceGraph.Description,
@@ -900,7 +900,7 @@ func (s *Server) CopyActionGraph(w http.ResponseWriter, r *http.Request) {
 		IsTemplate:    false,
 	}
 
-	if err := s.repo.CreateActionGraph(newGraph); err != nil {
+	if err := s.repo.CreateBehaviorTree(newGraph); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -911,10 +911,10 @@ func (s *Server) CopyActionGraph(w http.ResponseWriter, r *http.Request) {
 	if req.TargetAgentID != "" {
 		agent, _ := s.repo.GetAgent(req.TargetAgentID)
 		if agent != nil {
-			aag := &db.AgentActionGraph{
+			abt := &db.AgentBehaviorTree{
 				ID:               uuid.New().String(),
 				AgentID:          req.TargetAgentID,
-				ActionGraphID:    req.NewID,
+				BehaviorTreeID:   req.NewID,
 				ServerVersion:    1,
 				DeploymentStatus: "pending",
 				Enabled:          true,
@@ -922,7 +922,7 @@ func (s *Server) CopyActionGraph(w http.ResponseWriter, r *http.Request) {
 				CreatedAt:        time.Now(),
 				UpdatedAt:        time.Now(),
 			}
-			s.repo.CreateAgentActionGraph(aag)
+			s.repo.CreateAgentBehaviorTree(abt)
 			assignedAgent = &req.TargetAgentID
 		}
 	}
@@ -933,11 +933,11 @@ func (s *Server) CopyActionGraph(w http.ResponseWriter, r *http.Request) {
 		json.Unmarshal(newGraph.Steps, &steps)
 	}
 
-	writeJSON(w, http.StatusCreated, ActionGraphCopyResponse{
-		NewActionGraphID:   req.NewID,
-		NewActionGraphName: req.NewName,
-		StepCount:          len(steps),
-		AssignedToAgent:    assignedAgent,
+	writeJSON(w, http.StatusCreated, BehaviorTreeCopyResponse{
+		NewBehaviorTreeID:   req.NewID,
+		NewBehaviorTreeName: req.NewName,
+		StepCount:           len(steps),
+		AssignedToAgent:     assignedAgent,
 	})
 }
 
@@ -1010,34 +1010,34 @@ func agentToResponse(agent *db.Agent, sm *state.GlobalStateManager) AgentRespons
 	return response
 }
 
-func agentActionGraphToResponse(aag *db.AgentActionGraph, repo *db.Repository) AgentActionGraphResponse {
-	response := AgentActionGraphResponse{
-		ID:               aag.ID,
-		AgentID:          aag.AgentID,
-		ActionGraphID:    aag.ActionGraphID,
-		ServerVersion:    aag.ServerVersion,
-		DeployedVersion:  aag.DeployedVersion,
-		DeploymentStatus: aag.DeploymentStatus,
-		Enabled:          aag.Enabled,
-		Priority:         aag.Priority,
-		CreatedAt:        aag.CreatedAt,
-		UpdatedAt:        aag.UpdatedAt,
+func agentBehaviorTreeToResponse(abt *db.AgentBehaviorTree, repo *db.Repository) AgentBehaviorTreeResponse {
+	response := AgentBehaviorTreeResponse{
+		ID:               abt.ID,
+		AgentID:          abt.AgentID,
+		BehaviorTreeID:   abt.BehaviorTreeID,
+		ServerVersion:    abt.ServerVersion,
+		DeployedVersion:  abt.DeployedVersion,
+		DeploymentStatus: abt.DeploymentStatus,
+		Enabled:          abt.Enabled,
+		Priority:         abt.Priority,
+		CreatedAt:        abt.CreatedAt,
+		UpdatedAt:        abt.UpdatedAt,
 	}
 
-	if aag.DeploymentError.Valid {
-		response.DeploymentError = aag.DeploymentError.String
+	if abt.DeploymentError.Valid {
+		response.DeploymentError = abt.DeploymentError.String
 	}
-	if aag.DeployedAt.Valid {
-		response.DeployedAt = &aag.DeployedAt.Time
+	if abt.DeployedAt.Valid {
+		response.DeployedAt = &abt.DeployedAt.Time
 	}
 
-	// Get action graph name
-	if aag.ActionGraph != nil {
-		response.ActionGraphName = aag.ActionGraph.Name
+	// Get behavior tree name
+	if abt.BehaviorTree != nil {
+		response.BehaviorTreeName = abt.BehaviorTree.Name
 	} else {
-		graph, _ := repo.GetActionGraph(aag.ActionGraphID)
+		graph, _ := repo.GetBehaviorTree(abt.BehaviorTreeID)
 		if graph != nil {
-			response.ActionGraphName = graph.Name
+			response.BehaviorTreeName = graph.Name
 		}
 	}
 

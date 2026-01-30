@@ -24,8 +24,8 @@ type CachedCapability struct {
 	Status       string
 }
 
-// CachedActionGraphMeta represents cached action graph metadata (lightweight)
-type CachedActionGraphMeta struct {
+// CachedBehaviorTreeMeta represents cached behavior tree metadata (lightweight)
+type CachedBehaviorTreeMeta struct {
 	ID          string
 	Name        string
 	Description string
@@ -49,8 +49,8 @@ type MetadataCache struct {
 	// Action types by agent ID (extracted from capabilities)
 	actionTypesByAgent map[string][]string
 
-	// Action graph metadata by ID
-	graphs map[string]*CachedActionGraphMeta
+	// Behavior tree metadata by ID
+	graphs map[string]*CachedBehaviorTreeMeta
 
 	// Graph IDs by agent ID (for assigned graphs)
 	graphsByAgent map[string][]string
@@ -74,7 +74,7 @@ func NewMetadataCache(ttl time.Duration) *MetadataCache {
 		agents:              make(map[string]*CachedAgent),
 		capabilitiesByAgent: make(map[string][]*CachedCapability),
 		actionTypesByAgent:  make(map[string][]string),
-		graphs:              make(map[string]*CachedActionGraphMeta),
+		graphs:              make(map[string]*CachedBehaviorTreeMeta),
 		graphsByAgent:       make(map[string][]string),
 		ttl:                 ttl,
 		needsReload:         true,
@@ -138,13 +138,13 @@ func (c *MetadataCache) SetCapabilities(capabilities []*CachedCapability) {
 	}
 }
 
-// SetGraphs bulk loads action graph metadata into cache
-func (c *MetadataCache) SetGraphs(graphs []*CachedActionGraphMeta) {
+// SetGraphs bulk loads behavior tree metadata into cache
+func (c *MetadataCache) SetGraphs(graphs []*CachedBehaviorTreeMeta) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	now := time.Now()
-	c.graphs = make(map[string]*CachedActionGraphMeta, len(graphs))
+	c.graphs = make(map[string]*CachedBehaviorTreeMeta, len(graphs))
 	c.graphsByAgent = make(map[string][]string)
 
 	for _, g := range graphs {
@@ -214,7 +214,7 @@ func (c *MetadataCache) GetAgentActionTypes(agentID string) []string {
 }
 
 // GetGraph returns cached graph metadata or nil
-func (c *MetadataCache) GetGraph(id string) *CachedActionGraphMeta {
+func (c *MetadataCache) GetGraph(id string) *CachedBehaviorTreeMeta {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -235,11 +235,11 @@ func (c *MetadataCache) GetAgentGraphIDs(agentID string) []string {
 }
 
 // GetAllGraphs returns all cached graph metadata
-func (c *MetadataCache) GetAllGraphs() []*CachedActionGraphMeta {
+func (c *MetadataCache) GetAllGraphs() []*CachedBehaviorTreeMeta {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	result := make([]*CachedActionGraphMeta, 0, len(c.graphs))
+	result := make([]*CachedBehaviorTreeMeta, 0, len(c.graphs))
 	for _, g := range c.graphs {
 		result = append(result, g)
 	}

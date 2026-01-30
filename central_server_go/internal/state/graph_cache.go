@@ -10,7 +10,7 @@ import (
 	"central_server_go/internal/graph"
 )
 
-// CachedGraph represents an in-memory cached action graph
+// CachedGraph represents an in-memory cached behavior tree
 type CachedGraph struct {
 	Graph     *graph.CanonicalGraph
 	GraphID   string
@@ -33,7 +33,7 @@ type GraphCacheStats struct {
 	NewestEntry      time.Time
 }
 
-// GraphCache manages in-memory cache of deployed action graphs
+// GraphCache manages in-memory cache of deployed behavior trees
 // This cache provides:
 // - Fast lookup for task execution (avoids DB I/O)
 // - Version tracking for deployment sync
@@ -89,7 +89,7 @@ func (c *GraphCache) SetTemplate(graphID string, g *graph.CanonicalGraph) {
 		Graph:      g,
 		GraphID:    graphID,
 		AgentID:    "",
-		Version:    g.ActionGraph.Version,
+		Version:    g.BehaviorTree.Version,
 		Checksum:   g.Checksum,
 		LoadedAt:   now,
 		LastUsedAt: now,
@@ -137,7 +137,7 @@ func (c *GraphCache) SetDeployed(agentID, graphID string, g *graph.CanonicalGrap
 		Graph:      g,
 		GraphID:    graphID,
 		AgentID:    agentID,
-		Version:    g.ActionGraph.Version,
+		Version:    g.BehaviorTree.Version,
 		Checksum:   g.Checksum,
 		LoadedAt:   now,
 		LastUsedAt: now,

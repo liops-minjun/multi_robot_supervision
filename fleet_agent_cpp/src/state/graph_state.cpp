@@ -85,7 +85,7 @@ void FleetStateCache::clear() {
     entries_.clear();
     state_index_.clear();
     tag_index_.clear();
-    graph_index_.clear();
+    behavior_tree_index_.clear();
 }
 
 std::optional<FleetStateEntry> FleetStateCache::get(const std::string& agent_id) const {
@@ -130,11 +130,11 @@ std::vector<std::string> FleetStateCache::get_online_agents() const {
     return result;
 }
 
-std::vector<std::string> FleetStateCache::get_agents_by_graph(const std::string& graph_id) const {
+std::vector<std::string> FleetStateCache::get_agents_by_behavior_tree(const std::string& behavior_tree_id) const {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    auto it = graph_index_.find(graph_id);
-    if (it != graph_index_.end()) {
+    auto it = behavior_tree_index_.find(behavior_tree_id);
+    if (it != behavior_tree_index_.end()) {
         return std::vector<std::string>(it->second.begin(), it->second.end());
     }
     return {};
@@ -233,8 +233,8 @@ PreconditionResult FleetStateCache::evaluate(
                 if (precondition.filter.executing_only && !entry.is_executing) {
                     continue;
                 }
-                if (!precondition.filter.graph_id.empty() &&
-                    entry.current_graph_id != precondition.filter.graph_id) {
+                if (!precondition.filter.behavior_tree_id.empty() &&
+                    entry.current_behavior_tree_id != precondition.filter.behavior_tree_id) {
                     continue;
                 }
 
@@ -347,8 +347,8 @@ void FleetStateCache::add_to_indexes(const FleetStateEntry& entry) {
     }
 
     // Graph index
-    if (!entry.current_graph_id.empty()) {
-        graph_index_[entry.current_graph_id].insert(entry.agent_id);
+    if (!entry.current_behavior_tree_id.empty()) {
+        behavior_tree_index_[entry.current_behavior_tree_id].insert(entry.agent_id);
     }
 }
 
@@ -381,12 +381,12 @@ void FleetStateCache::remove_from_indexes(const std::string& agent_id) {
     }
 
     // Remove from graph index
-    if (!entry.current_graph_id.empty()) {
-        auto graph_it = graph_index_.find(entry.current_graph_id);
-        if (graph_it != graph_index_.end()) {
+    if (!entry.current_behavior_tree_id.empty()) {
+        auto graph_it = behavior_tree_index_.find(entry.current_behavior_tree_id);
+        if (graph_it != behavior_tree_index_.end()) {
             graph_it->second.erase(agent_id);
             if (graph_it->second.empty()) {
-                graph_index_.erase(graph_it);
+                behavior_tree_index_.erase(graph_it);
             }
         }
     }
@@ -431,18 +431,18 @@ void FleetStateCache::update_indexes(const FleetStateEntry& old_entry, const Fle
     }
 
     // Update graph index
-    if (old_entry.current_graph_id != new_entry.current_graph_id) {
-        if (!old_entry.current_graph_id.empty()) {
-            auto it = graph_index_.find(old_entry.current_graph_id);
-            if (it != graph_index_.end()) {
+    if (old_entry.current_behavior_tree_id != new_entry.current_behavior_tree_id) {
+        if (!old_entry.current_behavior_tree_id.empty()) {
+            auto it = behavior_tree_index_.find(old_entry.current_behavior_tree_id);
+            if (it != behavior_tree_index_.end()) {
                 it->second.erase(old_entry.agent_id);
                 if (it->second.empty()) {
-                    graph_index_.erase(it);
+                    behavior_tree_index_.erase(it);
                 }
             }
         }
-        if (!new_entry.current_graph_id.empty()) {
-            graph_index_[new_entry.current_graph_id].insert(new_entry.agent_id);
+        if (!new_entry.current_behavior_tree_id.empty()) {
+            behavior_tree_index_[new_entry.current_behavior_tree_id].insert(new_entry.agent_id);
         }
     }
 }
@@ -472,20 +472,20 @@ std::vector<std::string> EnhancedStateManager::current_semantic_tags() const {
     return current_semantic_tags_;
 }
 
-std::string EnhancedStateManager::current_graph_id() const {
+std::string EnhancedStateManager::current_behavior_tree_id() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return current_graph_id_;
+    return current_behavior_tree_id_;
 }
 
 void EnhancedStateManager::set_state(
     const std::string& state_code,
     const std::vector<std::string>& semantic_tags,
-    const std::string& graph_id
+    const std::string& behavior_tree_id
 ) {
     std::lock_guard<std::mutex> lock(mutex_);
     current_state_code_ = state_code;
     current_semantic_tags_ = semantic_tags;
-    current_graph_id_ = graph_id;
+    current_behavior_tree_id_ = behavior_tree_id;
     state_updated_at_ = std::chrono::system_clock::now();
 }
 
@@ -530,17 +530,17 @@ void EnhancedStateManager::reset_to_idle() {
     std::lock_guard<std::mutex> lock(mutex_);
     current_state_code_ = "idle";
     current_semantic_tags_ = {"ready", "available"};
-    current_graph_id_.clear();
+    current_behavior_tree_id_.clear();
     state_updated_at_ = std::chrono::system_clock::now();
 }
 
 void EnhancedStateManager::load_graph_states(
-    const std::string& graph_id,
+    const std::string& behavior_tree_id,
     const std::vector<GraphState>& states
 ) {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    current_graph_id_ = graph_id;
+    current_behavior_tree_id_ = behavior_tree_id;
 
     // Clear previous step states
     step_states_.clear();
@@ -625,7 +625,7 @@ FleetStateEntry EnhancedStateManager::to_fleet_entry() const {
     entry.agent_id = agent_id_;
     entry.state_code = current_state_code_;
     entry.semantic_tags = current_semantic_tags_;
-    entry.current_graph_id = current_graph_id_;
+    entry.current_behavior_tree_id = current_behavior_tree_id_;
     entry.is_online = true;
     entry.is_executing = (current_state_code_.find(":executing") != std::string::npos);
     entry.updated_at = state_updated_at_;

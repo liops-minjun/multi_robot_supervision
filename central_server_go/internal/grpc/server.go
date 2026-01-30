@@ -113,7 +113,7 @@ func buildGRPCServerOptions(cfg *config.Config, tlsConfig *tls.Config) []grpc.Se
 			MinTime:             5 * time.Second,
 			PermitWithoutStream: true,
 		}),
-		// Max message size for large action graphs
+		// Max message size for large behavior trees
 		grpc.MaxRecvMsgSize(16 * 1024 * 1024), // 16MB
 		grpc.MaxSendMsgSize(16 * 1024 * 1024),
 	}

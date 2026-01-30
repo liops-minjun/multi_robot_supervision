@@ -173,11 +173,11 @@ type graphEdge struct {
 	Condition string
 }
 
-func parseActionGraphSteps(graph *ActionGraph) ([]ActionGraphStep, error) {
+func parseBehaviorTreeSteps(graph *BehaviorTree) ([]BehaviorTreeStep, error) {
 	if graph == nil || len(graph.Steps) == 0 {
 		return nil, nil
 	}
-	var steps []ActionGraphStep
+	var steps []BehaviorTreeStep
 	if err := json.Unmarshal(graph.Steps, &steps); err != nil {
 		return nil, fmt.Errorf("failed to parse steps: %w", err)
 	}
@@ -197,7 +197,7 @@ func isSelfOnlyCondition(cond StartCondition) bool {
 	return true
 }
 
-func executionModeFromSteps(steps []ActionGraphStep) string {
+func executionModeFromSteps(steps []BehaviorTreeStep) string {
 	for _, step := range steps {
 		for _, cond := range step.StartConditions {
 			if !isSelfOnlyCondition(cond) {
@@ -216,7 +216,7 @@ func checksumForJSON(data string) string {
 	return fmt.Sprintf("sha256:%x", hash)
 }
 
-func extractEdgesFromSteps(steps []ActionGraphStep) []graphEdge {
+func extractEdgesFromSteps(steps []BehaviorTreeStep) []graphEdge {
 	var edges []graphEdge
 	for i := range steps {
 		edges = append(edges, extractEdgesFromStep(&steps[i])...)
@@ -224,7 +224,7 @@ func extractEdgesFromSteps(steps []ActionGraphStep) []graphEdge {
 	return edges
 }
 
-func extractEdgesFromStep(step *ActionGraphStep) []graphEdge {
+func extractEdgesFromStep(step *BehaviorTreeStep) []graphEdge {
 	if step == nil || step.Transition == nil {
 		return nil
 	}
@@ -760,10 +760,10 @@ func (r *Repository) GetAllAgentStates() (map[string]struct {
 }
 
 // =============================================================================
-// ActionGraph Operations
+// BehaviorTree Operations
 // =============================================================================
 
-func (r *Repository) GetActionGraph(id string) (*ActionGraph, error) {
+func (r *Repository) GetBehaviorTree(id string) (*BehaviorTree, error) {
 	ctx := context.Background()
 	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
 		res, err := tx.Run(ctx, `
@@ -783,7 +783,7 @@ func (r *Repository) GetActionGraph(id string) (*ActionGraph, error) {
 				preconditionsJSON := getString(props, "preconditions_json")
 				statesJSON := getString(props, "states_json")
 				entryPoint := getString(props, "entry_point")
-				ag := ActionGraph{
+				bt := BehaviorTree{
 					ID:                 getString(props, "id"),
 					Name:               getString(props, "name"),
 					Description:        toNullString(getString(props, "description")),
@@ -796,18 +796,18 @@ func (r *Repository) GetActionGraph(id string) (*ActionGraph, error) {
 					UpdatedAt:          time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
 				}
 				if entryPoint != "" {
-					ag.EntryPoint = toNullString(entryPoint)
+					bt.EntryPoint = toNullString(entryPoint)
 				}
 				if stepsJSON != "" {
-					ag.Steps = datatypes.JSON([]byte(stepsJSON))
+					bt.Steps = datatypes.JSON([]byte(stepsJSON))
 				}
 				if preconditionsJSON != "" {
-					ag.Preconditions = datatypes.JSON([]byte(preconditionsJSON))
+					bt.Preconditions = datatypes.JSON([]byte(preconditionsJSON))
 				}
 				if statesJSON != "" {
-					ag.States = datatypes.JSON([]byte(statesJSON))
+					bt.States = datatypes.JSON([]byte(statesJSON))
 				}
-				return &ag, nil
+				return &bt, nil
 			}
 		}
 		return nil, nil
@@ -818,14 +818,14 @@ func (r *Repository) GetActionGraph(id string) (*ActionGraph, error) {
 	if result == nil {
 		return nil, nil
 	}
-	return result.(*ActionGraph), nil
+	return result.(*BehaviorTree), nil
 }
 
-func (r *Repository) GetActionGraphsByAgent(agentID string) ([]ActionGraph, error) {
-	return r.GetActionGraphs(agentID, true)
+func (r *Repository) GetBehaviorTreesByAgent(agentID string) ([]BehaviorTree, error) {
+	return r.GetBehaviorTrees(agentID, true)
 }
 
-func (r *Repository) GetActionGraphs(agentID string, includeTemplates bool) ([]ActionGraph, error) {
+func (r *Repository) GetBehaviorTrees(agentID string, includeTemplates bool) ([]BehaviorTree, error) {
 	ctx := context.Background()
 	query := "MATCH (g:ActionGraph) "
 	params := map[string]any{}
@@ -844,7 +844,7 @@ func (r *Repository) GetActionGraphs(agentID string, includeTemplates bool) ([]A
 		if err != nil {
 			return nil, err
 		}
-		var graphs []ActionGraph
+		var graphs []BehaviorTree
 		for res.Next(ctx) {
 			node, _ := res.Record().Get("g")
 			if gNode, ok := node.(neo4j.Node); ok {
@@ -857,7 +857,7 @@ func (r *Repository) GetActionGraphs(agentID string, includeTemplates bool) ([]A
 				stepsJSON := getString(props, "steps_json")
 				preconditionsJSON := getString(props, "preconditions_json")
 				statesJSON := getString(props, "states_json")
-				ag := ActionGraph{
+				bt := BehaviorTree{
 					ID:                 getString(props, "id"),
 					Name:               getString(props, "name"),
 					Description:        toNullString(getString(props, "description")),
@@ -871,15 +871,15 @@ func (r *Repository) GetActionGraphs(agentID string, includeTemplates bool) ([]A
 					UpdatedAt:          time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
 				}
 				if stepsJSON != "" {
-					ag.Steps = datatypes.JSON([]byte(stepsJSON))
+					bt.Steps = datatypes.JSON([]byte(stepsJSON))
 				}
 				if preconditionsJSON != "" {
-					ag.Preconditions = datatypes.JSON([]byte(preconditionsJSON))
+					bt.Preconditions = datatypes.JSON([]byte(preconditionsJSON))
 				}
 				if statesJSON != "" {
-					ag.States = datatypes.JSON([]byte(statesJSON))
+					bt.States = datatypes.JSON([]byte(statesJSON))
 				}
-				graphs = append(graphs, ag)
+				graphs = append(graphs, bt)
 			}
 		}
 		return graphs, res.Err()
@@ -887,14 +887,14 @@ func (r *Repository) GetActionGraphs(agentID string, includeTemplates bool) ([]A
 	if err != nil {
 		return nil, err
 	}
-	return result.([]ActionGraph), nil
+	return result.([]BehaviorTree), nil
 }
 
-func (r *Repository) CreateActionGraph(graph *ActionGraph) error {
+func (r *Repository) CreateBehaviorTree(graph *BehaviorTree) error {
 	if graph == nil {
-		return fmt.Errorf("action graph is nil")
+		return fmt.Errorf("behavior tree is nil")
 	}
-	steps, err := parseActionGraphSteps(graph)
+	steps, err := parseBehaviorTreeSteps(graph)
 	if err != nil {
 		return err
 	}
@@ -968,7 +968,7 @@ func (r *Repository) CreateActionGraph(graph *ActionGraph) error {
 		if err != nil {
 			return nil, err
 		}
-		if err := r.storeActionGraphStructure(ctx, tx, graph, steps); err != nil {
+		if err := r.storeBehaviorTreeStructure(ctx, tx, graph, steps); err != nil {
 			return nil, err
 		}
 		return nil, nil
@@ -976,11 +976,11 @@ func (r *Repository) CreateActionGraph(graph *ActionGraph) error {
 	return err
 }
 
-func (r *Repository) UpdateActionGraph(graph *ActionGraph) error {
+func (r *Repository) UpdateBehaviorTree(graph *BehaviorTree) error {
 	if graph == nil {
-		return fmt.Errorf("action graph is nil")
+		return fmt.Errorf("behavior tree is nil")
 	}
-	steps, err := parseActionGraphSteps(graph)
+	steps, err := parseBehaviorTreeSteps(graph)
 	if err != nil {
 		return err
 	}
@@ -1050,7 +1050,7 @@ func (r *Repository) UpdateActionGraph(graph *ActionGraph) error {
 		if err != nil {
 			return nil, err
 		}
-		if err := r.storeActionGraphStructure(ctx, tx, graph, steps); err != nil {
+		if err := r.storeBehaviorTreeStructure(ctx, tx, graph, steps); err != nil {
 			return nil, err
 		}
 		return nil, nil
@@ -1058,7 +1058,7 @@ func (r *Repository) UpdateActionGraph(graph *ActionGraph) error {
 	return err
 }
 
-func (r *Repository) DeleteActionGraph(id string) error {
+func (r *Repository) DeleteBehaviorTree(id string) error {
 	ctx := context.Background()
 	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
 		_, err := tx.Run(ctx, `
@@ -1077,9 +1077,9 @@ func (r *Repository) DeleteActionGraph(id string) error {
 	return err
 }
 
-func (r *Repository) storeActionGraphStructure(ctx context.Context, tx neo4j.ManagedTransaction, graph *ActionGraph, steps []ActionGraphStep) error {
+func (r *Repository) storeBehaviorTreeStructure(ctx context.Context, tx neo4j.ManagedTransaction, graph *BehaviorTree, steps []BehaviorTreeStep) error {
 	if graph == nil {
-		return fmt.Errorf("action graph is nil")
+		return fmt.Errorf("behavior tree is nil")
 	}
 
 	_, err := tx.Run(ctx, `
@@ -1327,12 +1327,12 @@ func (r *Repository) storeActionGraphStructure(ctx context.Context, tx neo4j.Man
 	return nil
 }
 
-func (r *Repository) GetActionGraphSteps(id string) ([]ActionGraphStep, error) {
-	graph, err := r.GetActionGraph(id)
+func (r *Repository) GetBehaviorTreeSteps(id string) ([]BehaviorTreeStep, error) {
+	graph, err := r.GetBehaviorTree(id)
 	if err != nil || graph == nil {
 		return nil, err
 	}
-	var steps []ActionGraphStep
+	var steps []BehaviorTreeStep
 	if len(graph.Steps) == 0 {
 		return steps, nil
 	}
@@ -1343,14 +1343,14 @@ func (r *Repository) GetActionGraphSteps(id string) ([]ActionGraphStep, error) {
 }
 
 // =============================================================================
-// Agent Action Graph Operations
+// Agent Behavior Tree Operations
 // =============================================================================
 
-func (r *Repository) GetAgentActionGraph(agentID, graphID string) (*AgentActionGraph, error) {
+func (r *Repository) GetAgentBehaviorTree(agentID, graphID string) (*AgentBehaviorTree, error) {
 	ctx := context.Background()
 	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
 		res, err := tx.Run(ctx, `
-			MATCH (aag:AgentActionGraph {agent_id:$agent_id, action_graph_id:$graph_id})
+			MATCH (aag:AgentActionGraph {agent_id:$agent_id, behavior_tree_id:$graph_id})
 			RETURN aag
 		`, map[string]any{"agent_id": agentID, "graph_id": graphID})
 		if err != nil {
@@ -1360,10 +1360,10 @@ func (r *Repository) GetAgentActionGraph(agentID, graphID string) (*AgentActionG
 			node, _ := res.Record().Get("aag")
 			if aagNode, ok := node.(neo4j.Node); ok {
 				props := aagNode.Props
-				aag := AgentActionGraph{
+				aag := AgentBehaviorTree{
 					ID:               getString(props, "id"),
 					AgentID:          getString(props, "agent_id"),
-					ActionGraphID:    getString(props, "action_graph_id"),
+					BehaviorTreeID:    getString(props, "behavior_tree_id"),
 					ServerVersion:    int(getInt64(props, "server_version")),
 					DeployedVersion:  int(getInt64(props, "deployed_version")),
 					DeploymentStatus: getString(props, "deployment_status"),
@@ -1385,10 +1385,10 @@ func (r *Repository) GetAgentActionGraph(agentID, graphID string) (*AgentActionG
 	if result == nil {
 		return nil, nil
 	}
-	return result.(*AgentActionGraph), nil
+	return result.(*AgentBehaviorTree), nil
 }
 
-func (r *Repository) GetAgentActionGraphs(agentID string) ([]AgentActionGraph, error) {
+func (r *Repository) GetAgentBehaviorTrees(agentID string) ([]AgentBehaviorTree, error) {
 	ctx := context.Background()
 	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
 		res, err := tx.Run(ctx, `
@@ -1398,15 +1398,15 @@ func (r *Repository) GetAgentActionGraphs(agentID string) ([]AgentActionGraph, e
 		if err != nil {
 			return nil, err
 		}
-		var list []AgentActionGraph
+		var list []AgentBehaviorTree
 		for res.Next(ctx) {
 			node, _ := res.Record().Get("aag")
 			if aagNode, ok := node.(neo4j.Node); ok {
 				props := aagNode.Props
-				list = append(list, AgentActionGraph{
+				list = append(list, AgentBehaviorTree{
 					ID:               getString(props, "id"),
 					AgentID:          getString(props, "agent_id"),
-					ActionGraphID:    getString(props, "action_graph_id"),
+					BehaviorTreeID:    getString(props, "behavior_tree_id"),
 					ServerVersion:    int(getInt64(props, "server_version")),
 					DeployedVersion:  int(getInt64(props, "deployed_version")),
 					DeploymentStatus: getString(props, "deployment_status"),
@@ -1424,18 +1424,18 @@ func (r *Repository) GetAgentActionGraphs(agentID string) ([]AgentActionGraph, e
 	if err != nil {
 		return nil, err
 	}
-	return result.([]AgentActionGraph), nil
+	return result.([]AgentBehaviorTree), nil
 }
 
-func (r *Repository) CreateAgentActionGraph(aag *AgentActionGraph) error {
+func (r *Repository) CreateAgentBehaviorTree(aag *AgentBehaviorTree) error {
 	if aag == nil {
-		return fmt.Errorf("agent action graph is nil")
+		return fmt.Errorf("agent behavior tree is nil")
 	}
 	ctx := context.Background()
 	props := map[string]any{
 		"id":                aag.ID,
 		"agent_id":          aag.AgentID,
-		"action_graph_id":   aag.ActionGraphID,
+		"behavior_tree_id":   aag.BehaviorTreeID,
 		"server_version":    aag.ServerVersion,
 		"deployed_version":  aag.DeployedVersion,
 		"deployment_status": aag.DeploymentStatus,
@@ -1451,7 +1451,7 @@ func (r *Repository) CreateAgentActionGraph(aag *AgentActionGraph) error {
 			CREATE (aag:AgentActionGraph {
 				id: $id,
 				agent_id: $agent_id,
-				action_graph_id: $action_graph_id,
+				behavior_tree_id: $behavior_tree_id,
 				server_version: $server_version,
 				deployed_version: $deployed_version,
 				deployment_status: $deployment_status,
@@ -1468,9 +1468,9 @@ func (r *Repository) CreateAgentActionGraph(aag *AgentActionGraph) error {
 	return err
 }
 
-func (r *Repository) UpdateAgentActionGraph(aag *AgentActionGraph) error {
+func (r *Repository) UpdateAgentBehaviorTree(aag *AgentBehaviorTree) error {
 	if aag == nil {
-		return fmt.Errorf("agent action graph is nil")
+		return fmt.Errorf("agent behavior tree is nil")
 	}
 	ctx := context.Background()
 	props := map[string]any{
@@ -1501,11 +1501,11 @@ func (r *Repository) UpdateAgentActionGraph(aag *AgentActionGraph) error {
 	return err
 }
 
-func (r *Repository) DeleteAgentActionGraph(agentID, graphID string) error {
+func (r *Repository) DeleteAgentBehaviorTree(agentID, graphID string) error {
 	ctx := context.Background()
 	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
 		_, err := tx.Run(ctx, `
-			MATCH (aag:AgentActionGraph {agent_id:$agent_id, action_graph_id:$graph_id})
+			MATCH (aag:AgentActionGraph {agent_id:$agent_id, behavior_tree_id:$graph_id})
 			DETACH DELETE aag
 		`, map[string]any{"agent_id": agentID, "graph_id": graphID})
 		return nil, err
@@ -1513,7 +1513,7 @@ func (r *Repository) DeleteAgentActionGraph(agentID, graphID string) error {
 	return err
 }
 
-func (r *Repository) DeleteAgentActionGraphsByAgent(agentID string) error {
+func (r *Repository) DeleteAgentBehaviorTreesByAgent(agentID string) error {
 	ctx := context.Background()
 	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
 		_, err := tx.Run(ctx, `
@@ -1525,25 +1525,25 @@ func (r *Repository) DeleteAgentActionGraphsByAgent(agentID string) error {
 	return err
 }
 
-func (r *Repository) GetAgentActionGraphsByGraphID(graphID string) ([]AgentActionGraph, error) {
+func (r *Repository) GetAgentBehaviorTreesByGraphID(graphID string) ([]AgentBehaviorTree, error) {
 	ctx := context.Background()
 	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
 		res, err := tx.Run(ctx, `
-			MATCH (aag:AgentActionGraph {action_graph_id:$graph_id})
+			MATCH (aag:AgentActionGraph {behavior_tree_id:$graph_id})
 			RETURN aag
 		`, map[string]any{"graph_id": graphID})
 		if err != nil {
 			return nil, err
 		}
-		var list []AgentActionGraph
+		var list []AgentBehaviorTree
 		for res.Next(ctx) {
 			node, _ := res.Record().Get("aag")
 			if aagNode, ok := node.(neo4j.Node); ok {
 				props := aagNode.Props
-				list = append(list, AgentActionGraph{
+				list = append(list, AgentBehaviorTree{
 					ID:               getString(props, "id"),
 					AgentID:          getString(props, "agent_id"),
-					ActionGraphID:    getString(props, "action_graph_id"),
+					BehaviorTreeID:    getString(props, "behavior_tree_id"),
 					ServerVersion:    int(getInt64(props, "server_version")),
 					DeployedVersion:  int(getInt64(props, "deployed_version")),
 					DeploymentStatus: getString(props, "deployment_status"),
@@ -1561,10 +1561,10 @@ func (r *Repository) GetAgentActionGraphsByGraphID(graphID string) ([]AgentActio
 	if err != nil {
 		return nil, err
 	}
-	return result.([]AgentActionGraph), nil
+	return result.([]AgentBehaviorTree), nil
 }
 
-func (r *Repository) GetAgentActionGraphByID(id string) (*AgentActionGraph, error) {
+func (r *Repository) GetAgentBehaviorTreeByID(id string) (*AgentBehaviorTree, error) {
 	ctx := context.Background()
 	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
 		res, err := tx.Run(ctx, `
@@ -1578,10 +1578,10 @@ func (r *Repository) GetAgentActionGraphByID(id string) (*AgentActionGraph, erro
 			node, _ := res.Record().Get("aag")
 			if aagNode, ok := node.(neo4j.Node); ok {
 				props := aagNode.Props
-				aag := AgentActionGraph{
+				aag := AgentBehaviorTree{
 					ID:               getString(props, "id"),
 					AgentID:          getString(props, "agent_id"),
-					ActionGraphID:    getString(props, "action_graph_id"),
+					BehaviorTreeID:    getString(props, "behavior_tree_id"),
 					ServerVersion:    int(getInt64(props, "server_version")),
 					DeployedVersion:  int(getInt64(props, "deployed_version")),
 					DeploymentStatus: getString(props, "deployment_status"),
@@ -1603,7 +1603,7 @@ func (r *Repository) GetAgentActionGraphByID(id string) (*AgentActionGraph, erro
 	if result == nil {
 		return nil, nil
 	}
-	return result.(*AgentActionGraph), nil
+	return result.(*AgentBehaviorTree), nil
 }
 
 func (r *Repository) UpdateDeploymentStatus(id, status string, version int, errorMsg string) error {
@@ -1630,12 +1630,12 @@ func (r *Repository) UpdateDeploymentStatus(id, status string, version int, erro
 
 func (r *Repository) GetAssignedTemplateIDs(agentID string) map[string]bool {
 	assigned := map[string]bool{}
-	aags, err := r.GetAgentActionGraphs(agentID)
+	aags, err := r.GetAgentBehaviorTrees(agentID)
 	if err != nil {
 		return assigned
 	}
 	for _, aag := range aags {
-		assigned[aag.ActionGraphID] = true
+		assigned[aag.BehaviorTreeID] = true
 	}
 	return assigned
 }
@@ -1644,14 +1644,14 @@ func (r *Repository) GetAssignedTemplateIDs(agentID string) map[string]bool {
 // Deployment Logs
 // =============================================================================
 
-func (r *Repository) CreateDeploymentLog(logEntry *ActionGraphDeploymentLog) error {
+func (r *Repository) CreateDeploymentLog(logEntry *BehaviorTreeDeploymentLog) error {
 	if logEntry == nil {
 		return fmt.Errorf("deployment log is nil")
 	}
 	ctx := context.Background()
 	props := map[string]any{
 		"id":                    logEntry.ID,
-		"agent_action_graph_id": logEntry.AgentActionGraphID,
+		"agent_behavior_tree_id": logEntry.AgentBehaviorTreeID,
 		"action":                logEntry.Action,
 		"version":               logEntry.Version,
 		"status":                logEntry.Status,
@@ -1663,7 +1663,7 @@ func (r *Repository) CreateDeploymentLog(logEntry *ActionGraphDeploymentLog) err
 		_, err := tx.Run(ctx, `
 			CREATE (l:DeploymentLog {
 				id: $id,
-				agent_action_graph_id: $agent_action_graph_id,
+				agent_behavior_tree_id: $agent_behavior_tree_id,
 				action: $action,
 				version: $version,
 				status: $status,
@@ -1677,7 +1677,7 @@ func (r *Repository) CreateDeploymentLog(logEntry *ActionGraphDeploymentLog) err
 	return err
 }
 
-func (r *Repository) UpdateDeploymentLog(logEntry *ActionGraphDeploymentLog) error {
+func (r *Repository) UpdateDeploymentLog(logEntry *BehaviorTreeDeploymentLog) error {
 	if logEntry == nil {
 		return fmt.Errorf("deployment log is nil")
 	}
@@ -1700,25 +1700,25 @@ func (r *Repository) UpdateDeploymentLog(logEntry *ActionGraphDeploymentLog) err
 	return err
 }
 
-func (r *Repository) GetDeploymentLogs(agentActionGraphID string) ([]ActionGraphDeploymentLog, error) {
+func (r *Repository) GetDeploymentLogs(agentBehaviorTreeID string) ([]BehaviorTreeDeploymentLog, error) {
 	ctx := context.Background()
 	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
 		res, err := tx.Run(ctx, `
-			MATCH (l:DeploymentLog {agent_action_graph_id:$id})
+			MATCH (l:DeploymentLog {agent_behavior_tree_id:$id})
 			RETURN l
 			ORDER BY l.initiated_at_ms DESC
-		`, map[string]any{"id": agentActionGraphID})
+		`, map[string]any{"id": agentBehaviorTreeID})
 		if err != nil {
 			return nil, err
 		}
-		var logs []ActionGraphDeploymentLog
+		var logs []BehaviorTreeDeploymentLog
 		for res.Next(ctx) {
 			node, _ := res.Record().Get("l")
 			if lNode, ok := node.(neo4j.Node); ok {
 				props := lNode.Props
-				logs = append(logs, ActionGraphDeploymentLog{
+				logs = append(logs, BehaviorTreeDeploymentLog{
 					ID:                 getString(props, "id"),
-					AgentActionGraphID: getString(props, "agent_action_graph_id"),
+					AgentBehaviorTreeID: getString(props, "agent_behavior_tree_id"),
 					Action:             getString(props, "action"),
 					Version:            int(getInt64(props, "version")),
 					Status:             getString(props, "status"),
@@ -1733,14 +1733,14 @@ func (r *Repository) GetDeploymentLogs(agentActionGraphID string) ([]ActionGraph
 	if err != nil {
 		return nil, err
 	}
-	return result.([]ActionGraphDeploymentLog), nil
+	return result.([]BehaviorTreeDeploymentLog), nil
 }
 
 func (r *Repository) DeleteDeploymentLogsForAssignment(assignmentID string) {
 	ctx := context.Background()
 	_, _ = r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
 		_, err := tx.Run(ctx, `
-			MATCH (l:DeploymentLog {agent_action_graph_id:$id})
+			MATCH (l:DeploymentLog {agent_behavior_tree_id:$id})
 			DETACH DELETE l
 		`, map[string]any{"id": assignmentID})
 		return nil, err
@@ -1764,7 +1764,7 @@ func (r *Repository) GetTask(id string) (*Task, error) {
 				props := tNode.Props
 				task := Task{
 					ID:               getString(props, "id"),
-					ActionGraphID:    toNullString(getString(props, "action_graph_id")),
+					BehaviorTreeID:    toNullString(getString(props, "behavior_tree_id")),
 					AgentID:          toNullString(getString(props, "agent_id")),
 					Status:           getString(props, "status"),
 					CurrentStepID:    toNullString(getString(props, "current_step_id")),
@@ -1828,7 +1828,7 @@ func (r *Repository) GetTasks(agentID, status string) ([]Task, error) {
 				props := tNode.Props
 				tasks = append(tasks, Task{
 					ID:               getString(props, "id"),
-					ActionGraphID:    toNullString(getString(props, "action_graph_id")),
+					BehaviorTreeID:    toNullString(getString(props, "behavior_tree_id")),
 					AgentID:          toNullString(getString(props, "agent_id")),
 					Status:           getString(props, "status"),
 					CurrentStepID:    toNullString(getString(props, "current_step_id")),
@@ -1857,7 +1857,7 @@ func (r *Repository) CreateTask(task *Task) error {
 	ctx := context.Background()
 	props := map[string]any{
 		"id":                 task.ID,
-		"action_graph_id":    task.ActionGraphID.String,
+		"behavior_tree_id":    task.BehaviorTreeID.String,
 		"agent_id":           task.AgentID.String,
 		"status":             task.Status,
 		"current_step_id":    task.CurrentStepID.String,
@@ -1873,7 +1873,7 @@ func (r *Repository) CreateTask(task *Task) error {
 		_, err := tx.Run(ctx, `
 			CREATE (t:Task {
 				id: $id,
-				action_graph_id: $action_graph_id,
+				behavior_tree_id: $behavior_tree_id,
 				agent_id: $agent_id,
 				status: $status,
 				current_step_id: $current_step_id,
@@ -2430,12 +2430,12 @@ func (r *Repository) DeleteStateDefinition(id string) error {
 // Templates
 // =============================================================================
 
-func (r *Repository) GetTemplates() ([]ActionGraph, error) {
-	return r.GetActionGraphs("", true)
+func (r *Repository) GetTemplates() ([]BehaviorTree, error) {
+	return r.GetBehaviorTrees("", true)
 }
 
-func (r *Repository) GetTemplate(id string) (*ActionGraph, error) {
-	graph, err := r.GetActionGraph(id)
+func (r *Repository) GetTemplate(id string) (*BehaviorTree, error) {
+	graph, err := r.GetBehaviorTree(id)
 	if err != nil || graph == nil {
 		return graph, err
 	}
@@ -2446,7 +2446,7 @@ func (r *Repository) GetTemplate(id string) (*ActionGraph, error) {
 }
 
 func (r *Repository) CountTemplateAssignments(templateID string) int {
-	aags, err := r.GetAgentActionGraphsByGraphID(templateID)
+	aags, err := r.GetAgentBehaviorTreesByGraphID(templateID)
 	if err != nil {
 		return 0
 	}
@@ -2457,7 +2457,7 @@ func (r *Repository) MarkTemplateAssignmentsOutdated(templateID string, newVersi
 	ctx := context.Background()
 	_, _ = r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
 		_, err := tx.Run(ctx, `
-			MATCH (aag:AgentActionGraph {action_graph_id:$id})
+			MATCH (aag:AgentActionGraph {behavior_tree_id:$id})
 			SET aag.deployed_version = 0,
 			    aag.deployment_status = "outdated"
 		`, map[string]any{"id": templateID})
@@ -2466,7 +2466,7 @@ func (r *Repository) MarkTemplateAssignmentsOutdated(templateID string, newVersi
 }
 
 func (r *Repository) DeleteTemplateAssignments(templateID string) {
-	_ = r.DeleteAgentActionGraph("", templateID)
+	_ = r.DeleteAgentBehaviorTree("", templateID)
 }
 
 // =============================================================================
@@ -2958,7 +2958,7 @@ func (r *Repository) FindTemplatesCompatibleWithAgent(agentID string) ([]Templat
 	assigned := r.GetAssignedTemplateIDs(agentID)
 	var result []TemplateCompatibilityInfo
 	for _, tpl := range templates {
-		var steps []ActionGraphStep
+		var steps []BehaviorTreeStep
 		_ = json.Unmarshal(tpl.Steps, &steps)
 		required := ExtractActionTypesFromSteps(steps)
 		var missing []string
@@ -3108,23 +3108,23 @@ func (r *Repository) CountTemplates() (int, error) {
 // Batch Query Methods (for N+1 query optimization)
 // =============================================================================
 
-// GetAllAgentActionGraphs returns all agent action graph assignments in a single query
-func (r *Repository) GetAllAgentActionGraphs() ([]AgentActionGraph, error) {
+// GetAllAgentBehaviorTrees returns all agent behavior tree assignments in a single query
+func (r *Repository) GetAllAgentBehaviorTrees() ([]AgentBehaviorTree, error) {
 	ctx := context.Background()
 	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
 		res, err := tx.Run(ctx, `MATCH (aag:AgentActionGraph) RETURN aag`, nil)
 		if err != nil {
 			return nil, err
 		}
-		var list []AgentActionGraph
+		var list []AgentBehaviorTree
 		for res.Next(ctx) {
 			node, _ := res.Record().Get("aag")
 			if aagNode, ok := node.(neo4j.Node); ok {
 				props := aagNode.Props
-				list = append(list, AgentActionGraph{
+				list = append(list, AgentBehaviorTree{
 					ID:               getString(props, "id"),
 					AgentID:          getString(props, "agent_id"),
-					ActionGraphID:    getString(props, "action_graph_id"),
+					BehaviorTreeID:    getString(props, "behavior_tree_id"),
 					ServerVersion:    int(getInt64(props, "server_version")),
 					DeployedVersion:  int(getInt64(props, "deployed_version")),
 					DeploymentStatus: getString(props, "deployment_status"),
@@ -3142,13 +3142,13 @@ func (r *Repository) GetAllAgentActionGraphs() ([]AgentActionGraph, error) {
 	if err != nil {
 		return nil, err
 	}
-	return result.([]AgentActionGraph), nil
+	return result.([]AgentBehaviorTree), nil
 }
 
-// GetActionGraphsByIDs retrieves multiple action graphs by their IDs in a single query
-func (r *Repository) GetActionGraphsByIDs(ids []string) (map[string]*ActionGraph, error) {
+// GetBehaviorTreesByIDs retrieves multiple behavior trees by their IDs in a single query
+func (r *Repository) GetBehaviorTreesByIDs(ids []string) (map[string]*BehaviorTree, error) {
 	if len(ids) == 0 {
-		return make(map[string]*ActionGraph), nil
+		return make(map[string]*BehaviorTree), nil
 	}
 	ctx := context.Background()
 	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
@@ -3160,7 +3160,7 @@ func (r *Repository) GetActionGraphsByIDs(ids []string) (map[string]*ActionGraph
 		if err != nil {
 			return nil, err
 		}
-		graphs := make(map[string]*ActionGraph)
+		graphs := make(map[string]*BehaviorTree)
 		for res.Next(ctx) {
 			node, _ := res.Record().Get("g")
 			if gNode, ok := node.(neo4j.Node); ok {
@@ -3169,7 +3169,7 @@ func (r *Repository) GetActionGraphsByIDs(ids []string) (map[string]*ActionGraph
 				preconditionsJSON := getString(props, "preconditions_json")
 				statesJSON := getString(props, "states_json")
 				entryPoint := getString(props, "entry_point")
-				ag := ActionGraph{
+				bt := BehaviorTree{
 					ID:                 getString(props, "id"),
 					Name:               getString(props, "name"),
 					Description:        toNullString(getString(props, "description")),
@@ -3182,18 +3182,18 @@ func (r *Repository) GetActionGraphsByIDs(ids []string) (map[string]*ActionGraph
 					UpdatedAt:          time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
 				}
 				if entryPoint != "" {
-					ag.EntryPoint = toNullString(entryPoint)
+					bt.EntryPoint = toNullString(entryPoint)
 				}
 				if stepsJSON != "" {
-					ag.Steps = datatypes.JSON([]byte(stepsJSON))
+					bt.Steps = datatypes.JSON([]byte(stepsJSON))
 				}
 				if preconditionsJSON != "" {
-					ag.Preconditions = datatypes.JSON([]byte(preconditionsJSON))
+					bt.Preconditions = datatypes.JSON([]byte(preconditionsJSON))
 				}
 				if statesJSON != "" {
-					ag.States = datatypes.JSON([]byte(statesJSON))
+					bt.States = datatypes.JSON([]byte(statesJSON))
 				}
-				graphs[ag.ID] = &ag
+				graphs[bt.ID] = &bt
 			}
 		}
 		return graphs, res.Err()
@@ -3201,7 +3201,7 @@ func (r *Repository) GetActionGraphsByIDs(ids []string) (map[string]*ActionGraph
 	if err != nil {
 		return nil, err
 	}
-	return result.(map[string]*ActionGraph), nil
+	return result.(map[string]*BehaviorTree), nil
 }
 
 // =============================================================================

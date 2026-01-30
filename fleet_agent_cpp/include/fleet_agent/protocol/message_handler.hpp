@@ -122,7 +122,7 @@ public:
     /**
      * Handle DeployGraphRequest message.
      *
-     * Stores action graph and sends confirmation.
+     * Stores behavior tree and sends confirmation.
      */
     HandleResult handle_deploy_graph(const fleet::v1::DeployGraphRequest& deploy);
 

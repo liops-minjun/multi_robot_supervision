@@ -1,5 +1,5 @@
 // Copyright 2026 Multi-Robot Supervision System
-// Action Graph Storage
+// Behavior Tree Storage
 
 #pragma once
 
@@ -15,7 +15,7 @@
 // Forward declaration
 namespace fleet {
 namespace v1 {
-class ActionGraph;
+class BehaviorTree;
 }
 }
 
@@ -23,10 +23,10 @@ namespace fleet_agent {
 namespace graph {
 
 /**
- * GraphStorage - Local storage for deployed Action Graphs.
+ * GraphStorage - Local storage for deployed Behavior Trees.
  *
- * Manages persistent storage of action graphs:
- * - Stores graphs as JSON files
+ * Manages persistent storage of behavior trees:
+ * - Stores behavior trees as JSON files
  * - Maintains in-memory cache for fast access
  * - Supports checksum verification
  * - Thread-safe operations
@@ -37,7 +37,7 @@ namespace graph {
  *   ├── patrol_route_002.json
  *   └── charging_workflow_003.json
  *
- * Each file contains the canonical graph format (JSON).
+ * Each file contains the canonical behavior tree format (JSON).
  */
 class GraphStorage {
 public:
@@ -55,63 +55,63 @@ public:
     // ============================================================
 
     /**
-     * Store an action graph.
+     * Store a behavior tree.
      *
      * Saves to file and updates cache.
      *
-     * @param graph Graph to store
+     * @param behavior_tree Behavior tree to store
      * @return true if stored successfully
      */
-    bool store(const fleet::v1::ActionGraph& graph);
+    bool store(const fleet::v1::BehaviorTree& behavior_tree);
 
     /**
-     * Load a graph by ID.
+     * Load a behavior tree by ID.
      *
      * Checks cache first, then file.
      *
-     * @param graph_id Graph identifier
-     * @return Graph if found
+     * @param behavior_tree_id Behavior tree identifier
+     * @return Behavior tree if found
      */
-    std::optional<fleet::v1::ActionGraph> load(const std::string& graph_id);
+    std::optional<fleet::v1::BehaviorTree> load(const std::string& behavior_tree_id);
 
     /**
-     * List all stored graph IDs.
+     * List all stored behavior tree IDs.
      */
-    std::vector<std::string> list_graph_ids();
+    std::vector<std::string> list_behavior_tree_ids();
 
     /**
-     * Remove a graph.
+     * Remove a behavior tree.
      *
-     * @param graph_id Graph to remove
+     * @param behavior_tree_id Behavior tree to remove
      * @return true if removed
      */
-    bool remove(const std::string& graph_id);
+    bool remove(const std::string& behavior_tree_id);
 
     // ============================================================
     // Verification
     // ============================================================
 
     /**
-     * Verify graph checksum.
+     * Verify behavior tree checksum.
      *
-     * @param graph_id Graph to verify
+     * @param behavior_tree_id Behavior tree to verify
      * @param expected_checksum Expected checksum (sha256:...)
      * @return true if checksum matches
      */
     bool verify_checksum(
-        const std::string& graph_id,
+        const std::string& behavior_tree_id,
         const std::string& expected_checksum
     );
 
     /**
-     * Check if graph exists.
+     * Check if behavior tree exists.
      */
-    bool exists(const std::string& graph_id);
+    bool exists(const std::string& behavior_tree_id);
 
     /**
-     * Get graph version.
+     * Get behavior tree version.
      */
-    std::optional<int> get_version(const std::string& graph_id);
+    std::optional<int> get_version(const std::string& behavior_tree_id);
 
     // ============================================================
     // Cache Management
@@ -137,31 +137,31 @@ public:
 private:
     std::filesystem::path storage_path_;
 
-    // In-memory cache: graph_id -> ActionGraph
-    tbb::concurrent_hash_map<std::string, fleet::v1::ActionGraph> cache_;
+    // In-memory cache: behavior_tree_id -> BehaviorTree
+    tbb::concurrent_hash_map<std::string, fleet::v1::BehaviorTree> cache_;
 
     /**
-     * Get file path for a graph.
+     * Get file path for a behavior tree.
      */
-    std::filesystem::path get_graph_path(const std::string& graph_id);
+    std::filesystem::path get_behavior_tree_path(const std::string& behavior_tree_id);
 
     /**
-     * Compute checksum for a graph.
+     * Compute checksum for a behavior tree.
      */
-    std::string compute_checksum(const fleet::v1::ActionGraph& graph);
+    std::string compute_checksum(const fleet::v1::BehaviorTree& behavior_tree);
 
     /**
-     * Write graph to file.
+     * Write behavior tree to file.
      */
     bool write_to_file(
         const std::filesystem::path& path,
-        const fleet::v1::ActionGraph& graph
+        const fleet::v1::BehaviorTree& behavior_tree
     );
 
     /**
-     * Read graph from file.
+     * Read behavior tree from file.
      */
-    std::optional<fleet::v1::ActionGraph> read_from_file(
+    std::optional<fleet::v1::BehaviorTree> read_from_file(
         const std::filesystem::path& path
     );
 

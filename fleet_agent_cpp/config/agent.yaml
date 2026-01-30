@@ -46,7 +46,7 @@ execution:
 
 # Storage paths
 storage:
-  action_graphs_path: "/tmp/fleet_agent/graphs"
+  behavior_trees_path: "/tmp/fleet_agent/graphs"
   state_definitions_path: "/tmp/fleet_agent/state_definitions"
   state_persistence_path: "/tmp/fleet_agent/state"
   message_queue_path: "/tmp/fleet_agent/queue"

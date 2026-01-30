@@ -14,47 +14,47 @@ import (
 // Converter: DB Model <-> Canonical Graph
 // =============================================================================
 
-// FromDBModel converts a database ActionGraph to CanonicalGraph
-func FromDBModel(ag *db.ActionGraph) (*CanonicalGraph, error) {
-	if ag == nil {
-		return nil, fmt.Errorf("action graph is nil")
+// FromDBModel converts a database BehaviorTree to CanonicalGraph
+func FromDBModel(bt *db.BehaviorTree) (*CanonicalGraph, error) {
+	if bt == nil {
+		return nil, fmt.Errorf("behavior tree is nil")
 	}
 
 	// Parse steps from JSONB
-	var steps []db.ActionGraphStep
-	if ag.Steps != nil {
-		if err := json.Unmarshal(ag.Steps, &steps); err != nil {
+	var steps []db.BehaviorTreeStep
+	if bt.Steps != nil {
+		if err := json.Unmarshal(bt.Steps, &steps); err != nil {
 			return nil, fmt.Errorf("failed to parse steps: %w", err)
 		}
 	}
 
 	// Parse preconditions
 	var preconditions []db.Precondition
-	if ag.Preconditions != nil {
-		json.Unmarshal(ag.Preconditions, &preconditions)
+	if bt.Preconditions != nil {
+		json.Unmarshal(bt.Preconditions, &preconditions)
 	}
 
 	// Convert to canonical format
 	graph := &CanonicalGraph{
 		SchemaVersion: SchemaVersion,
-		ActionGraph: ActionGraphMeta{
-			ID:          ag.ID,
-			Name:        ag.Name,
-			Version:     ag.Version,
-			Description: ag.Description.String,
-			CreatedAt:   ag.CreatedAt,
-			UpdatedAt:   ag.UpdatedAt,
+		BehaviorTree: BehaviorTreeMeta{
+			ID:          bt.ID,
+			Name:        bt.Name,
+			Version:     bt.Version,
+			Description: bt.Description.String,
+			CreatedAt:   bt.CreatedAt,
+			UpdatedAt:   bt.UpdatedAt,
 		},
 		Vertices: make([]Vertex, 0, len(steps)),
 		Edges:    make([]Edge, 0),
 	}
 
-	if ag.AgentID.Valid {
-		graph.ActionGraph.AgentID = ag.AgentID.String
+	if bt.AgentID.Valid {
+		graph.BehaviorTree.AgentID = bt.AgentID.String
 	}
 	entryPoint := ""
-	if ag.EntryPoint.Valid {
-		entryPoint = ag.EntryPoint.String
+	if bt.EntryPoint.Valid {
+		entryPoint = bt.EntryPoint.String
 	}
 
 	// Build vertices and edges from steps
@@ -82,14 +82,14 @@ func FromDBModel(ag *db.ActionGraph) (*CanonicalGraph, error) {
 	return graph, nil
 }
 
-// ToDBModel converts a CanonicalGraph to database ActionGraph
-func ToDBModel(cg *CanonicalGraph) (*db.ActionGraph, error) {
+// ToDBModel converts a CanonicalGraph to database BehaviorTree
+func ToDBModel(cg *CanonicalGraph) (*db.BehaviorTree, error) {
 	if cg == nil {
 		return nil, fmt.Errorf("canonical graph is nil")
 	}
 
 	// Convert vertices to steps
-	steps := make([]db.ActionGraphStep, 0, len(cg.Vertices))
+	steps := make([]db.BehaviorTreeStep, 0, len(cg.Vertices))
 	for _, v := range cg.Vertices {
 		step := vertexToStep(&v, cg)
 		steps = append(steps, step)
@@ -100,33 +100,33 @@ func ToDBModel(cg *CanonicalGraph) (*db.ActionGraph, error) {
 		return nil, fmt.Errorf("failed to marshal steps: %w", err)
 	}
 
-	ag := &db.ActionGraph{
-		ID:        cg.ActionGraph.ID,
-		Name:      cg.ActionGraph.Name,
-		Version:   cg.ActionGraph.Version,
+	bt := &db.BehaviorTree{
+		ID:        cg.BehaviorTree.ID,
+		Name:      cg.BehaviorTree.Name,
+		Version:   cg.BehaviorTree.Version,
 		Steps:     stepsJSON,
-		CreatedAt: cg.ActionGraph.CreatedAt,
+		CreatedAt: cg.BehaviorTree.CreatedAt,
 		UpdatedAt: time.Now(),
 	}
 
-	if cg.ActionGraph.Description != "" {
-		ag.Description.String = cg.ActionGraph.Description
-		ag.Description.Valid = true
+	if cg.BehaviorTree.Description != "" {
+		bt.Description.String = cg.BehaviorTree.Description
+		bt.Description.Valid = true
 	}
 
-	if cg.ActionGraph.AgentID != "" {
-		ag.AgentID.String = cg.ActionGraph.AgentID
-		ag.AgentID.Valid = true
+	if cg.BehaviorTree.AgentID != "" {
+		bt.AgentID.String = cg.BehaviorTree.AgentID
+		bt.AgentID.Valid = true
 	}
 	if cg.EntryPoint != "" {
-		ag.EntryPoint = sql.NullString{String: cg.EntryPoint, Valid: true}
+		bt.EntryPoint = sql.NullString{String: cg.EntryPoint, Valid: true}
 	}
 
-	return ag, nil
+	return bt, nil
 }
 
 // stepToVertex converts a DB step to a canonical vertex
-func stepToVertex(step *db.ActionGraphStep) Vertex {
+func stepToVertex(step *db.BehaviorTreeStep) Vertex {
 	vertex := Vertex{
 		ID:   step.ID,
 		Name: step.Name,
@@ -189,7 +189,7 @@ func stepToVertex(step *db.ActionGraphStep) Vertex {
 	return vertex
 }
 
-func selectPrimaryDuringStates(step *db.ActionGraphStep) []string {
+func selectPrimaryDuringStates(step *db.BehaviorTreeStep) []string {
 	if step == nil {
 		return nil
 	}
@@ -210,7 +210,7 @@ func selectPrimaryDuringStates(step *db.ActionGraphStep) []string {
 }
 
 // extractEdges extracts edges from step transitions
-func extractEdges(step *db.ActionGraphStep) []Edge {
+func extractEdges(step *db.BehaviorTreeStep) []Edge {
 	var edges []Edge
 
 	if step.Transition == nil {
@@ -320,8 +320,8 @@ func extractEdges(step *db.ActionGraphStep) []Edge {
 }
 
 // vertexToStep converts a canonical vertex to a DB step
-func vertexToStep(v *Vertex, cg *CanonicalGraph) db.ActionGraphStep {
-	step := db.ActionGraphStep{
+func vertexToStep(v *Vertex, cg *CanonicalGraph) db.BehaviorTreeStep {
+	step := db.BehaviorTreeStep{
 		ID:   v.ID,
 		Name: v.Name,
 	}
@@ -587,39 +587,39 @@ func convertGraphFieldSourcesToDB(graphSources map[string]ParameterFieldSource) 
 // Deploy Message Format (for QUIC transport)
 // =============================================================================
 
-// DeployMessage is the message format for deploying action graphs
+// DeployMessage is the message format for deploying behavior trees
 type DeployMessage struct {
 	CorrelationID string          `json:"correlation_id"`
 	Action        string          `json:"action"` // "deploy"
-	ActionGraph   *CanonicalGraph `json:"action_graph"`
+	BehaviorTree  *CanonicalGraph `json:"behavior_tree"`
 }
 
 // DeployedMessage is the response after successful deployment
 type DeployedMessage struct {
-	CorrelationID string `json:"correlation_id"`
-	ActionGraphID string `json:"action_graph_id"`
-	Version       int    `json:"version"`
-	Success       bool   `json:"success"`
-	Error         string `json:"error,omitempty"`
-	Checksum      string `json:"checksum,omitempty"`
+	CorrelationID  string `json:"correlation_id"`
+	BehaviorTreeID string `json:"behavior_tree_id"`
+	Version        int    `json:"version"`
+	Success        bool   `json:"success"`
+	Error          string `json:"error,omitempty"`
+	Checksum       string `json:"checksum,omitempty"`
 }
 
-// ExecuteMessage is the message format for executing action graphs
+// ExecuteMessage is the message format for executing behavior trees
 type ExecuteMessage struct {
-	CorrelationID string                 `json:"correlation_id"`
-	Action        string                 `json:"action"` // "execute"
-	ActionGraphID string                 `json:"action_graph_id"`
-	AgentID       string                 `json:"agent_id"`
-	Params        map[string]interface{} `json:"params,omitempty"`
+	CorrelationID  string                 `json:"correlation_id"`
+	Action         string                 `json:"action"` // "execute"
+	BehaviorTreeID string                 `json:"behavior_tree_id"`
+	AgentID        string                 `json:"agent_id"`
+	Params         map[string]interface{} `json:"params,omitempty"`
 }
 
 // StatusMessage is the message for execution status updates
 type StatusMessage struct {
-	ActionGraphID string                 `json:"action_graph_id"`
-	AgentID       string                 `json:"agent_id"`
-	ExecutionID   string                 `json:"execution_id"`
-	Status        string                 `json:"status"` // running, completed, failed, cancelled
-	CurrentStepID string                 `json:"current_step_id,omitempty"`
-	Error         string                 `json:"error,omitempty"`
-	Result        map[string]interface{} `json:"result,omitempty"`
+	BehaviorTreeID string                 `json:"behavior_tree_id"`
+	AgentID        string                 `json:"agent_id"`
+	ExecutionID    string                 `json:"execution_id"`
+	Status         string                 `json:"status"` // running, completed, failed, cancelled
+	CurrentStepID  string                 `json:"current_step_id,omitempty"`
+	Error          string                 `json:"error,omitempty"`
+	Result         map[string]interface{} `json:"result,omitempty"`
 }
