@@ -34,6 +34,7 @@ export const ko = {
   'nav.robotMonitor': '로봇 모니터',
   'nav.stateDefinitions': '상태 정의',
   'nav.actionGraph': 'Behavior Tree',
+  'nav.pddl': 'PDDL',
   'nav.agents': '에이전트',
   'nav.monitoring': '모니터링',
   'nav.waypoints': '웨이포인트',

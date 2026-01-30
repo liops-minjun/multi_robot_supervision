@@ -20,8 +20,8 @@ import ReactFlow, {
 } from 'reactflow'
 import 'reactflow/dist/style.css'
 import {
-  Trash2, Search, Zap, ChevronDown, ChevronRight, Server, Activity, Plus, PlusCircle, X,
-  Cpu, FileCode, Users, Link2, Unlink, Check, AlertCircle, Clock, Layout, Save
+  Trash2, Zap, ChevronDown, ChevronRight, Server, Activity, Plus, PlusCircle, X,
+  Cpu, FileCode, Users, Link2, Unlink, Check, AlertCircle, Clock, Layout, Save, Radio
 } from 'lucide-react'
 import { templateApi, stateDefinitionApi, agentApi, capabilityApi } from '../../api/client'
 import type {
@@ -35,6 +35,8 @@ import StateActionNode from './nodes/StateActionNode'
 import StateEventNode from './nodes/StateEventNode'
 import StateTransitionNode from './nodes/StateTransitionNode'
 import DeletableEdge from './edges/DeletableEdge'
+import { TelemetryPanel } from '../../components/TelemetryPanel'
+import { TelemetryProvider } from '../../contexts/TelemetryContext'
 
 const nodeTypes = {
   action: StateActionNode,
@@ -311,6 +313,9 @@ function DeploymentBadge({ status }: { status: string }) {
 function ActionGraphEditor() {
   // View state
   const [viewMode, setViewMode] = useState<'templates' | 'assignments'>('templates')
+
+  // Agent filtering for capabilities
+  const [selectedAgentFilter, setSelectedAgentFilter] = useState<string | null>(null)
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null)
   const [expandedAgents, setExpandedAgents] = useState<string[]>([])
 
@@ -318,11 +323,11 @@ function ActionGraphEditor() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showAssignModal, setShowAssignModal] = useState(false)
   const [showAddStateModal, setShowAddStateModal] = useState(false)
-  const [showCreateStateDefModal, setShowCreateStateDefModal] = useState(false)
 
-  // Search
-  const [searchTerm, setSearchTerm] = useState('')
-  const [expandedCategories, setExpandedCategories] = useState<string[]>(['Discovered Actions', 'Configured Actions', 'States'])
+  const [expandedCategories, setExpandedCategories] = useState<string[]>(['Discovered Actions', 'Configured Actions', 'End Nodes'])
+
+  // Right Panel (Telemetry & Assignments)
+  const [rightPanelTab, setRightPanelTab] = useState<'telemetry' | 'assignments' | null>(null)
 
   // Validation state
   const [validationErrors, setValidationErrors] = useState<Array<{ nodeId: string; nodeName: string; errors: string[] }>>([])
@@ -346,9 +351,30 @@ function ActionGraphEditor() {
   )
 
   // Fetch all discovered capabilities across the fleet
+  // Fetch capabilities - filtered by agent or all
   const { data: fleetCapabilities } = useQuery({
-    queryKey: ['fleet-capabilities'],
-    queryFn: () => capabilityApi.listAll(),
+    queryKey: ['fleet-capabilities', selectedAgentFilter],
+    queryFn: async () => {
+      if (selectedAgentFilter) {
+        // Fetch capabilities for specific agent and transform to match listAll() format
+        const agentCaps = await agentApi.getCapabilities(selectedAgentFilter)
+        return {
+          action_types: [],
+          action_servers: agentCaps.capabilities.map((cap) => ({
+            action_type: cap.action_type,
+            action_server: cap.action_server,
+            agent_id: agentCaps.agent_id,
+            agent_name: agentCaps.agent_name,
+            is_available: cap.is_available,
+            status: cap.status,
+            goal_schema: cap.goal_schema,
+            result_schema: cap.result_schema,
+          })),
+          total_agents: 1,
+        }
+      }
+      return capabilityApi.listAll()
+    },
   })
 
   // Fetch all templates (capability-based - no type filtering)
@@ -391,6 +417,13 @@ function ActionGraphEditor() {
   const { data: templateAssignments = [] } = useQuery({
     queryKey: ['template-assignments', selectedTemplateId],
     queryFn: () => templateApi.getAssignments(selectedTemplateId!),
+    enabled: !!selectedTemplateId,
+  })
+
+  // Fetch compatible agents for selected template
+  const { data: compatibleAgentsData } = useQuery({
+    queryKey: ['template-compatible-agents', selectedTemplateId],
+    queryFn: () => templateApi.getCompatibleAgents(selectedTemplateId!),
     enabled: !!selectedTemplateId,
   })
 
@@ -475,21 +508,43 @@ function ActionGraphEditor() {
       }>
     }> = []
 
-    // Use discovered action servers from the fleet if available (individual servers, not grouped by type)
+    // Use discovered action servers from the fleet - show all servers with {namespace} pattern
     if (fleetCapabilities && fleetCapabilities.action_servers && fleetCapabilities.action_servers.length > 0) {
+      // Deduplicate by action_server path (same server from different agents)
+      const serverMap = new Map<string, typeof fleetCapabilities.action_servers[0]>()
+      for (const srv of fleetCapabilities.action_servers) {
+        // Extract server path without namespace: /robot_001/test_a_action -> /test_a_action
+        const serverParts = srv.action_server.split('/')
+        // serverParts = ['', 'robot_001', 'test_a_action'] for /robot_001/test_a_action
+        // We want the action server name (last part)
+        const actionServerName = serverParts[serverParts.length - 1]
+
+        // Use action_server_name as key to deduplicate across agents
+        if (!serverMap.has(actionServerName)) {
+          serverMap.set(actionServerName, srv)
+        }
+      }
+
       palette.push({
         category: 'Discovered Actions',
         icon: <Server className="w-3.5 h-3.5" />,
-        items: fleetCapabilities.action_servers.map((srv) => ({
-          type: 'action',
-          subtype: srv.action_server,  // Use action_server path as subtype (unique identifier)
-          label: srv.action_server.replace(/^\//, ''),  // Display without leading slash
-          color: getActionColor(srv.action_type),
-          actionType: srv.action_type,
-          server: srv.action_server,  // Store full server path
-          agentName: srv.agent_name,
-          isAvailable: srv.is_available,
-        })),
+        items: Array.from(serverMap.values()).map((srv) => {
+          // Extract action server name from path: /robot_001/test_a_action -> test_a_action
+          const serverParts = srv.action_server.split('/')
+          const actionServerName = serverParts[serverParts.length - 1]
+          const namespaceServer = `{namespace}/${actionServerName}`
+
+          return {
+            type: 'action',
+            subtype: srv.action_server,  // Use full action_server path as subtype (unique identifier)
+            label: actionServerName,  // Display action server name
+            color: getActionColor(srv.action_type),
+            actionType: srv.action_type,
+            server: namespaceServer,  // Use {namespace} pattern by default
+            agentName: srv.agent_name,
+            isAvailable: srv.is_available,
+          }
+        }),
       })
     }
 
@@ -510,35 +565,28 @@ function ActionGraphEditor() {
       })
     }
 
-    // States are always available (default fallback if no state definition)
-    const stateItems = availableStates.map(state => ({
-      type: 'transition',
-      subtype: state,
-      label: state,
-      color: getStateColor(state),
-    }))
-
-    stateItems.push({
-      type: 'event',
-      subtype: 'End',
-      label: 'End (Success)',
-      color: '#3b82f6',
-    })
-    stateItems.push({
-      type: 'event',
-      subtype: 'Error',
-      label: 'End (Error)',
-      color: '#ef4444',
-    })
-
+    // End nodes (terminal nodes for behavior tree)
     palette.push({
-      category: 'States',
+      category: 'End Nodes',
       icon: <Activity className="w-3.5 h-3.5" />,
-      items: stateItems,
+      items: [
+        {
+          type: 'event',
+          subtype: 'End',
+          label: 'End (Success)',
+          color: '#22c55e',
+        },
+        {
+          type: 'event',
+          subtype: 'Error',
+          label: 'End (Error)',
+          color: '#ef4444',
+        },
+      ],
     })
 
     return palette
-  }, [selectedStateDef, availableStates, fleetCapabilities])
+  }, [selectedStateDef, fleetCapabilities])
 
   // Convert template to graph
   const { initialNodes, initialEdges } = useMemo(() => {
@@ -1106,13 +1154,6 @@ function ActionGraphEditor() {
     )
   }
 
-  const filteredPalette = nodePalette.map(cat => ({
-    ...cat,
-    items: cat.items.filter(item =>
-      item.label.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      item.subtype.toLowerCase().includes(searchTerm.toLowerCase())
-    )
-  })).filter(cat => cat.items.length > 0)
 
   return (
     <div className="h-screen flex bg-[#0f0f1a]">
@@ -1435,41 +1476,85 @@ function ActionGraphEditor() {
                 </div>
               </>
             ) : (
-              <>
-                <button
-                  onClick={() => setShowCreateStateDefModal(true)}
-                  className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-gradient-to-r from-blue-600/20 to-blue-500/10 border border-blue-500/40 rounded-lg text-blue-400 hover:from-blue-600/30 hover:to-blue-500/20 hover:border-blue-500/60 transition-all"
-                >
-                  <Plus size={14} />
-                  <span className="text-xs font-medium">상태 정의 생성</span>
-                </button>
-                <div className="mt-2 text-[10px] text-gray-500">
-                  상태 정의가 없습니다. 상태 관리를 위해 생성하세요.
-                </div>
-              </>
+              <div className="text-[10px] text-gray-500 italic">
+                상태 정의 없음
+              </div>
             )}
           </div>
 
-          {/* Search */}
-          <div className="p-3 border-b border-[#2a2a4a]">
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
-              <input
-                type="text"
-                placeholder="검색..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-8 pr-3 py-1.5 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
-              />
+          {/* Agent Filter */}
+          <div className="px-3 py-2 border-b border-[#2a2a4a]">
+            <div className="flex items-center gap-2 mb-1.5">
+              <Cpu size={12} className="text-gray-400" />
+              <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Agent</span>
             </div>
+            <select
+              value={selectedAgentFilter || ''}
+              onChange={(e) => setSelectedAgentFilter(e.target.value || null)}
+              className="w-full px-2 py-1.5 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-xs text-white focus:outline-none focus:border-blue-500 cursor-pointer"
+            >
+              <option value="">All Agents</option>
+              {agents?.map((agent) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.name || agent.id}
+                </option>
+              ))}
+            </select>
           </div>
+
+          {/* Compatible Agents Section - Prominent placement */}
+          {selectedTemplate && compatibleAgentsData && (
+            <div className="mx-3 my-2 p-2.5 bg-gradient-to-r from-green-500/10 to-emerald-500/5 border border-green-500/30 rounded-lg">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Users size={14} className="text-green-400" />
+                  <span className="text-xs font-semibold text-green-400">
+                    호환 에이전트
+                  </span>
+                </div>
+                <span className="text-xs text-green-300 font-bold">
+                  {compatibleAgentsData.agents?.filter(a => a.has_all_capabilities).length || 0}개
+                </span>
+              </div>
+              {compatibleAgentsData.agents?.filter(a => a.has_all_capabilities).length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {compatibleAgentsData.agents
+                    .filter(agent => agent.has_all_capabilities)
+                    .map(agent => (
+                      <div
+                        key={agent.agent_id}
+                        className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium ${
+                          agent.status === 'online'
+                            ? 'bg-green-500/20 text-green-300 border border-green-500/40'
+                            : 'bg-gray-600/20 text-gray-400 border border-gray-500/30'
+                        }`}
+                      >
+                        <div className={`w-1.5 h-1.5 rounded-full ${
+                          agent.status === 'online' ? 'bg-green-400' : 'bg-gray-500'
+                        }`} />
+                        {agent.agent_name}
+                      </div>
+                    ))}
+                </div>
+              ) : (
+                <div className="text-[10px] text-yellow-400 bg-yellow-500/10 px-2 py-1 rounded">
+                  ⚠️ 호환되는 에이전트 없음 - Action Type 확인 필요
+                </div>
+              )}
+              {compatibleAgentsData.agents?.filter(a => !a.has_all_capabilities).length > 0 && (
+                <div className="text-[9px] text-gray-500 mt-1.5">
+                  +{compatibleAgentsData.agents.filter(a => !a.has_all_capabilities).length}개 부분 호환
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Node Palette */}
           <div className="flex-1 overflow-y-auto">
-            {filteredPalette.length === 0 ? (
+            {nodePalette.length === 0 ? (
               <div className="p-4 text-center text-gray-500 text-xs">No nodes found</div>
             ) : (
-              filteredPalette.map(category => (
+              nodePalette.map(category => (
                 <div key={category.category}>
                   <button
                     onClick={() => toggleCategory(category.category)}
@@ -1487,66 +1572,49 @@ function ActionGraphEditor() {
                   </button>
                   {expandedCategories.includes(category.category) && (
                     <div className="px-2 pb-2 space-y-0.5">
-                      {category.category === 'States' ? (
-                        <>
-                          <div className="px-2 py-1 text-[9px] text-gray-600 italic">Reference only</div>
-                          {category.items.map((item, idx) => (
-                            <div
-                              key={`${item.subtype}-${idx}`}
-                              className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-[#1a1a2e] transition-colors"
-                            >
-                              <div
-                                className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                                style={{ backgroundColor: item.color }}
-                              />
-                              <span className="text-xs text-gray-400">{item.label}</span>
-                            </div>
-                          ))}
-                        </>
-                      ) : (
-                        category.items.map((item, idx) => (
+                      {category.items.map((item, idx) => (
+                        <div
+                          key={`${item.subtype}-${idx}`}
+                          draggable={true}
+                          onDragStart={(e) => {
+                            e.stopPropagation()
+                            onDragStart(e, item)
+                          }}
+                          className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-grab active:cursor-grabbing hover:bg-[#2a2a4a] transition-colors border border-transparent hover:border-[#3a3a5a] ${
+                            item.isAvailable === false ? 'opacity-50' : ''
+                          }`}
+                        >
                           <div
-                            key={`${item.subtype}-${idx}`}
-                            draggable={true}
-                            onDragStart={(e) => {
-                              e.stopPropagation()
-                              onDragStart(e, item)
-                            }}
-                            className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-grab active:cursor-grabbing hover:bg-[#2a2a4a] transition-colors border border-transparent hover:border-[#3a3a5a] ${
-                              item.isAvailable === false ? 'opacity-50' : ''
-                            }`}
-                          >
-                            <div
-                              className="w-2.5 h-2.5 rounded-sm flex-shrink-0"
-                              style={{ backgroundColor: item.color }}
-                            />
-                            <div className="flex-1 min-w-0">
-                              <span className="text-xs text-gray-300 block truncate">{item.label}</span>
-                              {item.duringState && (
-                                <span className="text-[9px] text-yellow-500">{item.duringState}</span>
-                              )}
-                              {item.robotCount !== undefined && (
-                                <span className="text-[9px] text-blue-400">{item.robotCount} robot{item.robotCount !== 1 ? 's' : ''}</span>
-                              )}
-                              {item.agentName && (
-                                <span className="text-[9px] text-cyan-400">{item.agentName}</span>
-                              )}
-                              {item.actionType && !item.duringState && !item.robotCount && (
-                                <span className="text-[9px] text-purple-400">{item.actionType.split('/').pop()}</span>
-                              )}
-                            </div>
-                            {item.isAvailable === false && (
-                              <span className="text-[8px] text-red-400">busy</span>
+                            className="w-2.5 h-2.5 rounded-sm flex-shrink-0"
+                            style={{ backgroundColor: item.color }}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <span className="text-xs text-gray-300 block truncate">{item.label}</span>
+                            {item.duringState && (
+                              <span className="text-[9px] text-yellow-500">{item.duringState}</span>
+                            )}
+                            {item.robotCount !== undefined && (
+                              <span className="text-[9px] text-blue-400">{item.robotCount} robot{item.robotCount !== 1 ? 's' : ''}</span>
+                            )}
+                            {item.agentName && (
+                              <span className="text-[9px] text-cyan-400">{item.agentName}</span>
+                            )}
+                            {item.actionType && !item.duringState && !item.robotCount && (
+                              <span className="text-[9px] text-purple-400">{item.actionType.split('/').pop()}</span>
                             )}
                           </div>
-                        ))
-                      )}
+                          {item.isAvailable === false && (
+                            <span className="text-[8px] text-red-400">busy</span>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
               ))
             )}
           </div>
+
         </div>
       )}
 
@@ -1585,16 +1653,6 @@ function ActionGraphEditor() {
               </button>
               <button
                 onClick={() => {
-                  console.log('[Assign Button] Clicked, selectedTemplate:', selectedTemplate?.id, selectedTemplate?.name)
-                  setShowAssignModal(true)
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600/20 text-blue-400 rounded-lg hover:bg-blue-600/30 text-sm"
-              >
-                <Link2 size={14} />
-                Assign to Agent
-              </button>
-              <button
-                onClick={() => {
                   if (confirm(`Delete template "${selectedTemplate.name}"?`)) {
                     deleteTemplate.mutate(selectedTemplate.id)
                   }
@@ -1608,57 +1666,162 @@ function ActionGraphEditor() {
         </div>
 
         {/* Canvas or Welcome */}
-        <div ref={reactFlowWrapper} className="flex-1">
-          {selectedTemplate ? (
-            <ReactFlow
-              nodes={nodes}
-              edges={edgesWithDelete}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onConnect={onConnect}
-              onConnectStart={onConnectStart}
-              onConnectEnd={onConnectEnd}
-              onDrop={onDrop}
-              onDragOver={onDragOver}
-              nodeTypes={nodeTypes}
-              edgeTypes={edgeTypes}
-              fitView
-              snapToGrid
-              snapGrid={[16, 16]}
-              defaultEdgeOptions={{
-                type: 'deletable',
-                animated: false,
-                markerEnd: { type: MarkerType.ArrowClosed, color: '#22c55e' },
-                style: { stroke: '#22c55e', strokeWidth: 2 },
-              }}
-              connectionLineStyle={{ stroke: '#64748b', strokeWidth: 2 }}
-              connectionLineType={ConnectionLineType.SmoothStep}
-            >
-              <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="#2a2a4a" />
-              <Controls className="!bg-[#16162a] !border-[#2a2a4a] !rounded-lg [&>button]:!bg-[#16162a] [&>button]:!border-[#2a2a4a] [&>button]:!text-white [&>button:hover]:!bg-[#2a2a4a]" />
-              <Panel position="bottom-center" className="mb-4">
-                <div className="bg-[#16162a]/90 backdrop-blur-sm px-4 py-2 rounded-lg border border-[#2a2a4a] text-xs text-gray-400">
-                  Drag action servers to canvas to build workflow
+        <div className="flex-1 flex">
+          <div ref={reactFlowWrapper} className="flex-1">
+            {selectedTemplate ? (
+              <ReactFlow
+                nodes={nodes}
+                edges={edgesWithDelete}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onConnect={onConnect}
+                onConnectStart={onConnectStart}
+                onConnectEnd={onConnectEnd}
+                onDrop={onDrop}
+                onDragOver={onDragOver}
+                nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
+                fitView
+                snapToGrid
+                snapGrid={[16, 16]}
+                defaultEdgeOptions={{
+                  type: 'deletable',
+                  animated: false,
+                  markerEnd: { type: MarkerType.ArrowClosed, color: '#22c55e' },
+                  style: { stroke: '#22c55e', strokeWidth: 2 },
+                }}
+                connectionLineStyle={{ stroke: '#64748b', strokeWidth: 2 }}
+                connectionLineType={ConnectionLineType.SmoothStep}
+              >
+                <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="#2a2a4a" />
+                <Controls className="!bg-[#16162a] !border-[#2a2a4a] !rounded-lg [&>button]:!bg-[#16162a] [&>button]:!border-[#2a2a4a] [&>button]:!text-white [&>button:hover]:!bg-[#2a2a4a]" />
+                <Panel position="bottom-center" className="mb-4">
+                  <div className="bg-[#16162a]/90 backdrop-blur-sm px-4 py-2 rounded-lg border border-[#2a2a4a] text-xs text-gray-400">
+                    Drag action servers to canvas to build workflow
+                  </div>
+                </Panel>
+              </ReactFlow>
+            ) : (
+              <div className="h-full flex items-center justify-center">
+                <div className="text-center">
+                  <Layout className="w-16 h-16 mx-auto mb-4 text-gray-700" />
+                  <h2 className="text-xl font-semibold text-gray-400 mb-2">템플릿을 선택하세요</h2>
+                  <p className="text-gray-600 text-sm max-w-md">
+                    왼쪽 패널에서 템플릿을 선택하여 워크플로우를 확인하고 편집하거나,
+                    새 템플릿을 생성하세요.
+                  </p>
+                  <button
+                    onClick={() => setShowCreateModal(true)}
+                    className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 inline-flex items-center gap-2"
+                  >
+                    <Plus size={16} />
+                    Create New Template
+                  </button>
                 </div>
-              </Panel>
-            </ReactFlow>
-          ) : (
-            <div className="h-full flex items-center justify-center">
-              <div className="text-center">
-                <Layout className="w-16 h-16 mx-auto mb-4 text-gray-700" />
-                <h2 className="text-xl font-semibold text-gray-400 mb-2">템플릿을 선택하세요</h2>
-                <p className="text-gray-600 text-sm max-w-md">
-                  왼쪽 패널에서 템플릿을 선택하여 워크플로우를 확인하고 편집하거나,
-                  새 템플릿을 생성하세요.
-                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Right Side Panel - Telemetry & Assignments */}
+          {selectedTemplate && rightPanelTab && (
+            <div className="w-80 bg-[#16162a] border-l border-[#2a2a4a] flex flex-col h-full">
+              {/* Panel Tabs */}
+              <div className="flex border-b border-[#2a2a4a]">
                 <button
-                  onClick={() => setShowCreateModal(true)}
-                  className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 inline-flex items-center gap-2"
+                  onClick={() => setRightPanelTab('telemetry')}
+                  className={`flex-1 px-3 py-2 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors ${
+                    rightPanelTab === 'telemetry'
+                      ? 'text-green-400 bg-green-500/10 border-b-2 border-green-500'
+                      : 'text-gray-400 hover:text-white hover:bg-[#1a1a2e]'
+                  }`}
                 >
-                  <Plus size={16} />
-                  Create New Template
+                  <Radio size={12} className={rightPanelTab === 'telemetry' ? 'animate-pulse' : ''} />
+                  Telemetry
+                </button>
+                <button
+                  onClick={() => setRightPanelTab('assignments')}
+                  className={`flex-1 px-3 py-2 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors ${
+                    rightPanelTab === 'assignments'
+                      ? 'text-blue-400 bg-blue-500/10 border-b-2 border-blue-500'
+                      : 'text-gray-400 hover:text-white hover:bg-[#1a1a2e]'
+                  }`}
+                >
+                  <Link2 size={12} />
+                  Assignments
+                </button>
+                <button
+                  onClick={() => setRightPanelTab(null)}
+                  className="px-2 py-2 text-gray-500 hover:text-white hover:bg-[#1a1a2e] transition-colors"
+                >
+                  <X size={14} />
                 </button>
               </div>
+
+              {/* Panel Content */}
+              {rightPanelTab === 'telemetry' ? (
+                <TelemetryPanel
+                  isOpen={true}
+                  onClose={() => setRightPanelTab(null)}
+                  embedded={true}
+                />
+              ) : rightPanelTab === 'assignments' ? (
+                <div className="flex-1 overflow-y-auto p-3">
+                  <div className="mb-4">
+                    <h3 className="text-sm font-semibold text-white mb-2">할당된 에이전트</h3>
+                    {templateAssignments.length === 0 ? (
+                      <div className="text-xs text-gray-500 p-3 bg-[#1a1a2e] rounded-lg">
+                        이 템플릿은 아직 에이전트에 할당되지 않았습니다.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {templateAssignments.map(a => (
+                          <div key={a.id} className="flex items-center justify-between p-2 bg-[#1a1a2e] rounded-lg">
+                            <div className="flex items-center gap-2">
+                              <Cpu size={14} className="text-green-400" />
+                              <span className="text-sm text-white">{a.agent_name}</span>
+                            </div>
+                            <button
+                              onClick={() => unassignTemplate.mutate({ templateId: selectedTemplate.id, agentId: a.agent_id })}
+                              className="p-1 text-red-400 hover:bg-red-500/20 rounded"
+                              title="할당 해제"
+                            >
+                              <Unlink size={12} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={() => setShowAssignModal(true)}
+                    className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-blue-600/20 text-blue-400 rounded-lg hover:bg-blue-600/30 text-sm"
+                  >
+                    <Plus size={14} />
+                    에이전트에 할당
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          {/* Right Panel Toggle Buttons - when panel is closed */}
+          {selectedTemplate && !rightPanelTab && (
+            <div className="flex flex-col gap-1 p-2 bg-[#16162a] border-l border-[#2a2a4a]">
+              <button
+                onClick={() => setRightPanelTab('telemetry')}
+                className="p-2 text-gray-400 hover:text-green-400 hover:bg-green-500/10 rounded-lg transition-colors"
+                title="Telemetry 패널 열기"
+              >
+                <Radio size={18} />
+              </button>
+              <button
+                onClick={() => setRightPanelTab('assignments')}
+                className="p-2 text-gray-400 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-colors"
+                title="Assignments 패널 열기"
+              >
+                <Link2 size={18} />
+              </button>
             </div>
           )}
         </div>
@@ -1702,17 +1865,6 @@ function ActionGraphEditor() {
             </div>
           </div>
         )
-      )}
-
-      {/* Create State Definition Modal */}
-      {showCreateStateDefModal && (
-        <CreateStateDefinitionModal
-          onClose={() => setShowCreateStateDefModal(false)}
-          onCreated={() => {
-            setShowCreateStateDefModal(false)
-            refetchStateDef()
-          }}
-        />
       )}
 
       {/* Add State Modal */}
@@ -2351,234 +2503,6 @@ function AssignTemplateModal({
   )
 }
 
-function CreateStateDefinitionModal({
-  onClose,
-  onCreated,
-}: {
-  onClose: () => void
-  onCreated: () => void
-}) {
-  const [formData, setFormData] = useState({
-    id: '',
-    name: '',
-    description: '',
-  })
-  const [states, setStates] = useState<string[]>([])
-  const [newState, setNewState] = useState('')
-  const [defaultState, setDefaultState] = useState('')
-  const [error, setError] = useState('')
-  const queryClient = useQueryClient()
-
-  useEffect(() => {
-    if (states.length === 0) {
-      if (defaultState !== '') {
-        setDefaultState('')
-      }
-      return
-    }
-    if (!defaultState || !states.includes(defaultState)) {
-      setDefaultState(states[0])
-    }
-  }, [states, defaultState])
-
-  const createStateDef = useMutation({
-    mutationFn: (payload: Partial<StateDefinition>) => stateDefinitionApi.create(payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['state-definitions'] })
-      onCreated()
-    },
-    onError: (err: any) => setError(err.response?.data?.detail || 'Failed to create state definition'),
-  })
-
-  const handleAddState = () => {
-    const trimmed = newState.trim().toLowerCase().replace(/\s+/g, '_')
-    if (!trimmed) {
-      setError('State name is required')
-      return
-    }
-    if (states.includes(trimmed)) {
-      setError('State already exists')
-      return
-    }
-    setStates(prev => [...prev, trimmed])
-    if (!defaultState) {
-      setDefaultState(trimmed)
-    }
-    setNewState('')
-    setError('')
-  }
-
-  const handleRemoveState = (stateToRemove: string) => {
-    const nextStates = states.filter(state => state !== stateToRemove)
-    setStates(nextStates)
-    if (defaultState === stateToRemove) {
-      setDefaultState(nextStates[0] || '')
-    }
-    setError('')
-  }
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    const id = formData.id.trim()
-    const name = formData.name.trim()
-    if (!id || !name) {
-      setError('ID and Name are required')
-      return
-    }
-    if (states.length === 0) {
-      setError('At least one state is required')
-      return
-    }
-
-    const payload: Partial<StateDefinition> = {
-      id,
-      name,
-      states,
-      default_state: defaultState || states[0],
-    }
-    const description = formData.description.trim()
-    if (description) {
-      payload.description = description
-    }
-
-    createStateDef.mutate(payload)
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-      <div className="bg-[#16162a] rounded-xl shadow-2xl w-full max-w-lg border border-[#2a2a4a]">
-        <div className="px-6 py-4 border-b border-[#2a2a4a] flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-white">Create State Definition</h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-white">
-            <X size={20} />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          {error && (
-            <div className="p-3 bg-red-500/20 border border-red-500/50 rounded-lg text-red-400 text-sm">
-              {error}
-            </div>
-          )}
-
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">정의 ID</label>
-            <input
-              type="text"
-              value={formData.id}
-              onChange={e => setFormData(prev => ({ ...prev, id: e.target.value }))}
-              placeholder="예: default_states"
-              className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white placeholder-gray-600"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">이름</label>
-            <input
-              type="text"
-              value={formData.name}
-              onChange={e => setFormData(prev => ({ ...prev, name: e.target.value }))}
-              placeholder="예: Fleet States"
-              className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white placeholder-gray-600"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">설명</label>
-            <textarea
-              value={formData.description}
-              onChange={e => setFormData(prev => ({ ...prev, description: e.target.value }))}
-              placeholder="선택사항..."
-              className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white resize-none placeholder-gray-600"
-              rows={2}
-            />
-          </div>
-
-          <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-300">상태 목록</label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={newState}
-                onChange={e => {
-                  setNewState(e.target.value)
-                  setError('')
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    handleAddState()
-                  }
-                }}
-                placeholder="상태 이름"
-                className="flex-1 px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white text-sm"
-              />
-              <button
-                type="button"
-                onClick={handleAddState}
-                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm"
-              >
-                추가
-              </button>
-            </div>
-
-            {states.length === 0 ? (
-              <div className="text-xs text-gray-500 italic">추가된 상태 없음</div>
-            ) : (
-              <div className="space-y-2 max-h-40 overflow-y-auto">
-                {states.map(state => (
-                  <div key={state} className="flex items-center justify-between px-3 py-2 bg-[#1a1a2e] rounded-lg">
-                    <span className="text-sm text-white">{state}</span>
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveState(state)}
-                      className="p-1 text-gray-500 hover:text-red-400 hover:bg-red-500/20 rounded"
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">기본 상태</label>
-            <select
-              value={defaultState}
-              onChange={e => setDefaultState(e.target.value)}
-              disabled={states.length === 0}
-              className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white disabled:opacity-50"
-            >
-              <option value="">-- 기본 상태 선택 --</option>
-              {states.map(state => (
-                <option key={state} value={state}>
-                  {state}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex justify-end gap-3 pt-4">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white">
-              취소
-            </button>
-            <button
-              type="submit"
-              disabled={createStateDef.isPending}
-              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-            >
-              {createStateDef.isPending ? '생성 중...' : '생성'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  )
-}
-
 function AddStateModal({
   stateDef,
   onClose,
@@ -2797,8 +2721,10 @@ function AddStateModal({
 
 export default function ActionGraph() {
   return (
-    <ReactFlowProvider>
-      <ActionGraphEditor />
-    </ReactFlowProvider>
+    <TelemetryProvider>
+      <ReactFlowProvider>
+        <ActionGraphEditor />
+      </ReactFlowProvider>
+    </TelemetryProvider>
   )
 }

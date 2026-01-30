@@ -18,6 +18,10 @@
 namespace fleet_agent {
 namespace executor {
 
+// Type aliases for convenience (same as MessageConverter's internal types)
+using MessageMembers = rosidl_typesupport_introspection_cpp::MessageMembers;
+using MessageMember = rosidl_typesupport_introspection_cpp::MessageMember;
+
 namespace action_client_logging {
 ::fleet_agent::logging::ComponentLogger action_log("DynamicActionClient");
 }
@@ -102,6 +106,68 @@ bool MessageConverter::json_to_message(
     return true;
 }
 
+// Helper template to set array values from JSON
+template<typename T>
+bool set_array_values(const nlohmann::json& json, void* field_ptr, const MessageMember& member) {
+    if (!json.is_array()) {
+        log.warn("Expected array for field {}, got {}", member.name_, json.type_name());
+        return false;
+    }
+
+    size_t json_size = json.size();
+
+    if (member.array_size_ > 0 && !member.is_upper_bound_) {
+        // Fixed-size array (e.g., float64[7])
+        T* arr = static_cast<T*>(field_ptr);
+        size_t copy_count = std::min(json_size, static_cast<size_t>(member.array_size_));
+        for (size_t i = 0; i < copy_count; ++i) {
+            arr[i] = json[i].get<T>();
+        }
+        log.debug("Set fixed array {} with {} elements", member.name_, copy_count);
+    } else {
+        // Dynamic array (std::vector<T>)
+        auto* vec = static_cast<std::vector<T>*>(field_ptr);
+        vec->clear();
+        vec->reserve(json_size);
+        for (size_t i = 0; i < json_size; ++i) {
+            vec->push_back(json[i].get<T>());
+        }
+        log.debug("Set dynamic array {} with {} elements", member.name_, json_size);
+    }
+    return true;
+}
+
+// Specialization for string arrays
+template<>
+bool set_array_values<std::string>(const nlohmann::json& json, void* field_ptr, const MessageMember& member) {
+    if (!json.is_array()) {
+        log.warn("Expected array for field {}, got {}", member.name_, json.type_name());
+        return false;
+    }
+
+    size_t json_size = json.size();
+
+    if (member.array_size_ > 0 && !member.is_upper_bound_) {
+        // Fixed-size string array
+        std::string* arr = static_cast<std::string*>(field_ptr);
+        size_t copy_count = std::min(json_size, static_cast<size_t>(member.array_size_));
+        for (size_t i = 0; i < copy_count; ++i) {
+            arr[i] = json[i].get<std::string>();
+        }
+        log.debug("Set fixed string array {} with {} elements", member.name_, copy_count);
+    } else {
+        // Dynamic string array (std::vector<std::string>)
+        auto* vec = static_cast<std::vector<std::string>*>(field_ptr);
+        vec->clear();
+        vec->reserve(json_size);
+        for (size_t i = 0; i < json_size; ++i) {
+            vec->push_back(json[i].get<std::string>());
+        }
+        log.debug("Set dynamic string array {} with {} elements", member.name_, json_size);
+    }
+    return true;
+}
+
 bool MessageConverter::set_field(
     const nlohmann::json& json,
     const MessageMember& member,
@@ -111,10 +177,50 @@ bool MessageConverter::set_field(
 
     // Handle arrays
     if (member.is_array_) {
-        // For simplicity, only handle basic arrays for now
-        // Full implementation would handle all array types
-        log.debug("Array field {} - using default", member.name_);
-        return true;
+        if (!json.is_array()) {
+            log.warn("Expected JSON array for field {}, got {}", member.name_, json.type_name());
+            return false;
+        }
+
+        try {
+            switch (member.type_id_) {
+                case ROS_TYPE_BOOL:
+                    return set_array_values<bool>(json, field_ptr, member);
+                case ROS_TYPE_BYTE:
+                case ROS_TYPE_UINT8:
+                    return set_array_values<uint8_t>(json, field_ptr, member);
+                case ROS_TYPE_INT8:
+                    return set_array_values<int8_t>(json, field_ptr, member);
+                case ROS_TYPE_UINT16:
+                    return set_array_values<uint16_t>(json, field_ptr, member);
+                case ROS_TYPE_INT16:
+                    return set_array_values<int16_t>(json, field_ptr, member);
+                case ROS_TYPE_UINT32:
+                    return set_array_values<uint32_t>(json, field_ptr, member);
+                case ROS_TYPE_INT32:
+                    return set_array_values<int32_t>(json, field_ptr, member);
+                case ROS_TYPE_UINT64:
+                    return set_array_values<uint64_t>(json, field_ptr, member);
+                case ROS_TYPE_INT64:
+                    return set_array_values<int64_t>(json, field_ptr, member);
+                case ROS_TYPE_FLOAT:
+                    return set_array_values<float>(json, field_ptr, member);
+                case ROS_TYPE_DOUBLE:
+                    return set_array_values<double>(json, field_ptr, member);
+                case ROS_TYPE_STRING:
+                    return set_array_values<std::string>(json, field_ptr, member);
+                case ROS_TYPE_MESSAGE:
+                    // Array of nested messages - more complex handling needed
+                    log.debug("Array of messages for field {} - not yet implemented", member.name_);
+                    return true;
+                default:
+                    log.warn("Unhandled array type {} for field {}", member.type_id_, member.name_);
+                    return false;
+            }
+        } catch (const std::exception& e) {
+            log.warn("Failed to set array field {}: {}", member.name_, e.what());
+            return false;
+        }
     }
 
     try {
@@ -195,6 +301,27 @@ nlohmann::json MessageConverter::message_to_json(
     return result;
 }
 
+// Helper template to get array values as JSON
+template<typename T>
+nlohmann::json get_array_values(const void* field_ptr, const MessageMember& member) {
+    nlohmann::json arr = nlohmann::json::array();
+
+    if (member.array_size_ > 0 && !member.is_upper_bound_) {
+        // Fixed-size array
+        const T* data = static_cast<const T*>(field_ptr);
+        for (size_t i = 0; i < member.array_size_; ++i) {
+            arr.push_back(data[i]);
+        }
+    } else {
+        // Dynamic array (std::vector<T>)
+        const auto* vec = static_cast<const std::vector<T>*>(field_ptr);
+        for (const auto& val : *vec) {
+            arr.push_back(val);
+        }
+    }
+    return arr;
+}
+
 nlohmann::json MessageConverter::get_field(
     const MessageMember& member,
     const void* field_ptr) {
@@ -203,7 +330,38 @@ nlohmann::json MessageConverter::get_field(
 
     // Handle arrays
     if (member.is_array_) {
-        return nlohmann::json::array();  // Simplified
+        switch (member.type_id_) {
+            case ROS_TYPE_BOOL:
+                return get_array_values<bool>(field_ptr, member);
+            case ROS_TYPE_BYTE:
+            case ROS_TYPE_UINT8:
+                return get_array_values<uint8_t>(field_ptr, member);
+            case ROS_TYPE_INT8:
+                return get_array_values<int8_t>(field_ptr, member);
+            case ROS_TYPE_UINT16:
+                return get_array_values<uint16_t>(field_ptr, member);
+            case ROS_TYPE_INT16:
+                return get_array_values<int16_t>(field_ptr, member);
+            case ROS_TYPE_UINT32:
+                return get_array_values<uint32_t>(field_ptr, member);
+            case ROS_TYPE_INT32:
+                return get_array_values<int32_t>(field_ptr, member);
+            case ROS_TYPE_UINT64:
+                return get_array_values<uint64_t>(field_ptr, member);
+            case ROS_TYPE_INT64:
+                return get_array_values<int64_t>(field_ptr, member);
+            case ROS_TYPE_FLOAT:
+                return get_array_values<float>(field_ptr, member);
+            case ROS_TYPE_DOUBLE:
+                return get_array_values<double>(field_ptr, member);
+            case ROS_TYPE_STRING:
+                return get_array_values<std::string>(field_ptr, member);
+            case ROS_TYPE_MESSAGE:
+                // Array of nested messages - not yet fully supported
+                return nlohmann::json::array();
+            default:
+                return nlohmann::json::array();
+        }
     }
 
     switch (member.type_id_) {

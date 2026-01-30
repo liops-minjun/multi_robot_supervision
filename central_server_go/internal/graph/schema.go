@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -682,4 +683,34 @@ func (g *CanonicalGraph) FindUnreachableVertices() []string {
 		}
 	}
 	return unreachable
+}
+
+// =============================================================================
+// Server Pattern Substitution
+// =============================================================================
+
+// SubstituteServerPatterns replaces pattern placeholders in action server names.
+// Supported patterns:
+//   - {namespace} : Replaced with the agent's ROS2 namespace
+//
+// Example: "{namespace}/navigate_to_pose" with namespace="/robot_001"
+//
+//	becomes "/robot_001/navigate_to_pose"
+//
+// If namespace is empty, "{namespace}" is removed and "//" is normalized to "/"
+func (g *CanonicalGraph) SubstituteServerPatterns(namespace string) {
+	for i := range g.Vertices {
+		if g.Vertices[i].Step != nil && g.Vertices[i].Step.Action != nil {
+			server := g.Vertices[i].Step.Action.Server
+			if server != "" {
+				// Substitute {namespace} pattern
+				server = strings.ReplaceAll(server, "{namespace}", namespace)
+				// Normalize double slashes (can happen when namespace is empty)
+				for strings.Contains(server, "//") {
+					server = strings.ReplaceAll(server, "//", "/")
+				}
+				g.Vertices[i].Step.Action.Server = server
+			}
+		}
+	}
 }

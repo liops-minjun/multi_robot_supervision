@@ -862,6 +862,10 @@ func (s *Server) deployBehaviorTreeToAgentSync(ctx context.Context, assignmentID
 		// Set the target agent
 		canonicalGraph.BehaviorTree.AgentID = assignment.AgentID
 
+		// Substitute server name patterns (e.g., {namespace} -> actual namespace)
+		// Always call even if namespace is empty to remove {namespace} placeholders
+		canonicalGraph.SubstituteServerPatterns(agent.Namespace)
+
 		// Serialize to JSON
 		graphJSON, err := json.Marshal(canonicalGraph)
 		if err != nil {

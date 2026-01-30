@@ -1,8 +1,9 @@
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom'
-import { Workflow, History, Globe, Server } from 'lucide-react'
+import { Workflow, History, Globe, Server, FileCode2 } from 'lucide-react'
 
 import { useTranslation } from './i18n'
 import ActionGraph from './pages/ActionGraph'
+import PDDL from './pages/PDDL'
 import TaskHistory from './pages/TaskHistory'
 import AgentDashboard from './pages/AgentDashboard'
 
@@ -18,13 +19,11 @@ function App() {
       <div className="flex h-screen bg-[#0f0f1a]">
         {/* Sidebar */}
         <nav className="w-64 bg-[#16162a] text-white flex flex-col border-r border-[#2a2a4a]">
-          <div className="p-4 border-b border-[#2a2a4a]">
-            <h1 className="text-xl font-bold text-white">Fleet Manager</h1>
-            <p className="text-gray-500 text-sm">Multi-Robot Supervision</p>
-          </div>
+          <div className="h-12 border-b border-[#2a2a4a]" />
 
           <ul className="mt-4 flex-1">
             <NavItem to="/flows" icon={<Workflow size={20} />} label={t('nav.actionGraph')} />
+            <NavItem to="/pddl" icon={<FileCode2 size={20} />} label={t('nav.pddl')} />
             <NavItem to="/agents" icon={<Server size={20} />} label={t('nav.agents')} />
             <NavItem to="/tasks" icon={<History size={20} />} label={t('nav.taskHistory')} />
           </ul>
@@ -46,6 +45,7 @@ function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/flows" replace />} />
             <Route path="/flows" element={<ActionGraph />} />
+            <Route path="/pddl" element={<PDDL />} />
             <Route path="/agents" element={<AgentDashboard />} />
             <Route path="/tasks" element={<TaskHistory />} />
           </Routes>

@@ -94,17 +94,25 @@ func (s *Server) CreateBehaviorTree(w http.ResponseWriter, r *http.Request) {
 		statesJSON, _ = json.Marshal(dbStates)
 	}
 
+	// Extract required action types from steps
+	var dbStepsForExtract []db.BehaviorTreeStep
+	stepsJSONForExtract, _ := json.Marshal(normalizedSteps)
+	json.Unmarshal(stepsJSONForExtract, &dbStepsForExtract)
+	requiredActionTypes := db.ExtractActionTypesFromSteps(dbStepsForExtract)
+	requiredActionTypesJSON, _ := json.Marshal(requiredActionTypes)
+
 	graph := &db.BehaviorTree{
-		ID:                 req.ID,
-		Name:               req.Name,
-		Preconditions:      datatypes.JSON(preconditionsJSON),
-		Steps:              datatypes.JSON(stepsJSON),
-		States:             datatypes.JSON(statesJSON),
-		AutoGenerateStates: autoGenerateStates,
-		Version:            1,
-		IsTemplate:         req.AgentID == "",
-		CreatedAt:          time.Now(),
-		UpdatedAt:          time.Now(),
+		ID:                  req.ID,
+		Name:                req.Name,
+		Preconditions:       datatypes.JSON(preconditionsJSON),
+		Steps:               datatypes.JSON(stepsJSON),
+		States:              datatypes.JSON(statesJSON),
+		RequiredActionTypes: datatypes.JSON(requiredActionTypesJSON),
+		AutoGenerateStates:  autoGenerateStates,
+		Version:             1,
+		IsTemplate:          req.AgentID == "",
+		CreatedAt:           time.Now(),
+		UpdatedAt:           time.Now(),
 	}
 
 	if req.Description != "" {
@@ -206,6 +214,13 @@ func (s *Server) UpdateBehaviorTree(w http.ResponseWriter, r *http.Request) {
 		normalizedSteps := normalizeBehaviorTreeSteps(req.Steps)
 		stepsJSON, _ := json.Marshal(normalizedSteps)
 		graph.Steps = datatypes.JSON(stepsJSON)
+
+		// Update required action types when steps change
+		var dbStepsForExtract []db.BehaviorTreeStep
+		json.Unmarshal(stepsJSON, &dbStepsForExtract)
+		requiredActionTypes := db.ExtractActionTypesFromSteps(dbStepsForExtract)
+		requiredActionTypesJSON, _ := json.Marshal(requiredActionTypes)
+		graph.RequiredActionTypes = datatypes.JSON(requiredActionTypesJSON)
 	}
 
 	// Handle auto_generate_states
@@ -788,6 +803,40 @@ func (s *Server) DeployBehaviorTreeToAgent(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Validate agent capability compatibility
+	var requiredTypes []string
+	if dbGraph.RequiredActionTypes != nil {
+		json.Unmarshal(dbGraph.RequiredActionTypes, &requiredTypes)
+	}
+
+	if len(requiredTypes) > 0 {
+		agentCaps, err := s.repo.GetAgentCapabilities(agentID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Failed to get agent capabilities: "+err.Error())
+			return
+		}
+
+		// Build set of agent's action types
+		agentActionTypes := make(map[string]bool)
+		for _, cap := range agentCaps {
+			agentActionTypes[cap.ActionType] = true
+		}
+
+		// Check for missing capabilities
+		var missingTypes []string
+		for _, reqType := range requiredTypes {
+			if !agentActionTypes[reqType] {
+				missingTypes = append(missingTypes, reqType)
+			}
+		}
+
+		if len(missingTypes) > 0 {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf(
+				"Agent does not support required action types: %v", missingTypes))
+			return
+		}
+	}
+
 	// Convert to canonical format
 	canonicalGraph, err := graphpkg.FromDBModel(dbGraph)
 	if err != nil {
@@ -808,6 +857,10 @@ func (s *Server) DeployBehaviorTreeToAgent(w http.ResponseWriter, r *http.Reques
 
 	// Set the target agent
 	canonicalGraph.BehaviorTree.AgentID = agentID
+
+	// Substitute server name patterns (e.g., {namespace} -> actual namespace)
+	// Always call even if namespace is empty to remove {namespace} placeholders
+	canonicalGraph.SubstituteServerPatterns(agent.Namespace)
 
 	// Serialize the graph to JSON
 	graphJSON, err := json.Marshal(canonicalGraph)

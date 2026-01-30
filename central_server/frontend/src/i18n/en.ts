@@ -34,6 +34,7 @@ export const en = {
   'nav.robotMonitor': 'Robot Monitor',
   'nav.stateDefinitions': 'State Definitions',
   'nav.actionGraph': 'Behavior Tree',
+  'nav.pddl': 'PDDL',
   'nav.agents': 'Agents',
   'nav.monitoring': 'Monitoring',
   'nav.waypoints': 'Waypoints',
