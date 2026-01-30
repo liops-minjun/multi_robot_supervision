@@ -189,6 +189,7 @@ void populate_from_graph_json(fleet::v1::ActionGraph& graph) {
                                     action->set_timeout_sec(aj["timeout_sec"].get<float>());
                                 }
                                 if (aj.contains("params") && aj["params"].is_object()) {
+                                    // Preserve the full params object including field_sources
                                     std::string params_str = aj["params"].dump();
                                     action->set_goal_params(params_str);
                                 }

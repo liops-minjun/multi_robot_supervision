@@ -1076,14 +1076,72 @@ void Agent::execute_step(const std::string& step_id) {
     const auto& goal_params = action.goal_params();
     if (!goal_params.empty()) {
         try {
-            goal_json = nlohmann::json::parse(
+            auto params_json = nlohmann::json::parse(
                 std::string(goal_params.begin(), goal_params.end()));
-        } catch (...) {
-            log.warn("Failed to parse action goal_params as JSON");
+
+            // Check if params contains field_sources (canonical format from UI)
+            if (params_json.contains("field_sources") && params_json["field_sources"].is_object()) {
+                log.info("Step {} has field_sources, resolving bindings...", step_id);
+
+                // Start with data if present
+                if (params_json.contains("data") && params_json["data"].is_object()) {
+                    goal_json = params_json["data"];
+                }
+
+                // Resolve each field source
+                for (auto& [field_path, source_config] : params_json["field_sources"].items()) {
+                    std::string source_type = source_config.value("source", "constant");
+
+                    if (source_type == "constant") {
+                        // Use constant value directly
+                        if (source_config.contains("value")) {
+                            goal_json[field_path] = source_config["value"];
+                            log.info("  {} = {} (constant)", field_path, source_config["value"].dump());
+                        }
+                    } else if (source_type == "step_result") {
+                        // Resolve from previous step result
+                        std::string src_step_id = source_config.value("step_id", "");
+                        std::string result_field = source_config.value("result_field", "");
+
+                        if (!src_step_id.empty() && !result_field.empty()) {
+                            std::string var_key = src_step_id + "." + result_field;
+                            log.info("  {} <- {}.{}", field_path, src_step_id, result_field);
+
+                            if (task.variables.count(var_key)) {
+                                std::string var_value = task.variables[var_key];
+                                try {
+                                    goal_json[field_path] = nlohmann::json::parse(var_value);
+                                } catch (...) {
+                                    goal_json[field_path] = var_value;
+                                }
+                                log.info("    Resolved: {} = {}", field_path, goal_json[field_path].dump());
+                            } else {
+                                log.warn("    Variable {} not found in task.variables", var_key);
+                                // List available variables for debugging
+                                log.info("    Available variables:");
+                                for (const auto& [k, v] : task.variables) {
+                                    log.info("      {} = {}", k, v.substr(0, 50));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                log.info("Resolved goal_json: {}", goal_json.dump());
+            } else {
+                // No field_sources - use as-is or simple data format
+                if (params_json.contains("data") && params_json["data"].is_object()) {
+                    goal_json = params_json["data"];
+                } else {
+                    goal_json = params_json;
+                }
+            }
+        } catch (const std::exception& e) {
+            log.warn("Failed to parse action goal_params as JSON: {}", e.what());
         }
     }
 
-    // Variable substitution
+    // Legacy variable substitution for ${var} syntax
     for (auto& [key, value] : goal_json.items()) {
         if (value.is_string()) {
             std::string s = value.get<std::string>();
@@ -1135,6 +1193,18 @@ void Agent::on_action_result(bool success, const std::string& result_json) {
     // Store result in variables
     task.variables[task.current_step_id + ".result"] = result_json;
     task.variables[task.current_step_id + ".success"] = success ? "true" : "false";
+
+    // Parse result JSON and store individual fields for field_sources binding
+    try {
+        auto result = nlohmann::json::parse(result_json);
+        for (auto& [key, value] : result.items()) {
+            std::string var_key = task.current_step_id + "." + key;
+            task.variables[var_key] = value.dump();
+            log.info("Stored variable: {} = {}", var_key, value.dump());
+        }
+    } catch (const std::exception& e) {
+        log.warn("Failed to parse result JSON for variable extraction: {}", e.what());
+    }
 
     // Apply success_states or failure_states
     if (state_tracker_mgr_) {
@@ -1328,6 +1398,25 @@ void Agent::send_capabilities() {
         c->set_action_type(cap.action_type);
         c->set_action_server(cap.action_server);
         c->set_is_available(cap.available.load());  // Use actual availability status
+
+        // Set JSON schemas
+        if (!cap.goal_schema_json.empty()) {
+            c->set_goal_schema(cap.goal_schema_json);
+        }
+        if (!cap.result_schema_json.empty()) {
+            c->set_result_schema(cap.result_schema_json);
+        }
+        if (!cap.feedback_schema_json.empty()) {
+            c->set_feedback_schema(cap.feedback_schema_json);
+        }
+
+        // Set success criteria
+        if (!cap.success_criteria.field.empty()) {
+            auto* criteria = c->mutable_success_criteria();
+            criteria->set_field(cap.success_criteria.field);
+            criteria->set_operator_(cap.success_criteria.op);
+            criteria->set_value(cap.success_criteria.value);
+        }
 
         // Set lifecycle state
         auto lc_state = cap.lifecycle_state.load();

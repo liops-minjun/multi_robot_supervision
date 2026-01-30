@@ -2,6 +2,7 @@
 // Graph Executor Implementation
 
 #include "fleet_agent/graph/executor.hpp"
+#include "fleet_agent/graph/field_source.hpp"
 #include "fleet_agent/core/logger.hpp"
 #include "fleet_agent/state/state_tracker.hpp"
 
@@ -9,6 +10,7 @@
 #include <cctype>
 #include <iterator>
 #include <regex>
+#include <sstream>
 
 // Include generated proto headers
 #include "fleet/v1/graphs.pb.h"
@@ -401,10 +403,38 @@ std::optional<ActionRequest> GraphExecutor::create_action_request(
     request.action_server = action.action_server();
     request.timeout_sec = action.timeout_sec();
 
-    // Substitute variables in parameters
+    // Parse and resolve parameters
     if (!action.goal_params().empty()) {
         std::string params_str(action.goal_params().begin(), action.goal_params().end());
-        request.params_json = substitute_variables(params_str, ctx);
+
+        try {
+            auto params_json = nlohmann::json::parse(params_str);
+
+            // Check if params contains field_sources (canonical format)
+            if (params_json.contains("field_sources") && params_json["field_sources"].is_object()) {
+                // Parse as ActionParamsConfig and resolve field sources
+                auto params_config = parse_action_params(params_json);
+
+                log.info("Step {} has {} field_sources configured",
+                         vertex.id(), params_config.field_sources.size());
+
+                auto resolved = resolve_action_params(params_config, ctx);
+                request.params_json = resolved.dump();
+
+                log.info("Resolved params for step {}: {}",
+                         vertex.id(), request.params_json);
+            } else if (params_json.contains("data") && params_json["data"].is_object()) {
+                // Inline data format - substitute variables in data values
+                nlohmann::json data = params_json["data"];
+                request.params_json = substitute_variables(data.dump(), ctx);
+            } else {
+                // Simple format - just substitute variables
+                request.params_json = substitute_variables(params_str, ctx);
+            }
+        } catch (const std::exception& ex) {
+            log.warn("Failed to parse params JSON, using raw substitution: {}", ex.what());
+            request.params_json = substitute_variables(params_str, ctx);
+        }
     }
 
     // Add step-level parameters
@@ -439,10 +469,12 @@ void GraphExecutor::apply_step_result(
     }
 
     // Parse result JSON and extract fields
+    size_t field_count = 0;
     try {
         auto result = nlohmann::json::parse(result_json);
         for (auto& [key, value] : result.items()) {
             ctx.variables[step_id + "." + key] = value.dump();
+            field_count++;
         }
     } catch (...) {
         // Ignore JSON errors
@@ -455,7 +487,8 @@ void GraphExecutor::apply_step_result(
     }
     ctx.variables["prev_step.result"] = result_json;
 
-    log.debug("Applied step {} result: success={}", step_id, success);
+    log.info("Applied step {} result: success={}, stored {} variables (e.g. {}.success, {}.message)",
+             step_id, success, field_count + 3, step_id, step_id);
 }
 
 std::string GraphExecutor::evaluate_condition(
@@ -548,6 +581,206 @@ executor::PreconditionEvaluator::Result GraphExecutor::check_step_condition(
     }
 
     return precond_evaluator_.check_start_conditions(conditions, precond_ctx);
+}
+
+// ============================================================
+// Field Source Resolution
+// ============================================================
+
+nlohmann::json GraphExecutor::resolve_field_source(
+    const ParameterFieldSource& source,
+    const ExecutionContext& ctx) {
+
+    switch (source.source) {
+        case ParameterSourceType::Constant:
+            return source.value;
+
+        case ParameterSourceType::StepResult: {
+            // Build variable reference: step_id.result_field
+            std::string var_ref = source.step_id;
+            if (!source.result_field.empty()) {
+                var_ref += "." + source.result_field;
+            }
+
+            log.info("Resolving step_result binding: {} -> {}.{}",
+                     var_ref, source.step_id, source.result_field);
+
+            std::string resolved = resolve_nested_path(var_ref, ctx);
+            if (resolved.empty()) {
+                log.warn("Failed to resolve step_result: {}.{}", source.step_id, source.result_field);
+                return nullptr;
+            }
+
+            log.info("Resolved value: {}", resolved);
+
+            // Try to parse as JSON (for nested objects/arrays)
+            try {
+                return nlohmann::json::parse(resolved);
+            } catch (...) {
+                // Return as string if not valid JSON
+                return resolved;
+            }
+        }
+
+        case ParameterSourceType::Expression: {
+            // Substitute variables in expression and evaluate
+            std::string expr = substitute_variables(source.expression, ctx);
+
+            // Simple expression evaluation for common patterns
+            // TODO: Full expression parser for complex expressions
+            try {
+                // Try to parse as number
+                if (expr.find_first_not_of("0123456789.-+eE") == std::string::npos) {
+                    if (expr.find('.') != std::string::npos || expr.find('e') != std::string::npos) {
+                        return std::stod(expr);
+                    } else {
+                        return std::stoll(expr);
+                    }
+                }
+                // Try to parse as JSON
+                return nlohmann::json::parse(expr);
+            } catch (...) {
+                return expr;
+            }
+        }
+
+        case ParameterSourceType::Dynamic:
+            // Dynamic parameters would be resolved from telemetry
+            // For now, return null and log warning
+            log.warn("Dynamic parameter source not yet implemented");
+            return nullptr;
+    }
+
+    return nullptr;
+}
+
+nlohmann::json GraphExecutor::resolve_action_params(
+    const ActionParamsConfig& params,
+    const ExecutionContext& ctx) {
+
+    // Start with base data if present
+    nlohmann::json result = params.data.empty() ? nlohmann::json::object() : params.data;
+
+    // Apply field sources
+    for (const auto& [field_path, source] : params.field_sources) {
+        nlohmann::json value = resolve_field_source(source, ctx);
+
+        if (!value.is_null()) {
+            set_json_path(result, field_path, value);
+            log.debug("Resolved field '{}' -> {}", field_path, value.dump());
+        } else {
+            log.warn("Field '{}' resolved to null", field_path);
+        }
+    }
+
+    return result;
+}
+
+void GraphExecutor::set_json_path(
+    nlohmann::json& target,
+    const std::string& path,
+    const nlohmann::json& value) {
+
+    if (path.empty()) {
+        target = value;
+        return;
+    }
+
+    // Parse path components (e.g., "pose.position.x" or "poses[0].position")
+    std::vector<std::variant<std::string, size_t>> components;
+    std::string current;
+    bool in_bracket = false;
+
+    for (size_t i = 0; i < path.size(); ++i) {
+        char c = path[i];
+
+        if (c == '[') {
+            if (!current.empty()) {
+                components.push_back(current);
+                current.clear();
+            }
+            in_bracket = true;
+        } else if (c == ']') {
+            if (in_bracket && !current.empty()) {
+                try {
+                    components.push_back(static_cast<size_t>(std::stoul(current)));
+                } catch (...) {
+                    // Invalid array index, treat as string
+                    components.push_back(current);
+                }
+                current.clear();
+            }
+            in_bracket = false;
+        } else if (c == '.' && !in_bracket) {
+            if (!current.empty()) {
+                components.push_back(current);
+                current.clear();
+            }
+        } else {
+            current += c;
+        }
+    }
+    if (!current.empty()) {
+        components.push_back(current);
+    }
+
+    if (components.empty()) {
+        target = value;
+        return;
+    }
+
+    // Navigate to parent and set value
+    nlohmann::json* current_node = &target;
+
+    for (size_t i = 0; i < components.size() - 1; ++i) {
+        if (std::holds_alternative<std::string>(components[i])) {
+            const std::string& key = std::get<std::string>(components[i]);
+
+            // Check next component to determine if we need object or array
+            if (!current_node->is_object()) {
+                *current_node = nlohmann::json::object();
+            }
+            if (!current_node->contains(key)) {
+                if (i + 1 < components.size() && std::holds_alternative<size_t>(components[i + 1])) {
+                    (*current_node)[key] = nlohmann::json::array();
+                } else {
+                    (*current_node)[key] = nlohmann::json::object();
+                }
+            }
+            current_node = &(*current_node)[key];
+
+        } else {
+            size_t idx = std::get<size_t>(components[i]);
+
+            if (!current_node->is_array()) {
+                *current_node = nlohmann::json::array();
+            }
+            // Extend array if needed
+            while (current_node->size() <= idx) {
+                current_node->push_back(nlohmann::json::object());
+            }
+            current_node = &(*current_node)[idx];
+        }
+    }
+
+    // Set the final value
+    const auto& last = components.back();
+    if (std::holds_alternative<std::string>(last)) {
+        const std::string& key = std::get<std::string>(last);
+        if (!current_node->is_object()) {
+            *current_node = nlohmann::json::object();
+        }
+        (*current_node)[key] = value;
+    } else {
+        size_t idx = std::get<size_t>(last);
+        if (!current_node->is_array()) {
+            *current_node = nlohmann::json::array();
+        }
+        while (current_node->size() <= idx) {
+            current_node->push_back(nullptr);
+        }
+        (*current_node)[idx] = value;
+    }
 }
 
 }  // namespace graph

@@ -5,6 +5,7 @@
 
 #include "fleet_agent/core/types.hpp"
 #include "fleet_agent/executor/precondition.hpp"
+#include "fleet_agent/graph/field_source.hpp"
 
 #include <chrono>
 #include <memory>
@@ -232,6 +233,48 @@ private:
     std::string resolve_nested_path(
         const std::string& var_name,
         const ExecutionContext& ctx
+    );
+
+    /**
+     * Resolve a single field source to a JSON value.
+     *
+     * @param source Field source configuration
+     * @param ctx Execution context with variables
+     * @return Resolved JSON value
+     */
+    nlohmann::json resolve_field_source(
+        const ParameterFieldSource& source,
+        const ExecutionContext& ctx
+    );
+
+    /**
+     * Resolve all field sources in params config to final JSON.
+     *
+     * Merges field_sources resolutions into data to produce
+     * the final goal parameters JSON.
+     *
+     * @param params Action params configuration
+     * @param ctx Execution context with variables
+     * @return Final resolved JSON parameters
+     */
+    nlohmann::json resolve_action_params(
+        const ActionParamsConfig& params,
+        const ExecutionContext& ctx
+    );
+
+    /**
+     * Set a nested JSON value by path.
+     *
+     * Supports paths like "pose.position.x" or "poses[0].position".
+     *
+     * @param target Target JSON object
+     * @param path Dot-separated path
+     * @param value Value to set
+     */
+    void set_json_path(
+        nlohmann::json& target,
+        const std::string& path,
+        const nlohmann::json& value
     );
 };
 

@@ -1,8 +1,8 @@
 import { memo, useState, useEffect, useMemo } from 'react'
 import { Handle, Position, NodeProps, useReactFlow, useUpdateNodeInternals, useNodes } from 'reactflow'
-import { ChevronDown, ChevronUp, Plus, X, Filter, Settings, Loader2, Sparkles, Download } from 'lucide-react'
+import { ChevronDown, ChevronUp, Plus, X, Filter, Loader2, Sparkles, Download, Upload } from 'lucide-react'
 import type { StartStateConfig, EndStateConfig, ActionField, ActionOutcome, DuringStateTarget, GraphState, ParameterFieldSource } from '../../../types'
-import { capabilityApi, telemetryApi } from '../../../api/client'
+import { capabilityApi } from '../../../api/client'
 import ParameterSourceSelector from '../../../components/ParameterSourceSelector'
 
 // Auto-generated state suffixes
@@ -146,39 +146,6 @@ const getInputType = (rosType: string, isArray: boolean): InputType => {
   return 'text'
 }
 
-// Check if a type can use waypoint selection
-const canUseWaypoint = (rosType: string): boolean => {
-  const lowerType = rosType.toLowerCase()
-  return lowerType.includes('pose') || lowerType.includes('point') || lowerType.includes('transform')
-}
-
-// Extract robot ID from action server path (e.g., "/robot_001/navigate_to_pose" -> "robot_001")
-const extractRobotFromServer = (server: string | undefined): string | null => {
-  if (!server) return null
-  // Match pattern like /robot_001/... or /robot001/... or /amr_1/...
-  const match = server.match(/^\/([a-zA-Z0-9_-]+)\//)
-  if (match) {
-    return match[1]
-  }
-  return null
-}
-
-// Detect if a field type is telemetry-compatible
-type TelemetryType = 'joint_state' | 'odometry' | 'transform' | null
-const getTelemetryType = (rosType: string): TelemetryType => {
-  const type = rosType.toLowerCase()
-  if (type.includes('jointstate') || type.includes('joint_state') || type.includes('jointtrajectory') || type.includes('joint_trajectory')) {
-    return 'joint_state'
-  }
-  if (type.includes('odometry') || type.includes('odom') || type === 'nav_msgs/msg/odometry') {
-    return 'odometry'
-  }
-  if (type.includes('transform') || type.includes('tf')) {
-    return 'transform'
-  }
-  return null
-}
-
 // Color palette for end states
 const OUTCOME_COLORS: Record<ActionOutcome, string> = {
   success: '#22c55e',
@@ -294,198 +261,6 @@ type NormalizedDuringStateTarget = {
   state: string
   target_type: NonNullable<DuringStateTarget['target_type']>
   agent_id?: string
-}
-
-// Load Telemetry Button component for loading current robot values
-interface LoadTelemetryButtonProps {
-  robotId: string
-  telemetryType: 'joint_state' | 'odometry' | 'transform'
-  onLoad: (value: unknown) => void
-  fieldType: string
-}
-
-const LoadTelemetryButton = ({ robotId, telemetryType, onLoad, fieldType }: LoadTelemetryButtonProps) => {
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const handleLoad = async (e: React.MouseEvent) => {
-    e.stopPropagation()
-    setLoading(true)
-    setError(null)
-    try {
-      let data: unknown
-      switch (telemetryType) {
-        case 'joint_state':
-          const jointData = await telemetryApi.getJointState(robotId)
-          // For JointTrajectory types, convert JointState to trajectory format
-          if (fieldType.toLowerCase().includes('trajectory')) {
-            data = {
-              joint_names: jointData.name || [],
-              points: [{
-                positions: jointData.position || [],
-                velocities: jointData.velocity || [],
-                effort: jointData.effort || [],
-                time_from_start: { sec: 0, nanosec: 0 }
-              }]
-            }
-          } else {
-            data = jointData
-          }
-          break
-        case 'odometry':
-          data = await telemetryApi.getOdometry(robotId)
-          break
-        case 'transform':
-          const transforms = await telemetryApi.getTransforms(robotId)
-          // Return first transform or full array based on field type
-          data = fieldType.toLowerCase().includes('array') ? transforms : transforms?.[0]
-          break
-      }
-      onLoad(data)
-    } catch (err) {
-      console.error('Failed to load telemetry:', err)
-      setError('Failed to load')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <button
-      onClick={handleLoad}
-      disabled={loading}
-      title={error || `Load current ${telemetryType.replace('_', ' ')} from ${robotId}`}
-      className={`flex items-center justify-center p-1 rounded transition-colors ${
-        error
-          ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
-          : 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30'
-      } disabled:opacity-50`}
-    >
-      {loading ? (
-        <Loader2 className="w-3 h-3 animate-spin" />
-      ) : (
-        <Download className="w-3 h-3" />
-      )}
-    </button>
-  )
-}
-
-// Manual Parameter Editor - for when API doesn't return goal schema
-interface ManualParameterEditorProps {
-  params: Record<string, unknown>
-  fieldSources: Record<string, ParameterFieldSource>
-  availableSteps: Array<{ id: string; name: string; resultFields?: Array<{ name: string; type: string }> }>
-  onUpdateParam: (key: string, value: unknown) => void
-  onUpdateFieldSource: (key: string, source: ParameterFieldSource | undefined) => void
-}
-
-function ManualParameterEditor({
-  params,
-  fieldSources,
-  availableSteps,
-  onUpdateParam,
-  onUpdateFieldSource,
-}: ManualParameterEditorProps) {
-  const [newParamName, setNewParamName] = useState('')
-
-  // Get all parameter names (from params and fieldSources)
-  const allParamNames = Array.from(new Set([
-    ...Object.keys(params),
-    ...Object.keys(fieldSources),
-  ]))
-
-  const addParameter = () => {
-    if (!newParamName.trim()) return
-    if (allParamNames.includes(newParamName)) return
-    onUpdateParam(newParamName, '')
-    setNewParamName('')
-  }
-
-  const removeParameter = (name: string) => {
-    // Remove from params
-    const newParams = { ...params }
-    delete newParams[name]
-    // This will trigger a full update, but we need to handle it through the parent
-    onUpdateParam(name, undefined)
-    onUpdateFieldSource(name, undefined)
-  }
-
-  const getSourceType = (name: string): 'constant' | 'step_result' | 'expression' | 'dynamic' => {
-    return fieldSources[name]?.source || 'constant'
-  }
-
-  return (
-    <div className="space-y-2">
-      {/* Existing parameters */}
-      {allParamNames.map((name) => {
-        const sourceType = getSourceType(name)
-        return (
-          <div key={name} className="space-y-1 p-2 bg-[#16162a] rounded border border-gray-700">
-            <div className="flex items-center justify-between">
-              <span className="text-[9px] text-gray-400 font-medium">{name}</span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  removeParameter(name)
-                }}
-                className="text-gray-600 hover:text-red-400 transition-colors"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-
-            {/* Parameter Source Selector */}
-            <ParameterSourceSelector
-              fieldSource={fieldSources[name]}
-              availableSteps={availableSteps}
-              onChange={(source) => onUpdateFieldSource(name, source)}
-            />
-
-            {/* Value input for constant source */}
-            {sourceType === 'constant' && (
-              <input
-                type="text"
-                value={String(params[name] ?? '')}
-                onChange={(e) => {
-                  e.stopPropagation()
-                  onUpdateParam(name, e.target.value)
-                }}
-                onClick={(e) => e.stopPropagation()}
-                placeholder="Enter value..."
-                className="w-full px-2 py-1 bg-[#0d0d1a] border border-gray-700 rounded text-[9px] text-white focus:outline-none focus:border-amber-500"
-              />
-            )}
-          </div>
-        )
-      })}
-
-      {/* Add new parameter */}
-      <div className="flex gap-1">
-        <input
-          type="text"
-          value={newParamName}
-          onChange={(e) => setNewParamName(e.target.value)}
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => {
-            e.stopPropagation()
-            if (e.key === 'Enter') addParameter()
-          }}
-          placeholder="New parameter name..."
-          className="flex-1 px-2 py-1 bg-[#16162a] border border-gray-700 rounded text-[9px] text-white focus:outline-none focus:border-amber-500"
-        />
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            addParameter()
-          }}
-          disabled={!newParamName.trim()}
-          className="px-2 py-1 bg-amber-500/20 text-amber-400 rounded text-[9px] hover:bg-amber-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <Plus className="w-3 h-3" />
-        </button>
-      </div>
-    </div>
-  )
 }
 
 const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeData>) => {
@@ -650,6 +425,13 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
       })
   }, [data.actionType])
 
+  // Auto-expand params section when no schema available and node is selected
+  useEffect(() => {
+    if (selected && !isLoadingFields && goalFields.length === 0 && data.actionType) {
+      setExpandedSection('params')
+    }
+  }, [selected, isLoadingFields, goalFields.length, data.actionType])
+
   // State configurations with defaults
   const startStates = data.startStates || []
   const duringStateTargets: NormalizedDuringStateTarget[] = (data.duringStateTargets && data.duringStateTargets.length > 0)
@@ -768,9 +550,8 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
     return () => clearTimeout(timer)
   }, [id, jobName, updateNodeInternals])
 
-  // Available agent types, robots, and waypoints for conditions
+  // Available agent types for conditions
   const availableAgents = data.availableAgents || []
-  const availableWaypoints = data.availableWaypoints || []
 
   // Job parameters
   const params = data.params || {}
@@ -810,11 +591,6 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
     } else {
       updateData('fieldSources', { ...fieldSources, [key]: source })
     }
-  }
-
-  // Get effective source type for a field
-  const getFieldSourceType = (key: string): 'constant' | 'step_result' | 'expression' | 'dynamic' => {
-    return fieldSources[key]?.source || 'constant'
   }
 
   // Add new start state
@@ -1013,21 +789,26 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
         </div>
       </div>
 
-      {/* Job Parameters Section - from ROS2 Action interface */}
+      {/* Goal Parameters Section - Input parameters for ROS2 Action */}
       <div className="border-b border-[#2a2a4a]">
         <button
           onClick={(e) => { e.stopPropagation(); setExpandedSection(expandedSection === 'params' ? null : 'params') }}
           className="w-full px-3 py-1.5 flex items-center justify-between hover:bg-[#2a2a4a]/50 transition-colors"
         >
           <div className="flex items-center gap-2">
-            <Settings className="w-3 h-3 text-amber-500" />
-            <span className="text-[10px] text-amber-400 uppercase tracking-wider font-medium">Parameters</span>
+            <Upload className="w-3 h-3 text-amber-500" />
+            <span className="text-[10px] text-amber-400 uppercase tracking-wider font-medium">Goal Parameters</span>
+            <span className="text-[8px] text-gray-600 italic">→ Send</span>
             {isLoadingFields ? (
               <Loader2 className="w-3 h-3 text-amber-500 animate-spin" />
             ) : goalFields.length > 0 ? (
               <span className="text-[9px] text-gray-600">({goalFields.length})</span>
             ) : Object.keys(fieldSources).length > 0 ? (
               <span className="text-[9px] text-purple-500">({Object.keys(fieldSources).length} mapped)</span>
+            ) : Object.keys(params).length > 0 ? (
+              <span className="text-[9px] text-amber-500">({Object.keys(params).length})</span>
+            ) : data.actionType ? (
+              <span className="text-[8px] text-yellow-500 bg-yellow-500/10 px-1.5 py-0.5 rounded">Click to configure</span>
             ) : null}
           </div>
           {expandedSection === 'params' ? (
@@ -1037,231 +818,182 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
           )}
         </button>
         {expandedSection === 'params' && (
-          <div className="px-3 pb-2 space-y-2">
+          <div className="px-3 pb-2 space-y-3">
             {isLoadingFields ? (
               <div className="flex items-center gap-2 py-2">
                 <Loader2 className="w-3 h-3 text-amber-500 animate-spin" />
                 <span className="text-[9px] text-gray-500">Loading action interface...</span>
               </div>
             ) : goalFields.length === 0 ? (
-              <div className="space-y-2">
-                <p className="text-[9px] text-gray-500 italic">No schema from capability API. Add manual parameters:</p>
-                <ManualParameterEditor
-                  params={params}
-                  fieldSources={fieldSources}
-                  availableSteps={availableSteps}
-                  onUpdateParam={updateParam}
-                  onUpdateFieldSource={updateFieldSource}
-                />
+              <div className="p-2 bg-[#1a1a2e] rounded border border-gray-700">
+                <p className="text-[9px] text-gray-500">
+                  스키마 없음. Action Type을 선택하면 파라미터가 자동으로 표시됩니다.
+                </p>
               </div>
             ) : (
-                goalFields.map((field) => {
-                  const inputType = getInputType(field.type, field.is_array)
-                  const useWaypoint = canUseWaypoint(field.type)
-                  const telemetryType = getTelemetryType(field.type)
-                  const robotId = extractRobotFromServer(data.server)
-                  const sourceType = getFieldSourceType(field.name)
+              goalFields.map((field) => {
+                const inputType = getInputType(field.type, field.is_array)
+                const selectorInputType = inputType === 'checkbox' ? 'checkbox' : inputType === 'number' ? 'number' : 'text'
+                const isSimpleType = ['checkbox', 'number', 'text'].includes(inputType)
 
-                  return (
-                    <div key={field.name} className="space-y-1">
-                      {/* Field header with source selector */}
-                      <div className="flex items-center gap-2">
-                        <label className="text-[9px] text-gray-400 font-medium">{field.name}</label>
-                        <span className="text-[8px] text-gray-600 font-mono px-1 py-0.5 bg-gray-800 rounded">
-                          {field.type}{field.is_array ? '[]' : ''}
-                        </span>
-                        {/* Load Telemetry Button for compatible types - only for constant source */}
-                        {telemetryType && robotId && sourceType === 'constant' && (
-                          <LoadTelemetryButton
-                            robotId={robotId}
-                            telemetryType={telemetryType}
-                            fieldType={field.type}
-                            onLoad={(value) => updateParam(field.name, value)}
-                          />
+                return (
+                  <div key={field.name} className="space-y-1 p-2 bg-[#16162a] rounded border border-gray-700/50">
+                    {/* Field header */}
+                    <div className="flex items-center gap-2 pb-1 border-b border-gray-700/30">
+                      <span className="text-[11px] text-white font-medium">{field.name}</span>
+                      <span className="text-[9px] text-gray-500 font-mono px-1.5 py-0.5 bg-gray-800 rounded">
+                        {field.type}{field.is_array ? '[]' : ''}
+                      </span>
+                    </div>
+
+                    {/* Parameter Source Selector - integrated with value input for simple types */}
+                    <ParameterSourceSelector
+                      fieldSource={fieldSources[field.name]}
+                      availableSteps={availableSteps}
+                      onChange={(source) => updateFieldSource(field.name, source)}
+                      targetFieldType={field.type}
+                      targetFieldName={field.name}
+                      constantValue={isSimpleType ? params[field.name] : undefined}
+                      onConstantChange={isSimpleType ? (value) => updateParam(field.name, value) : undefined}
+                      inputType={selectorInputType}
+                    />
+
+                    {/* Complex type inputs - shown only for constant mode with complex types */}
+                    {!fieldSources[field.name]?.source && !isSimpleType && (
+                      <div className="mt-1 p-2 bg-[#0d0d1a] rounded border border-amber-500/20">
+                        {inputType === 'pose' && (
+                          <div className="space-y-1">
+                            <div className="text-[9px] text-amber-400">Position (x, y, θ)</div>
+                            <div className="flex gap-1">
+                              {['x', 'y', 'theta'].map((axis) => (
+                                <div key={axis} className="flex-1">
+                                  <label className="text-[9px] text-gray-500">{axis === 'theta' ? 'θ' : axis}</label>
+                                  <input
+                                    type="number"
+                                    value={((params[field.name] as Record<string, number>)?.[axis]) ?? ''}
+                                    onChange={(e) => {
+                                      e.stopPropagation()
+                                      const current = (params[field.name] as Record<string, number>) || {}
+                                      updateParam(field.name, { ...current, [axis]: parseFloat(e.target.value) || 0 })
+                                    }}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="w-full px-2 py-1 bg-[#16162a] border border-gray-700 rounded text-[11px] text-white focus:outline-none focus:border-amber-500"
+                                    placeholder="0"
+                                    step="0.01"
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          </div>
                         )}
-                      </div>
-
-                      {/* Parameter Source Selector */}
-                      <ParameterSourceSelector
-                        fieldSource={fieldSources[field.name]}
-                        availableSteps={availableSteps}
-                        onChange={(source) => updateFieldSource(field.name, source)}
-                        targetFieldType={field.type}
-                        targetFieldName={field.name}
-                      />
-
-                      {/* Input based on type - only shown for constant source */}
-                      {sourceType === 'constant' && (inputType === 'checkbox' ? (
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={Boolean(params[field.name])}
-                            onChange={(e) => {
-                              e.stopPropagation()
-                              updateParam(field.name, e.target.checked)
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                            className="w-4 h-4 accent-amber-500"
-                          />
-                          <span className="text-[9px] text-gray-500">{params[field.name] ? 'true' : 'false'}</span>
-                        </div>
-                      ) : inputType === 'number' ? (
-                        <input
-                          type="number"
-                          value={(params[field.name] as number) ?? ''}
-                          onChange={(e) => {
-                            e.stopPropagation()
-                            updateParam(field.name, e.target.value === '' ? undefined : parseFloat(e.target.value))
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                          className="w-full px-2 py-1.5 bg-[#16162a] border border-amber-500/30 rounded text-[10px] text-white focus:outline-none focus:border-amber-500"
-                          placeholder={field.default || '0'}
-                          step="any"
-                        />
-                      ) : inputType === 'pose' ? (
-                        <div className="space-y-1">
-                          {/* Waypoint selection or manual input */}
-                          {useWaypoint && availableWaypoints.length > 0 ? (
-                            <select
-                              value={(params[`${field.name}_waypoint`] as string) || ''}
+                        {inputType === 'complex' && (
+                          <div className="space-y-1">
+                            <div className="text-[9px] text-amber-400">JSON 입력</div>
+                            <textarea
+                              value={typeof params[field.name] === 'object'
+                                ? JSON.stringify(params[field.name], null, 2)
+                                : (params[field.name] as string) || ''}
                               onChange={(e) => {
                                 e.stopPropagation()
-                                updateParam(`${field.name}_waypoint`, e.target.value)
-                                // Clear manual values when waypoint is selected
-                                if (e.target.value) {
-                                  updateParam(field.name, undefined)
+                                try {
+                                  const parsed = JSON.parse(e.target.value)
+                                  updateParam(field.name, parsed)
+                                } catch {
+                                  updateParam(field.name, e.target.value)
                                 }
                               }}
                               onClick={(e) => e.stopPropagation()}
-                              className="w-full px-2 py-1.5 bg-[#16162a] border border-green-500/30 rounded text-[10px] text-green-400 focus:outline-none"
-                            >
-                              <option value="" className="bg-[#1a1a2e]">Select waypoint...</option>
-                              {availableWaypoints.map(wp => (
-                                <option key={wp.id} value={wp.id} className="bg-[#1a1a2e]">{wp.name}</option>
-                              ))}
-                            </select>
-                          ) : (
-                            <div className="text-[8px] text-gray-500 italic">No waypoints available</div>
-                          )}
-                          {/* Manual pose input (x, y, theta) */}
-                          <div className="flex gap-1">
-                            <div className="flex-1">
-                              <label className="text-[8px] text-gray-600">x</label>
-                              <input
-                                type="number"
-                                value={((params[field.name] as Record<string, number>)?.x) ?? ''}
-                                onChange={(e) => {
-                                  e.stopPropagation()
-                                  const current = (params[field.name] as Record<string, number>) || {}
-                                  updateParam(field.name, { ...current, x: parseFloat(e.target.value) || 0 })
-                                  updateParam(`${field.name}_waypoint`, '') // Clear waypoint
-                                }}
-                                onClick={(e) => e.stopPropagation()}
-                                className="w-full px-1.5 py-1 bg-[#16162a] border border-gray-700 rounded text-[9px] text-white focus:outline-none"
-                                placeholder="0"
-                                step="0.01"
-                              />
-                            </div>
-                            <div className="flex-1">
-                              <label className="text-[8px] text-gray-600">y</label>
-                              <input
-                                type="number"
-                                value={((params[field.name] as Record<string, number>)?.y) ?? ''}
-                                onChange={(e) => {
-                                  e.stopPropagation()
-                                  const current = (params[field.name] as Record<string, number>) || {}
-                                  updateParam(field.name, { ...current, y: parseFloat(e.target.value) || 0 })
-                                  updateParam(`${field.name}_waypoint`, '')
-                                }}
-                                onClick={(e) => e.stopPropagation()}
-                                className="w-full px-1.5 py-1 bg-[#16162a] border border-gray-700 rounded text-[9px] text-white focus:outline-none"
-                                placeholder="0"
-                                step="0.01"
-                              />
-                            </div>
-                            <div className="flex-1">
-                              <label className="text-[8px] text-gray-600">θ</label>
-                              <input
-                                type="number"
-                                value={((params[field.name] as Record<string, number>)?.theta) ?? ''}
-                                onChange={(e) => {
-                                  e.stopPropagation()
-                                  const current = (params[field.name] as Record<string, number>) || {}
-                                  updateParam(field.name, { ...current, theta: parseFloat(e.target.value) || 0 })
-                                  updateParam(`${field.name}_waypoint`, '')
-                                }}
-                                onClick={(e) => e.stopPropagation()}
-                                className="w-full px-1.5 py-1 bg-[#16162a] border border-gray-700 rounded text-[9px] text-white focus:outline-none"
-                                placeholder="0"
-                                step="0.01"
-                              />
-                            </div>
+                              className="w-full px-2 py-1 bg-[#16162a] border border-gray-700 rounded text-[10px] text-gray-300 font-mono focus:outline-none resize-none"
+                              placeholder="{}"
+                              rows={3}
+                            />
                           </div>
-                        </div>
-                      ) : inputType === 'trajectory' ? (
-                        <div className="space-y-1">
-                          {/* Trajectory needs waypoint sequence */}
-                          <select
-                            value={(params[`${field.name}_waypoint`] as string) || ''}
-                            onChange={(e) => {
-                              e.stopPropagation()
-                              updateParam(`${field.name}_waypoint`, e.target.value)
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                            className="w-full px-2 py-1.5 bg-[#16162a] border border-purple-500/30 rounded text-[10px] text-purple-400 focus:outline-none"
-                          >
-                            <option value="" className="bg-[#1a1a2e]">Select joint waypoint...</option>
-                            {availableWaypoints.filter(wp => wp.name.toLowerCase().includes('joint')).map(wp => (
-                              <option key={wp.id} value={wp.id} className="bg-[#1a1a2e]">{wp.name}</option>
-                            ))}
-                          </select>
-                          <div className="text-[8px] text-gray-500">
-                            Trajectory from waypoint or teach mode
+                        )}
+                        {inputType === 'trajectory' && (
+                          <div className="text-[9px] text-gray-500">
+                            Trajectory는 이전 Step의 결과를 바인딩하세요
                           </div>
-                        </div>
-                      ) : inputType === 'complex' ? (
-                        <div className="space-y-1">
-                          <textarea
-                            value={typeof params[field.name] === 'object'
-                              ? JSON.stringify(params[field.name], null, 2)
-                              : (params[field.name] as string) || ''}
-                            onChange={(e) => {
-                              e.stopPropagation()
-                              try {
-                                const parsed = JSON.parse(e.target.value)
-                                updateParam(field.name, parsed)
-                              } catch {
-                                // Keep as string if not valid JSON
-                                updateParam(field.name, e.target.value)
-                              }
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                            className="w-full px-2 py-1.5 bg-[#16162a] border border-gray-600 rounded text-[9px] text-gray-300 font-mono focus:outline-none resize-none"
-                            placeholder="{}"
-                            rows={3}
-                          />
-                          <div className="text-[8px] text-gray-500">JSON format</div>
-                        </div>
-                      ) : (
-                        <input
-                          type="text"
-                          value={(params[field.name] as string) ?? ''}
-                          onChange={(e) => {
-                            e.stopPropagation()
-                            updateParam(field.name, e.target.value)
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                          className="w-full px-2 py-1.5 bg-[#16162a] border border-amber-500/30 rounded text-[10px] text-white focus:outline-none focus:border-amber-500"
-                          placeholder={field.default || ''}
-                        />
-                      ))}
-                    </div>
-                  )
-                })
-              )}
-            </div>
-          )}
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })
+            )}
+          </div>
+        )}
         </div>
+
+      {/* Result Schema Section - Output fields from ROS2 Action (read-only, for reference) */}
+      <div className="border-b border-[#2a2a4a]">
+        <button
+          onClick={(e) => { e.stopPropagation(); setExpandedSection(expandedSection === 'result' ? null : 'result') }}
+          className="w-full px-3 py-1.5 flex items-center justify-between hover:bg-[#2a2a4a]/50 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <Download className="w-3 h-3 text-green-500" />
+            <span className="text-[10px] text-green-400 uppercase tracking-wider font-medium">Result Schema</span>
+            <span className="text-[8px] text-gray-600 italic">← Receive</span>
+            {isLoadingFields ? (
+              <Loader2 className="w-3 h-3 text-green-500 animate-spin" />
+            ) : resultFields.length > 0 ? (
+              <span className="text-[9px] text-gray-600">({resultFields.length})</span>
+            ) : (
+              <span className="text-[8px] text-gray-600">-</span>
+            )}
+          </div>
+          {expandedSection === 'result' ? (
+            <ChevronUp className="w-3 h-3 text-gray-500" />
+          ) : (
+            <ChevronDown className="w-3 h-3 text-gray-500" />
+          )}
+        </button>
+        {expandedSection === 'result' && (
+          <div className="px-3 pb-2 space-y-2">
+            {isLoadingFields ? (
+              <div className="flex items-center gap-2 py-2">
+                <Loader2 className="w-3 h-3 text-green-500 animate-spin" />
+                <span className="text-[9px] text-gray-500">Loading result schema...</span>
+              </div>
+            ) : resultFields.length === 0 ? (
+              <div className="p-2 bg-[#1a1a2e] rounded border border-gray-700">
+                <p className="text-[9px] text-gray-500">No result schema available from capability API</p>
+              </div>
+            ) : (
+              <>
+                <div className="p-2 bg-green-900/20 rounded border border-green-500/30">
+                  <p className="text-[9px] text-green-400 mb-1.5">
+                    These fields are available after this step completes successfully.
+                  </p>
+                  <p className="text-[8px] text-gray-500">
+                    Use <code className="text-purple-400">${'{'}step_id.field{'}'}</code> to bind to other steps.
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  {resultFields.map((field) => (
+                    <div
+                      key={field.name}
+                      className="flex items-center justify-between px-2 py-1.5 bg-[#16162a] rounded border border-green-500/20"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-[9px] text-green-400 font-mono">{field.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[8px] text-gray-600 font-mono px-1.5 py-0.5 bg-gray-800 rounded">
+                          {field.type}{field.is_array ? '[]' : ''}
+                        </span>
+                        <code className="text-[8px] text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded">
+                          ${'{'}${jobName || id}.{field.name}{'}'}
+                        </code>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Start Conditions Section */}
       <div className="border-b border-[#2a2a4a]">
@@ -1530,9 +1262,6 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-sm bg-gradient-to-r from-green-500 to-red-500" />
             <span className="text-[10px] text-gray-300 uppercase tracking-wider font-medium">End States</span>
-            {resultFields.length > 0 && (
-              <span className="text-[8px] text-gray-600 font-mono">({resultFields.length} results)</span>
-            )}
           </div>
           <button
             onClick={(e) => { e.stopPropagation(); addEndState() }}
@@ -1542,17 +1271,8 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
           </button>
         </div>
         <p className="text-[9px] text-gray-500 mb-1">
-          Final state for executing robot per outcome. ROS2 ends: SUCCEEDED/ABORTED/CANCELED (timeout/rejected are policy-level).
+          Final state per outcome. ROS2: SUCCEEDED/ABORTED/CANCELED.
         </p>
-        {/* Show result fields info */}
-        {resultFields.length > 0 && (
-          <div className="mb-2 px-2 py-1 bg-gray-800/50 rounded text-[8px]">
-            <span className="text-gray-500">Result: </span>
-            <span className="text-gray-400 font-mono">
-              {resultFields.map(f => `${f.name}: ${f.type}${f.is_array ? '[]' : ''}`).join(', ')}
-            </span>
-          </div>
-        )}
         <div className="space-y-1">
           {endStates.map((endState) => (
             <div
