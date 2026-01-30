@@ -51,6 +51,16 @@ func getString(props map[string]any, key string) string {
 	return ""
 }
 
+// getStringWithFallback tries to get a string value from props using the primary key,
+// falling back to the fallback key if the primary key doesn't exist.
+// This is used for backward compatibility during database migrations.
+func getStringWithFallback(props map[string]any, key string, fallbackKey string) string {
+	if v := getString(props, key); v != "" {
+		return v
+	}
+	return getString(props, fallbackKey)
+}
+
 func getBool(props map[string]any, key string) bool {
 	if v, ok := props[key]; ok {
 		if b, ok := v.(bool); ok {
@@ -1363,7 +1373,7 @@ func (r *Repository) GetAgentBehaviorTree(agentID, graphID string) (*AgentBehavi
 				aag := AgentBehaviorTree{
 					ID:               getString(props, "id"),
 					AgentID:          getString(props, "agent_id"),
-					BehaviorTreeID:    getString(props, "behavior_tree_id"),
+					BehaviorTreeID:    getStringWithFallback(props, "behavior_tree_id", "action_graph_id"),
 					ServerVersion:    int(getInt64(props, "server_version")),
 					DeployedVersion:  int(getInt64(props, "deployed_version")),
 					DeploymentStatus: getString(props, "deployment_status"),
@@ -1406,7 +1416,7 @@ func (r *Repository) GetAgentBehaviorTrees(agentID string) ([]AgentBehaviorTree,
 				list = append(list, AgentBehaviorTree{
 					ID:               getString(props, "id"),
 					AgentID:          getString(props, "agent_id"),
-					BehaviorTreeID:    getString(props, "behavior_tree_id"),
+					BehaviorTreeID:    getStringWithFallback(props, "behavior_tree_id", "action_graph_id"),
 					ServerVersion:    int(getInt64(props, "server_version")),
 					DeployedVersion:  int(getInt64(props, "deployed_version")),
 					DeploymentStatus: getString(props, "deployment_status"),
@@ -1543,7 +1553,7 @@ func (r *Repository) GetAgentBehaviorTreesByGraphID(graphID string) ([]AgentBeha
 				list = append(list, AgentBehaviorTree{
 					ID:               getString(props, "id"),
 					AgentID:          getString(props, "agent_id"),
-					BehaviorTreeID:    getString(props, "behavior_tree_id"),
+					BehaviorTreeID:    getStringWithFallback(props, "behavior_tree_id", "action_graph_id"),
 					ServerVersion:    int(getInt64(props, "server_version")),
 					DeployedVersion:  int(getInt64(props, "deployed_version")),
 					DeploymentStatus: getString(props, "deployment_status"),
@@ -1581,7 +1591,7 @@ func (r *Repository) GetAgentBehaviorTreeByID(id string) (*AgentBehaviorTree, er
 				aag := AgentBehaviorTree{
 					ID:               getString(props, "id"),
 					AgentID:          getString(props, "agent_id"),
-					BehaviorTreeID:    getString(props, "behavior_tree_id"),
+					BehaviorTreeID:    getStringWithFallback(props, "behavior_tree_id", "action_graph_id"),
 					ServerVersion:    int(getInt64(props, "server_version")),
 					DeployedVersion:  int(getInt64(props, "deployed_version")),
 					DeploymentStatus: getString(props, "deployment_status"),
@@ -1764,7 +1774,7 @@ func (r *Repository) GetTask(id string) (*Task, error) {
 				props := tNode.Props
 				task := Task{
 					ID:               getString(props, "id"),
-					BehaviorTreeID:    toNullString(getString(props, "behavior_tree_id")),
+					BehaviorTreeID:    toNullString(getStringWithFallback(props, "behavior_tree_id", "action_graph_id")),
 					AgentID:          toNullString(getString(props, "agent_id")),
 					Status:           getString(props, "status"),
 					CurrentStepID:    toNullString(getString(props, "current_step_id")),
@@ -1828,7 +1838,7 @@ func (r *Repository) GetTasks(agentID, status string) ([]Task, error) {
 				props := tNode.Props
 				tasks = append(tasks, Task{
 					ID:               getString(props, "id"),
-					BehaviorTreeID:    toNullString(getString(props, "behavior_tree_id")),
+					BehaviorTreeID:    toNullString(getStringWithFallback(props, "behavior_tree_id", "action_graph_id")),
 					AgentID:          toNullString(getString(props, "agent_id")),
 					Status:           getString(props, "status"),
 					CurrentStepID:    toNullString(getString(props, "current_step_id")),
@@ -3124,7 +3134,7 @@ func (r *Repository) GetAllAgentBehaviorTrees() ([]AgentBehaviorTree, error) {
 				list = append(list, AgentBehaviorTree{
 					ID:               getString(props, "id"),
 					AgentID:          getString(props, "agent_id"),
-					BehaviorTreeID:    getString(props, "behavior_tree_id"),
+					BehaviorTreeID:    getStringWithFallback(props, "behavior_tree_id", "action_graph_id"),
 					ServerVersion:    int(getInt64(props, "server_version")),
 					DeployedVersion:  int(getInt64(props, "deployed_version")),
 					DeploymentStatus: getString(props, "deployment_status"),

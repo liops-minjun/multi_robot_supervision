@@ -1556,7 +1556,7 @@ function ActionGraphEditor() {
         <div className="h-12 bg-[#16162a] border-b border-[#2a2a4a] flex items-center justify-between px-4">
           <div className="flex items-center gap-2">
             <Zap className="w-5 h-5 text-blue-400" />
-            <span className="font-semibold text-white">Action Graph Templates</span>
+            <span className="font-semibold text-white">Behavior Tree Templates</span>
             {selectedTemplate && (
               <>
                 <span className="text-gray-500">/</span>

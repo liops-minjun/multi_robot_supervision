@@ -798,8 +798,8 @@ export default function AgentDashboard() {
         return bTime - aTime
       })
       .map(g => ({
-        id: g.action_graph_id,
-        name: g.action_graph_name || g.action_graph_id,
+        id: g.behavior_tree_id,
+        name: g.behavior_tree_name || g.behavior_tree_id,
         version: g.deployed_version,
         server_version: g.server_version,
         deployment_status: g.deployment_status,
@@ -1455,24 +1455,24 @@ export default function AgentDashboard() {
                 )}
               </div>
 
-              {/* Action Graph */}
+              {/* Behavior Tree */}
               <div>
                 <div className="flex items-center gap-2 mb-4">
                   <Layout className="w-5 h-5 text-cyan-400" />
-                  <h3 className="text-lg font-semibold text-white">Action Graph</h3>
+                  <h3 className="text-lg font-semibold text-white">Behavior Tree</h3>
                   {fleetGraph && (
                     <span className="text-sm text-gray-500">v{fleetGraph.version}</span>
                   )}
                 </div>
 
                 {graphsLoading ? (
-                  <div className="text-center py-8 text-gray-500">Loading action graph...</div>
+                  <div className="text-center py-8 text-gray-500">Loading behavior tree...</div>
                 ) : !fleetGraph ? (
                   <div className="text-center py-8">
                     <Layout className="w-10 h-10 mx-auto mb-3 text-gray-600" />
-                    <p className="text-gray-500 text-sm">No action graph configured</p>
+                    <p className="text-gray-500 text-sm">No behavior tree configured</p>
                     <p className="text-xs text-gray-600 mt-1">
-                      Create an Action Graph to visualize execution for this agent.
+                      Create a Behavior Tree to visualize execution for this agent.
                     </p>
                   </div>
                 ) : (
@@ -1686,18 +1686,18 @@ export default function AgentDashboard() {
                       </div>
                     )}
 
-                    {/* Action Graph Selection */}
+                    {/* Behavior Tree Selection */}
                     {sortedActionGraphs.length === 0 ? (
                       <div className="flex items-center gap-2 mb-2 px-2 py-1.5 bg-yellow-500/10 border border-yellow-500/30 rounded">
                         <AlertTriangle className="w-3.5 h-3.5 text-yellow-400" />
                         <span className="text-xs text-yellow-400">
-                          No graphs assigned to this agent. Assign and deploy a graph from the Action Graph Editor.
+                          No graphs assigned to this agent. Assign and deploy a graph from the Behavior Tree Editor.
                         </span>
                       </div>
                     ) : (
                       <div className="mb-2 space-y-2">
                         <div className="flex items-center gap-2">
-                          <label className="text-xs text-gray-400">Action Graph:</label>
+                          <label className="text-xs text-gray-400">Behavior Tree:</label>
                           <select
                             value={selectedGraphId || ''}
                             onChange={(e) => setSelectedGraphId(e.target.value)}

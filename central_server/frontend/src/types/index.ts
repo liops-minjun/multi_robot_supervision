@@ -796,7 +796,7 @@ export interface ActionField {
 }
 
 // ============================================
-// Action Graph Template & Assignment Types
+// Behavior Tree Template & Assignment Types
 // ============================================
 
 export interface TemplateListItem {
@@ -815,9 +815,9 @@ export interface AssignmentInfo {
   id: string
   agent_id: string
   agent_name: string
-  action_graph_id: string
-  action_graph_name: string
-  robot_count: number
+  behavior_tree_id: string
+  behavior_tree_name: string
+  robot_count?: number
   server_version: number
   deployed_version: number | null
   deployment_status: string
@@ -825,12 +825,12 @@ export interface AssignmentInfo {
   deployed_at: string | null
 }
 
-// Agent action graph assignment info (from GET /agents/{id}/action-graphs)
-export interface AgentActionGraphInfo {
+// Agent behavior tree assignment info (from GET /agents/{id}/behavior-trees)
+export interface AgentBehaviorTreeInfo {
   id: string
   agent_id: string
-  action_graph_id: string
-  action_graph_name?: string
+  behavior_tree_id: string
+  behavior_tree_name?: string
   server_version: number
   deployed_version: number
   deployment_status: string
@@ -841,6 +841,9 @@ export interface AgentActionGraphInfo {
   created_at: string
   updated_at: string
 }
+
+// Backward compatibility alias
+export type AgentActionGraphInfo = AgentBehaviorTreeInfo
 
 // Action server in agent overview
 export interface AgentOverviewActionServer {
