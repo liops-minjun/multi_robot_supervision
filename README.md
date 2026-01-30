@@ -27,7 +27,7 @@
           ┌────────────────┼────────────────┐
           ▼                ▼                ▼
    ┌────────────┐   ┌────────────┐   ┌────────────┐
-   │Fleet Agent │   │Fleet Agent │   │Fleet Agent │  ← 로봇마다 1개
+   │   Agent    │   │   Agent    │   │   Agent    │  ← 로봇마다 1개
    │   (C++)    │   │   (C++)    │   │   (C++)    │
    │  ↕ ROS2    │   │  ↕ ROS2    │   │  ↕ ROS2    │
    └────────────┘   └────────────┘   └────────────┘
@@ -61,7 +61,7 @@ open http://localhost:3000
 |--------|------|------|
 | **Frontend** | 3000 | Web UI |
 | **Backend API** | 8081 | REST API + WebSocket |
-| **QUIC (Agent)** | 9444/UDP | C++ Fleet Agent 통신 |
+| **QUIC (Agent)** | 9444/UDP | C++ Agent 통신 |
 | **Neo4j Browser** | 7474 | DB 관리 (neo4j/neo4j123) |
 
 ## 주요 명령어
@@ -91,9 +91,9 @@ docker run -d --name neo4j -e NEO4J_AUTH=neo4j/neo4j123 -p 7474:7474 -p 7687:768
 
 ---
 
-# 🤖 Fleet Agent (로봇 측)
+# 🤖 Agent (로봇 측)
 
-Fleet Agent는 각 로봇(또는 로봇 그룹)에서 실행됩니다. ROS2 환경이 필요합니다.
+Agent는 각 로봇(또는 로봇 그룹)에서 실행됩니다. ROS2 환경이 필요합니다.
 
 ## 요구 사항
 
@@ -251,7 +251,7 @@ multi-robot-supervision/
 │   ├── src/components/          # 공통 컴포넌트
 │   └── src/contexts/            # React Context (Telemetry 등)
 │
-├── fleet_agent_cpp/             # C++ Fleet Agent
+├── fleet_agent_cpp/             # C++ Agent
 │   ├── include/fleet_agent/     # 헤더
 │   ├── src/                     # 구현
 │   ├── config/                  # 설정 파일
