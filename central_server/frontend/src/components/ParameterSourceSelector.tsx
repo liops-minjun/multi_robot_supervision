@@ -35,14 +35,14 @@ function getCompatibilityIndicator(result: TypeCompatibilityResult | null): {
   tooltip: string
 } {
   if (!result) {
-    return { color: '#22c55e', icon: <Check className="w-3 h-3" />, tooltip: 'Compatible' }
+    return { color: '#22c55e', icon: <Check className="w-3 h-3" />, tooltip: '호환됨' }
   }
 
   if (!result.compatible) {
     return {
       color: '#ef4444',
       icon: <X className="w-3 h-3" />,
-      tooltip: result.warningMessage || 'Types are incompatible'
+      tooltip: result.warningMessage || '타입이 호환되지 않음'
     }
   }
 
@@ -50,14 +50,14 @@ function getCompatibilityIndicator(result: TypeCompatibilityResult | null): {
     return {
       color: '#f59e0b',
       icon: <AlertTriangle className="w-3 h-3" />,
-      tooltip: result.warningMessage || 'May lose precision'
+      tooltip: result.warningMessage || '정밀도 손실 가능'
     }
   }
 
   return {
     color: '#22c55e',
     icon: <Check className="w-3 h-3" />,
-    tooltip: 'Compatible'
+    tooltip: '호환됨'
   }
 }
 

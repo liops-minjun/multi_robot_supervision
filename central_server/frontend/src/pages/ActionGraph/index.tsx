@@ -1153,22 +1153,22 @@ function ActionGraphEditor() {
             <div className="py-2">
               <div className="px-3 py-2 flex items-center justify-between">
                 <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                  Templates
+                  템플릿
                 </span>
                 <button
                   onClick={() => setShowCreateModal(true)}
                   className="p-1 text-blue-400 hover:bg-blue-500/20 rounded"
-                  title="Create new template"
+                  title="새 템플릿 생성"
                 >
                   <PlusCircle size={14} />
                 </button>
               </div>
 
               {templatesLoading ? (
-                <div className="px-3 py-4 text-center text-gray-500 text-sm">Loading...</div>
+                <div className="px-3 py-4 text-center text-gray-500 text-sm">로딩 중...</div>
               ) : allTemplates.length === 0 ? (
                 <div className="px-3 py-4 text-center text-gray-500 text-sm">
-                  No templates yet. Create one to get started.
+                  템플릿이 없습니다. 새로 생성하세요.
                 </div>
               ) : (
                 <div className="space-y-0.5">
@@ -1200,7 +1200,7 @@ function ActionGraphEditor() {
                             )}
                           </div>
                         ) : (
-                          <span className="text-[10px] text-gray-600 italic">No actions yet</span>
+                          <span className="text-[10px] text-gray-600 italic">액션 없음</span>
                         )}
                       </div>
                       <div className="flex items-center gap-1 flex-shrink-0">
@@ -1215,7 +1215,7 @@ function ActionGraphEditor() {
                             }
                           }}
                           className="p-1 text-gray-600 hover:text-red-400 hover:bg-red-500/20 rounded opacity-0 group-hover:opacity-100 transition-opacity"
-                          title="Delete template"
+                          title="템플릿 삭제"
                         >
                           <Trash2 size={14} />
                         </button>
@@ -1230,15 +1230,15 @@ function ActionGraphEditor() {
             <div className="py-2">
               <div className="px-3 py-2">
                 <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                  Agents & Assignments
+                  에이전트 & 할당
                 </span>
               </div>
 
               {agentsLoading ? (
-                <div className="px-3 py-4 text-center text-gray-500 text-sm">Loading...</div>
+                <div className="px-3 py-4 text-center text-gray-500 text-sm">로딩 중...</div>
               ) : agentsOverview.length === 0 ? (
                 <div className="px-3 py-4 text-center text-gray-500 text-sm">
-                  No agents connected
+                  연결된 에이전트 없음
                 </div>
               ) : (
                 agentsOverview.map((agent: AgentOverviewInfo) => {
@@ -1344,7 +1344,7 @@ function ActionGraphEditor() {
         {selectedTemplate && (
           <div className="border-t border-[#2a2a4a] p-3 bg-[#1a1a2e]/50">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-semibold text-gray-400 uppercase">Selected Template</span>
+              <span className="text-xs font-semibold text-gray-400 uppercase">선택된 템플릿</span>
               <button
                 onClick={() => setShowAssignModal(true)}
                 className="text-xs px-2 py-1 bg-blue-600/20 text-blue-400 rounded hover:bg-blue-600/30 flex items-center gap-1"
@@ -1441,10 +1441,10 @@ function ActionGraphEditor() {
                   className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-gradient-to-r from-blue-600/20 to-blue-500/10 border border-blue-500/40 rounded-lg text-blue-400 hover:from-blue-600/30 hover:to-blue-500/20 hover:border-blue-500/60 transition-all"
                 >
                   <Plus size={14} />
-                  <span className="text-xs font-medium">Create State Definition</span>
+                  <span className="text-xs font-medium">상태 정의 생성</span>
                 </button>
                 <div className="mt-2 text-[10px] text-gray-500">
-                  No state definition yet. Create one to manage states.
+                  상태 정의가 없습니다. 상태 관리를 위해 생성하세요.
                 </div>
               </>
             )}
@@ -1456,7 +1456,7 @@ function ActionGraphEditor() {
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
               <input
                 type="text"
-                placeholder="Search..."
+                placeholder="검색..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full pl-8 pr-3 py-1.5 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
@@ -1581,7 +1581,7 @@ function ActionGraphEditor() {
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600/20 text-green-400 rounded-lg hover:bg-green-600/30 text-sm disabled:opacity-50"
               >
                 <Save size={14} />
-                {saveTemplate.isPending ? 'Saving...' : 'Save'}
+                {saveTemplate.isPending ? '저장 중...' : '저장'}
               </button>
               <button
                 onClick={() => {
@@ -1646,10 +1646,10 @@ function ActionGraphEditor() {
             <div className="h-full flex items-center justify-center">
               <div className="text-center">
                 <Layout className="w-16 h-16 mx-auto mb-4 text-gray-700" />
-                <h2 className="text-xl font-semibold text-gray-400 mb-2">Select a Template</h2>
+                <h2 className="text-xl font-semibold text-gray-400 mb-2">템플릿을 선택하세요</h2>
                 <p className="text-gray-600 text-sm max-w-md">
-                  Choose a template from the left panel to view and edit the workflow,
-                  or create a new template to get started.
+                  왼쪽 패널에서 템플릿을 선택하여 워크플로우를 확인하고 편집하거나,
+                  새 템플릿을 생성하세요.
                 </p>
                 <button
                   onClick={() => setShowCreateModal(true)}
@@ -2012,35 +2012,35 @@ function CreateTemplateModal({
           )}
 
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Template ID</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">템플릿 ID</label>
             <input
               type="text"
               value={formData.id}
               onChange={e => setFormData(prev => ({ ...prev, id: e.target.value }))}
-              placeholder="e.g., pick_and_place"
+              placeholder="예: pick_and_place"
               className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white placeholder-gray-600"
               required
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Name</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">이름</label>
             <input
               type="text"
               value={formData.name}
               onChange={e => setFormData(prev => ({ ...prev, name: e.target.value }))}
-              placeholder="e.g., Pick and Place"
+              placeholder="예: Pick and Place"
               className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white placeholder-gray-600"
               required
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Description</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">설명</label>
             <textarea
               value={formData.description}
               onChange={e => setFormData(prev => ({ ...prev, description: e.target.value }))}
-              placeholder="Optional description..."
+              placeholder="선택사항..."
               className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white resize-none placeholder-gray-600"
               rows={2}
             />
@@ -2049,14 +2049,14 @@ function CreateTemplateModal({
           {/* Optional: Base on Agent for capability reference */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1">
-              Base on Agent <span className="text-gray-500 font-normal">(optional)</span>
+              기준 에이전트 <span className="text-gray-500 font-normal">(선택사항)</span>
             </label>
             <select
               value={formData.baseAgentId}
               onChange={e => setFormData(prev => ({ ...prev, baseAgentId: e.target.value }))}
               className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white"
             >
-              <option value="">-- Select to see available actions --</option>
+              <option value="">-- 사용 가능한 액션 확인을 위해 선택 --</option>
               {agents.map(agent => (
                 <option key={agent.id} value={agent.id}>
                   {agent.name}
@@ -2064,7 +2064,7 @@ function CreateTemplateModal({
               ))}
             </select>
             <p className="text-xs text-gray-500 mt-1">
-              Select an agent to see what action types are available for your template.
+              에이전트를 선택하면 템플릿에서 사용 가능한 액션 타입을 확인할 수 있습니다.
             </p>
           </div>
 
@@ -2072,7 +2072,7 @@ function CreateTemplateModal({
           {formData.baseAgentId && agentCapabilities && (
             <div className="p-3 bg-[#1a1a2e] rounded-lg border border-[#2a2a4a]">
               <div className="text-xs text-gray-400 mb-2">
-                Available Action Servers ({agentCapabilities.total}):
+                사용 가능한 액션 서버 ({agentCapabilities.total}개):
               </div>
               <div className="flex flex-wrap gap-1">
                 {agentCapabilities.capabilities.map(cap => (
@@ -2085,7 +2085,7 @@ function CreateTemplateModal({
                   </span>
                 ))}
                 {agentCapabilities.capabilities.length === 0 && (
-                  <span className="text-xs text-gray-500 italic">No action servers detected</span>
+                  <span className="text-xs text-gray-500 italic">감지된 액션 서버 없음</span>
                 )}
               </div>
             </div>
@@ -2093,14 +2093,14 @@ function CreateTemplateModal({
 
           <div className="flex justify-end gap-3 pt-4">
             <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white">
-              Cancel
+              취소
             </button>
             <button
               type="submit"
               disabled={createTemplate.isPending}
               className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
-              {createTemplate.isPending ? 'Creating...' : 'Create Template'}
+              {createTemplate.isPending ? '생성 중...' : '템플릿 생성'}
             </button>
           </div>
         </form>
@@ -2462,42 +2462,42 @@ function CreateStateDefinitionModal({
           )}
 
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Definition ID</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">정의 ID</label>
             <input
               type="text"
               value={formData.id}
               onChange={e => setFormData(prev => ({ ...prev, id: e.target.value }))}
-              placeholder="e.g., default_states"
+              placeholder="예: default_states"
               className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white placeholder-gray-600"
               required
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Name</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">이름</label>
             <input
               type="text"
               value={formData.name}
               onChange={e => setFormData(prev => ({ ...prev, name: e.target.value }))}
-              placeholder="e.g., Fleet States"
+              placeholder="예: Fleet States"
               className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white placeholder-gray-600"
               required
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Description</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">설명</label>
             <textarea
               value={formData.description}
               onChange={e => setFormData(prev => ({ ...prev, description: e.target.value }))}
-              placeholder="Optional description..."
+              placeholder="선택사항..."
               className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white resize-none placeholder-gray-600"
               rows={2}
             />
           </div>
 
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-300">States</label>
+            <label className="block text-sm font-medium text-gray-300">상태 목록</label>
             <div className="flex gap-2">
               <input
                 type="text"
@@ -2512,7 +2512,7 @@ function CreateStateDefinitionModal({
                     handleAddState()
                   }
                 }}
-                placeholder="State name"
+                placeholder="상태 이름"
                 className="flex-1 px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white text-sm"
               />
               <button
@@ -2520,12 +2520,12 @@ function CreateStateDefinitionModal({
                 onClick={handleAddState}
                 className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm"
               >
-                Add
+                추가
               </button>
             </div>
 
             {states.length === 0 ? (
-              <div className="text-xs text-gray-500 italic">No states added yet</div>
+              <div className="text-xs text-gray-500 italic">추가된 상태 없음</div>
             ) : (
               <div className="space-y-2 max-h-40 overflow-y-auto">
                 {states.map(state => (
@@ -2545,14 +2545,14 @@ function CreateStateDefinitionModal({
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Default State</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">기본 상태</label>
             <select
               value={defaultState}
               onChange={e => setDefaultState(e.target.value)}
               disabled={states.length === 0}
               className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white disabled:opacity-50"
             >
-              <option value="">-- Select default state --</option>
+              <option value="">-- 기본 상태 선택 --</option>
               {states.map(state => (
                 <option key={state} value={state}>
                   {state}
@@ -2563,14 +2563,14 @@ function CreateStateDefinitionModal({
 
           <div className="flex justify-end gap-3 pt-4">
             <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white">
-              Cancel
+              취소
             </button>
             <button
               type="submit"
               disabled={createStateDef.isPending}
               className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
-              {createStateDef.isPending ? 'Creating...' : 'Create'}
+              {createStateDef.isPending ? '생성 중...' : '생성'}
             </button>
           </div>
         </form>

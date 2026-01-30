@@ -177,18 +177,18 @@ const END_STATE_COLORS: Record<string, string> = {
 }
 
 const OUTCOME_OPTIONS: Array<{ value: ActionOutcome; label: string }> = [
-  { value: 'success', label: 'Success' },
-  { value: 'failed', label: 'Failed' },
-  { value: 'aborted', label: 'Aborted' },
-  { value: 'cancelled', label: 'Cancelled' },
-  { value: 'timeout', label: 'Timeout' },
-  { value: 'rejected', label: 'Rejected' },
+  { value: 'success', label: '성공' },
+  { value: 'failed', label: '실패' },
+  { value: 'aborted', label: '중단' },
+  { value: 'cancelled', label: '취소' },
+  { value: 'timeout', label: '타임아웃' },
+  { value: 'rejected', label: '거부됨' },
 ]
 
 const DURING_TARGET_OPTIONS: Array<{ value: NonNullable<DuringStateTarget['target_type']>; label: string }> = [
-  { value: 'self', label: 'Self' },
-  { value: 'all', label: 'All' },
-  { value: 'agent', label: 'Agent' },
+  { value: 'self', label: '자신' },
+  { value: 'all', label: '전체' },
+  { value: 'agent', label: '에이전트' },
 ]
 
 const normalizeOutcomeValue = (value?: string): ActionOutcome | undefined => {
@@ -715,7 +715,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
               }}
               onClick={(e) => e.stopPropagation()}
               className="w-full text-sm font-semibold text-white bg-transparent border-b border-transparent hover:border-gray-600 focus:border-white focus:outline-none truncate"
-              placeholder="Enter job name..."
+              placeholder="작업 이름 입력..."
             />
           </div>
           {hasStartConditions && (
@@ -762,7 +762,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
             />
             <Sparkles className="w-3 h-3 text-purple-400" />
             <span className="text-[10px] text-purple-400 group-hover:text-purple-300">
-              Auto-generate states
+              상태 자동 생성
             </span>
           </label>
           {autoGenerateStates && jobName.trim() && (
@@ -783,7 +783,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
           )}
           {autoGenerateStates && !jobName.trim() && (
             <p className="mt-1 ml-5 text-[9px] text-yellow-500/70">
-              Enter job name to generate states
+              작업 이름을 입력하면 상태가 자동 생성됩니다
             </p>
           )}
         </div>
@@ -797,18 +797,18 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
         >
           <div className="flex items-center gap-2">
             <Upload className="w-3 h-3 text-amber-500" />
-            <span className="text-[10px] text-amber-400 uppercase tracking-wider font-medium">Goal Parameters</span>
-            <span className="text-[8px] text-gray-600 italic">→ Send</span>
+            <span className="text-[10px] text-amber-400 uppercase tracking-wider font-medium">Goal 파라미터</span>
+            <span className="text-[9px] text-gray-600 italic">→ 보내기</span>
             {isLoadingFields ? (
               <Loader2 className="w-3 h-3 text-amber-500 animate-spin" />
             ) : goalFields.length > 0 ? (
               <span className="text-[9px] text-gray-600">({goalFields.length})</span>
             ) : Object.keys(fieldSources).length > 0 ? (
-              <span className="text-[9px] text-purple-500">({Object.keys(fieldSources).length} mapped)</span>
+              <span className="text-[9px] text-purple-500">({Object.keys(fieldSources).length}개 바인딩)</span>
             ) : Object.keys(params).length > 0 ? (
               <span className="text-[9px] text-amber-500">({Object.keys(params).length})</span>
             ) : data.actionType ? (
-              <span className="text-[8px] text-yellow-500 bg-yellow-500/10 px-1.5 py-0.5 rounded">Click to configure</span>
+              <span className="text-[9px] text-yellow-500 bg-yellow-500/10 px-1.5 py-0.5 rounded">클릭하여 설정</span>
             ) : null}
           </div>
           {expandedSection === 'params' ? (
@@ -822,7 +822,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
             {isLoadingFields ? (
               <div className="flex items-center gap-2 py-2">
                 <Loader2 className="w-3 h-3 text-amber-500 animate-spin" />
-                <span className="text-[9px] text-gray-500">Loading action interface...</span>
+                <span className="text-[9px] text-gray-500">액션 인터페이스 로딩 중...</span>
               </div>
             ) : goalFields.length === 0 ? (
               <div className="p-2 bg-[#1a1a2e] rounded border border-gray-700">
@@ -932,8 +932,8 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
         >
           <div className="flex items-center gap-2">
             <Download className="w-3 h-3 text-green-500" />
-            <span className="text-[10px] text-green-400 uppercase tracking-wider font-medium">Result Schema</span>
-            <span className="text-[8px] text-gray-600 italic">← Receive</span>
+            <span className="text-[10px] text-green-400 uppercase tracking-wider font-medium">Result 스키마</span>
+            <span className="text-[9px] text-gray-600 italic">← 수신</span>
             {isLoadingFields ? (
               <Loader2 className="w-3 h-3 text-green-500 animate-spin" />
             ) : resultFields.length > 0 ? (
@@ -953,20 +953,20 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
             {isLoadingFields ? (
               <div className="flex items-center gap-2 py-2">
                 <Loader2 className="w-3 h-3 text-green-500 animate-spin" />
-                <span className="text-[9px] text-gray-500">Loading result schema...</span>
+                <span className="text-[9px] text-gray-500">Result 스키마 로딩 중...</span>
               </div>
             ) : resultFields.length === 0 ? (
               <div className="p-2 bg-[#1a1a2e] rounded border border-gray-700">
-                <p className="text-[9px] text-gray-500">No result schema available from capability API</p>
+                <p className="text-[9px] text-gray-500">Capability API에서 Result 스키마를 가져올 수 없습니다</p>
               </div>
             ) : (
               <>
                 <div className="p-2 bg-green-900/20 rounded border border-green-500/30">
                   <p className="text-[9px] text-green-400 mb-1.5">
-                    These fields are available after this step completes successfully.
+                    이 Step 완료 후 사용 가능한 결과값입니다.
                   </p>
-                  <p className="text-[8px] text-gray-500">
-                    Use <code className="text-purple-400">${'{'}step_id.field{'}'}</code> to bind to other steps.
+                  <p className="text-[9px] text-gray-500">
+                    다른 Step에서 <code className="text-purple-400">${'{'}step_id.field{'}'}</code> 형식으로 바인딩할 수 있습니다.
                   </p>
                 </div>
                 <div className="space-y-1">
@@ -1003,7 +1003,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
         >
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-cyan-500" />
-            <span className="text-[10px] text-cyan-400 uppercase tracking-wider font-medium">Start Conditions</span>
+            <span className="text-[10px] text-cyan-400 uppercase tracking-wider font-medium">시작 조건</span>
             <span className="text-[9px] text-gray-600">({startStates.length})</span>
           </div>
           {expandedSection === 'start' ? (
@@ -1015,10 +1015,10 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
         {expandedSection === 'start' && (
           <div className="px-3 pb-2 space-y-1.5">
             <p className="text-[9px] text-gray-500">
-              Preconditions before this step starts. Every=all robots in scope, Any=at least one.
+              Step 시작 전 조건. Every=모든 로봇, Any=하나 이상.
             </p>
             {startStates.length === 0 ? (
-              <p className="text-[9px] text-gray-600 italic">No preconditions</p>
+              <p className="text-[9px] text-gray-600 italic">사전 조건 없음</p>
             ) : (
               startStates.map((ss, idx) => (
                 <div key={ss.id} className="flex flex-wrap items-center gap-1 text-[9px] bg-cyan-500/10 px-2 py-1.5 rounded group min-w-0 overflow-hidden">
@@ -1151,7 +1151,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
               onClick={(e) => { e.stopPropagation(); addStartState() }}
               className="text-[9px] text-cyan-400 hover:text-cyan-300"
             >
-              + Add start condition
+              + 시작 조건 추가
             </button>
           </div>
         )}
@@ -1162,7 +1162,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
         <div className="flex items-center justify-between mb-1.5">
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
-            <span className="text-[10px] text-yellow-400 uppercase tracking-wider font-medium">During States</span>
+            <span className="text-[10px] text-yellow-400 uppercase tracking-wider font-medium">실행 중 상태</span>
           </div>
           <button
             onClick={(e) => { e.stopPropagation(); addDuringState() }}
@@ -1172,11 +1172,11 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
           </button>
         </div>
         <p className="text-[9px] text-gray-500 mb-1">
-          Temporary override while executing; non-self targets revert on completion.
+          실행 중 임시 상태. self 외 대상은 완료 시 원복됩니다.
         </p>
         <div className="flex flex-wrap gap-1">
           {duringStateTargets.length === 0 ? (
-            <span className="text-[9px] text-gray-600 italic">No states during execution</span>
+            <span className="text-[9px] text-gray-600 italic">실행 중 상태 없음</span>
           ) : (
             duringStateTargets.map((target, i) => (
               <div key={i} className="flex items-center gap-1 px-2 py-0.5 bg-yellow-500/10 border border-yellow-500/30 rounded-full group">
@@ -1261,7 +1261,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
         <div className="flex items-center justify-between mb-1.5">
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-sm bg-gradient-to-r from-green-500 to-red-500" />
-            <span className="text-[10px] text-gray-300 uppercase tracking-wider font-medium">End States</span>
+            <span className="text-[10px] text-gray-300 uppercase tracking-wider font-medium">종료 상태</span>
           </div>
           <button
             onClick={(e) => { e.stopPropagation(); addEndState() }}
@@ -1271,7 +1271,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
           </button>
         </div>
         <p className="text-[9px] text-gray-500 mb-1">
-          Final state per outcome. ROS2: SUCCEEDED/ABORTED/CANCELED.
+          결과별 최종 상태. ROS2: SUCCEEDED/ABORTED/CANCELED.
         </p>
         <div className="space-y-1">
           {endStates.map((endState) => (
@@ -1353,7 +1353,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
 	        id="in"
 	        className="!w-4 !h-4 !bg-cyan-500 !border-2 !border-cyan-300 !rounded-full hover:!w-5 hover:!h-5 hover:!bg-cyan-400 transition-all cursor-crosshair !pointer-events-auto"
 	        style={{ position: 'absolute', left: -8, top: '18%', zIndex: 1000, pointerEvents: 'auto' }}
-	        title="Input (from previous action)"
+	        title="입력 (이전 액션에서)"
 	      />
 	      <Handle
 	        type="source"
@@ -1361,7 +1361,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
 	        id="success"
 	        className="!w-4 !h-4 !border-2 !rounded-full hover:!w-5 hover:!h-5 transition-all cursor-crosshair !pointer-events-auto"
 	        style={{ position: 'absolute', right: -8, top: '70%', backgroundColor: '#22c55e', borderColor: '#22c55e99', zIndex: 1000, pointerEvents: 'auto' }}
-	        title="Success: Drag to connect"
+	        title="성공: 드래그하여 연결"
 	      />
 	      <Handle
 	        type="source"
@@ -1369,7 +1369,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
 	        id="failed"
 	        className="!w-4 !h-4 !border-2 !rounded-full hover:!w-5 hover:!h-5 transition-all cursor-crosshair !pointer-events-auto"
 	        style={{ position: 'absolute', right: -8, top: '77%', backgroundColor: '#ef4444', borderColor: '#ef444499', zIndex: 1000, pointerEvents: 'auto' }}
-	        title="Failed: Drag to connect"
+	        title="실패: 드래그하여 연결"
 	      />
 	      <Handle
 	        type="source"
@@ -1377,7 +1377,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
 	        id="aborted"
 	        className="!w-4 !h-4 !border-2 !rounded-full hover:!w-5 hover:!h-5 transition-all cursor-crosshair !pointer-events-auto"
 	        style={{ position: 'absolute', right: -8, top: '84%', backgroundColor: '#ef4444', borderColor: '#ef444499', zIndex: 1000, pointerEvents: 'auto' }}
-	        title="Aborted: Drag to connect"
+	        title="중단: 드래그하여 연결"
 	      />
 	      <Handle
 	        type="source"
@@ -1385,7 +1385,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
 	        id="cancelled"
 	        className="!w-4 !h-4 !border-2 !rounded-full hover:!w-5 hover:!h-5 transition-all cursor-crosshair !pointer-events-auto"
 	        style={{ position: 'absolute', right: -8, top: '91%', backgroundColor: '#6b7280', borderColor: '#6b728099', zIndex: 1000, pointerEvents: 'auto' }}
-	        title="Cancelled: Drag to connect"
+	        title="취소됨: 드래그하여 연결"
 	      />
 	    </div>
 	  )
