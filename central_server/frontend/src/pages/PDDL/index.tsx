@@ -2,7 +2,7 @@ import { FileCode2 } from 'lucide-react'
 
 export default function PDDL() {
   return (
-    <div className="flex flex-col items-center justify-center h-full bg-[#0f0f1a] text-gray-400">
+    <div className="flex flex-col items-center justify-center h-full bg-base text-gray-400">
       <FileCode2 size={64} className="mb-4 text-gray-600" />
       <h1 className="text-2xl font-semibold mb-2">PDDL Editor</h1>
       <p className="text-gray-500">Coming Soon</p>

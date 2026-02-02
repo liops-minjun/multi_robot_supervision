@@ -130,13 +130,13 @@ export default function StatesPanel({
   return (
     <div className="space-y-1">
       {/* Auto-generate Toggle */}
-      <div className={`${sectionClasses} border-b border-[#2a2a4a]`}>
+      <div className={`${sectionClasses} border-b border-primary`}>
         <label className="flex items-center gap-2 cursor-pointer group">
           <input
             type="checkbox"
             checked={autoGenerateStates}
             onChange={(e) => onAutoGenerateChange(e.target.checked)}
-            className="w-4 h-4 rounded border-gray-500 bg-[#1a1a2e] text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+            className="w-4 h-4 rounded border-gray-500 bg-elevated text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
           />
           <span className={`${headerClasses} text-gray-400 group-hover:text-gray-300`}>
             Auto-generate states from steps
@@ -260,7 +260,7 @@ function StateSection({
     <div>
       <button
         onClick={onToggle}
-        className={`w-full ${headerClasses} flex items-center justify-between text-[10px] font-semibold text-gray-400 uppercase tracking-wider hover:bg-[#1a1a2e] transition-colors`}
+        className={`w-full ${headerClasses} flex items-center justify-between text-[10px] font-semibold text-gray-400 uppercase tracking-wider hover:bg-elevated transition-colors`}
       >
         <div className="flex items-center gap-1.5">
           {icon}
@@ -337,26 +337,26 @@ function StateItem({
 
   if (isEditing && onSave && onCancel) {
     return (
-      <div className="p-2 bg-[#1a1a2e] rounded border border-blue-500/30 space-y-2">
+      <div className="p-2 bg-elevated rounded border border-blue-500/30 space-y-2">
         <input
           type="text"
           value={editForm.name}
           onChange={(e) => setEditForm(prev => ({ ...prev, name: e.target.value }))}
-          className="w-full px-2 py-1 bg-[#0f0f1a] border border-[#2a2a4a] rounded text-xs text-white focus:outline-none focus:border-blue-500"
+          className="w-full px-2 py-1 bg-base border border-primary rounded text-xs text-white focus:outline-none focus:border-blue-500"
           placeholder="State name"
         />
         <input
           type="text"
           value={editForm.description}
           onChange={(e) => setEditForm(prev => ({ ...prev, description: e.target.value }))}
-          className="w-full px-2 py-1 bg-[#0f0f1a] border border-[#2a2a4a] rounded text-xs text-gray-400 focus:outline-none focus:border-blue-500"
+          className="w-full px-2 py-1 bg-base border border-primary rounded text-xs text-gray-400 focus:outline-none focus:border-blue-500"
           placeholder="Description"
         />
         <input
           type="text"
           value={editForm.semantic_tags}
           onChange={(e) => setEditForm(prev => ({ ...prev, semantic_tags: e.target.value }))}
-          className="w-full px-2 py-1 bg-[#0f0f1a] border border-[#2a2a4a] rounded text-xs text-purple-400 focus:outline-none focus:border-blue-500"
+          className="w-full px-2 py-1 bg-base border border-primary rounded text-xs text-purple-400 focus:outline-none focus:border-blue-500"
           placeholder="Tags (comma separated)"
         />
         <div className="flex justify-end gap-1">
@@ -384,7 +384,7 @@ function StateItem({
   }
 
   return (
-    <div className={`flex items-center gap-2 ${compact ? 'px-1.5 py-1' : 'px-2 py-1.5'} rounded hover:bg-[#1a1a2e] group transition-colors`}>
+    <div className={`flex items-center gap-2 ${compact ? 'px-1.5 py-1' : 'px-2 py-1.5'} rounded hover:bg-elevated group transition-colors`}>
       {/* Color indicator */}
       <div
         className="w-2.5 h-2.5 rounded-full flex-shrink-0"
@@ -486,7 +486,7 @@ function AddStateForm({ onAdd, onCancel, existingCodes }: AddStateFormProps) {
   }
 
   return (
-    <div className="p-2 bg-[#1a1a2e] rounded-lg border border-[#2a2a4a] space-y-2">
+    <div className="p-2 bg-elevated rounded-lg border border-primary space-y-2">
       <div className="text-xs font-medium text-gray-400 mb-2">New Custom State</div>
 
       <div className="flex gap-2">
@@ -497,14 +497,14 @@ function AddStateForm({ onAdd, onCancel, existingCodes }: AddStateFormProps) {
             setForm(prev => ({ ...prev, code: e.target.value }))
             setError(null)
           }}
-          className="flex-1 px-2 py-1 bg-[#0f0f1a] border border-[#2a2a4a] rounded text-xs text-white focus:outline-none focus:border-blue-500"
+          className="flex-1 px-2 py-1 bg-base border border-primary rounded text-xs text-white focus:outline-none focus:border-blue-500"
           placeholder="State code (e.g., waiting)"
         />
         <input
           type="color"
           value={form.color}
           onChange={(e) => setForm(prev => ({ ...prev, color: e.target.value }))}
-          className="w-8 h-8 rounded border border-[#2a2a4a] bg-transparent cursor-pointer"
+          className="w-8 h-8 rounded border border-primary bg-transparent cursor-pointer"
         />
       </div>
 
@@ -515,7 +515,7 @@ function AddStateForm({ onAdd, onCancel, existingCodes }: AddStateFormProps) {
           setForm(prev => ({ ...prev, name: e.target.value }))
           setError(null)
         }}
-        className="w-full px-2 py-1 bg-[#0f0f1a] border border-[#2a2a4a] rounded text-xs text-white focus:outline-none focus:border-blue-500"
+        className="w-full px-2 py-1 bg-base border border-primary rounded text-xs text-white focus:outline-none focus:border-blue-500"
         placeholder="Display name"
       />
 
@@ -523,7 +523,7 @@ function AddStateForm({ onAdd, onCancel, existingCodes }: AddStateFormProps) {
         type="text"
         value={form.description}
         onChange={(e) => setForm(prev => ({ ...prev, description: e.target.value }))}
-        className="w-full px-2 py-1 bg-[#0f0f1a] border border-[#2a2a4a] rounded text-xs text-gray-400 focus:outline-none focus:border-blue-500"
+        className="w-full px-2 py-1 bg-base border border-primary rounded text-xs text-gray-400 focus:outline-none focus:border-blue-500"
         placeholder="Description (optional)"
       />
 
@@ -531,7 +531,7 @@ function AddStateForm({ onAdd, onCancel, existingCodes }: AddStateFormProps) {
         type="text"
         value={form.semantic_tags}
         onChange={(e) => setForm(prev => ({ ...prev, semantic_tags: e.target.value }))}
-        className="w-full px-2 py-1 bg-[#0f0f1a] border border-[#2a2a4a] rounded text-xs text-purple-400 focus:outline-none focus:border-blue-500"
+        className="w-full px-2 py-1 bg-base border border-primary rounded text-xs text-purple-400 focus:outline-none focus:border-blue-500"
         placeholder="Semantic tags (comma separated)"
       />
 

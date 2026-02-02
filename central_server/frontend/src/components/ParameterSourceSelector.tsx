@@ -129,7 +129,7 @@ export default function ParameterSourceSelector({
           className={`rounded border transition-all cursor-pointer ${
             !isBinding
               ? 'border-amber-500/40 bg-amber-500/10'
-              : 'border-gray-700 bg-[#16162a] hover:border-gray-600'
+              : 'border-gray-700 bg-surface hover:border-gray-600'
           }`}
           onClick={(e) => {
             e.stopPropagation()
@@ -161,7 +161,7 @@ export default function ParameterSourceSelector({
                       onConstantChange(e.target.checked)
                     }}
                     onClick={(e) => e.stopPropagation()}
-                    className="w-4 h-4 rounded border-gray-600 bg-[#0d0d1a] text-amber-500 focus:ring-amber-500"
+                    className="w-4 h-4 rounded border-gray-600 bg-sunken text-amber-500 focus:ring-amber-500"
                   />
                   <span className="text-[11px] text-gray-300">{constantValue ? 'true' : 'false'}</span>
                 </label>
@@ -174,7 +174,7 @@ export default function ParameterSourceSelector({
                     onConstantChange(e.target.value === '' ? undefined : parseFloat(e.target.value))
                   }}
                   onClick={(e) => e.stopPropagation()}
-                  className="w-full px-2 py-1.5 bg-[#0d0d1a] border border-amber-500/30 rounded text-[11px] text-white focus:outline-none focus:border-amber-500"
+                  className="w-full px-2 py-1.5 bg-sunken border border-amber-500/30 rounded text-[11px] text-white focus:outline-none focus:border-amber-500"
                   placeholder="숫자 입력..."
                 />
               ) : (
@@ -186,7 +186,7 @@ export default function ParameterSourceSelector({
                     onConstantChange(e.target.value)
                   }}
                   onClick={(e) => e.stopPropagation()}
-                  className="w-full px-2 py-1.5 bg-[#0d0d1a] border border-amber-500/30 rounded text-[11px] text-white focus:outline-none focus:border-amber-500"
+                  className="w-full px-2 py-1.5 bg-sunken border border-amber-500/30 rounded text-[11px] text-white focus:outline-none focus:border-amber-500"
                   placeholder="값 입력..."
                 />
               )}
@@ -200,8 +200,8 @@ export default function ParameterSourceSelector({
             isBinding
               ? 'border-purple-500/40 bg-purple-500/10'
               : hasBindableSteps
-                ? 'border-gray-700 bg-[#16162a] hover:border-gray-600 cursor-pointer'
-                : 'border-gray-800 bg-[#0d0d1a] opacity-50 cursor-not-allowed'
+                ? 'border-gray-700 bg-surface hover:border-gray-600 cursor-pointer'
+                : 'border-gray-800 bg-sunken opacity-50 cursor-not-allowed'
           }`}
           onClick={(e) => {
             e.stopPropagation()
@@ -260,7 +260,7 @@ export default function ParameterSourceSelector({
                     return (
                       <div
                         key={step.id}
-                        className="rounded border border-gray-700 bg-[#0d0d1a] overflow-hidden"
+                        className="rounded border border-gray-700 bg-sunken overflow-hidden"
                       >
                         {/* Step header */}
                         <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-800/50 border-b border-gray-700">

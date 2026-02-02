@@ -1270,9 +1270,9 @@ function ActionGraphEditor() {
   }
 
   return (
-    <div className="h-screen flex bg-[#0f0f1a]">
+    <div className="h-screen flex bg-base">
       {/* Left Sidebar - Templates */}
-      <div className="w-64 bg-[#16162a] border-r border-[#2a2a4a] flex flex-col">
+      <div className="w-64 bg-surface border-r border-primary flex flex-col">
         {/* Templates List */}
         <div className="flex-1 overflow-y-auto">
           <div className="py-2">
@@ -1304,7 +1304,7 @@ function ActionGraphEditor() {
                     className={`w-full px-3 py-2 flex items-center gap-2 text-left transition-colors cursor-pointer group ${
                       selectedTemplateId === template.id
                         ? 'bg-blue-600/20 text-blue-400 border-l-2 border-blue-500'
-                        : 'text-gray-400 hover:bg-[#1a1a2e] hover:text-white'
+                        : 'text-gray-400 hover:bg-elevated hover:text-white'
                     }`}
                   >
                     <FileCode size={14} className="flex-shrink-0" />
@@ -1335,7 +1335,7 @@ function ActionGraphEditor() {
 
         {/* Selected Template Info */}
         {selectedTemplate && (
-          <div className="border-t border-[#2a2a4a] p-3 bg-[#1a1a2e]/50">
+          <div className="border-t border-primary p-3 bg-elevated/50">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-semibold text-gray-400 uppercase">선택된 템플릿</span>
               <button
@@ -1351,7 +1351,7 @@ function ActionGraphEditor() {
               v{selectedTemplate.version}
             </div>
             {templateAssignments.length > 0 && (
-              <div className="mt-2 pt-2 border-t border-[#2a2a4a]/50">
+              <div className="mt-2 pt-2 border-t border-primary/50">
                 <div className="text-xs text-gray-500 mb-1">
                   Assigned to {templateAssignments.length} agent(s)
                 </div>
@@ -1372,7 +1372,7 @@ function ActionGraphEditor() {
 
             {/* Validation Errors Panel */}
             {validationErrors.length > 0 && (
-              <div className="mt-2 pt-2 border-t border-[#2a2a4a]/50">
+              <div className="mt-2 pt-2 border-t border-primary/50">
                 <div className="flex items-center gap-1 text-xs text-yellow-400 mb-1">
                   <AlertCircle size={12} />
                   <span className="font-semibold">Validation Issues</span>
@@ -1395,9 +1395,9 @@ function ActionGraphEditor() {
 
       {/* Middle: Node Palette (when template selected) */}
       {selectedTemplate && (
-        <div className="w-56 bg-[#16162a] border-r border-[#2a2a4a] flex flex-col">
+        <div className="w-56 bg-surface border-r border-primary flex flex-col">
           {/* States Management */}
-          <div className="px-3 py-3 border-b border-[#2a2a4a]">
+          <div className="px-3 py-3 border-b border-primary">
             {selectedStateDef ? (
               <>
                 <button
@@ -1435,7 +1435,7 @@ function ActionGraphEditor() {
           </div>
 
           {/* Agent Filter */}
-          <div className="px-3 py-2 border-b border-[#2a2a4a]">
+          <div className="px-3 py-2 border-b border-primary">
             <div className="flex items-center gap-2 mb-1.5">
               <Cpu size={12} className="text-gray-400" />
               <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Agent</span>
@@ -1443,7 +1443,7 @@ function ActionGraphEditor() {
             <select
               value={selectedAgentFilter || ''}
               onChange={(e) => setSelectedAgentFilter(e.target.value || null)}
-              className="w-full px-2 py-1.5 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-xs text-white focus:outline-none focus:border-blue-500 cursor-pointer"
+              className="w-full px-2 py-1.5 bg-elevated border border-primary rounded-lg text-xs text-white focus:outline-none focus:border-blue-500 cursor-pointer"
             >
               <option value="">All Agents</option>
               {agents?.map((agent) => (
@@ -1539,7 +1539,7 @@ function ActionGraphEditor() {
                 <div key={category.category}>
                   <button
                     onClick={() => toggleCategory(category.category)}
-                    className="w-full px-3 py-2 flex items-center justify-between text-[10px] font-semibold text-gray-400 uppercase tracking-wider hover:bg-[#1a1a2e]"
+                    className="w-full px-3 py-2 flex items-center justify-between text-[10px] font-semibold text-gray-400 uppercase tracking-wider hover:bg-elevated"
                   >
                     <div className="flex items-center gap-1.5">
                       {category.icon}
@@ -1561,7 +1561,7 @@ function ActionGraphEditor() {
                             e.stopPropagation()
                             onDragStart(e, item)
                           }}
-                          className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-grab active:cursor-grabbing hover:bg-[#2a2a4a] transition-colors border border-transparent hover:border-[#3a3a5a] ${
+                          className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-grab active:cursor-grabbing hover:bg-elevated transition-colors border border-transparent hover:border-secondary ${
                             item.isAvailable === false ? 'opacity-50' : ''
                           }`}
                         >
@@ -1602,7 +1602,7 @@ function ActionGraphEditor() {
       {/* Main Canvas */}
       <div className="flex-1 flex flex-col">
         {/* Toolbar */}
-        <div className="h-12 bg-[#16162a] border-b border-[#2a2a4a] flex items-center justify-between px-4">
+        <div className="h-12 bg-surface border-b border-primary flex items-center justify-between px-4">
           <div className="flex items-center gap-2">
             <Zap className="w-5 h-5 text-blue-400" />
             <span className="font-semibold text-white">Behavior Tree Templates</span>
@@ -1706,10 +1706,10 @@ function ActionGraphEditor() {
                 connectionLineType={ConnectionLineType.SmoothStep}
               >
                 <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="#2a2a4a" />
-                <Controls className="!bg-[#16162a] !border-[#2a2a4a] !rounded-lg [&>button]:!bg-[#16162a] [&>button]:!border-[#2a2a4a] [&>button]:!text-white [&>button:hover]:!bg-[#2a2a4a]" />
+                <Controls className="!bg-surface !border-primary !rounded-lg [&>button]:!bg-surface [&>button]:!border-primary [&>button]:!text-white [&>button:hover]:!bg-[#2a2a4a]" />
                 {!bottomPanelTab && (
                   <Panel position="bottom-center" className="mb-4">
-                    <div className="bg-[#16162a]/90 backdrop-blur-sm px-4 py-2 rounded-lg border border-[#2a2a4a] text-xs text-gray-400">
+                    <div className="bg-surface/90 backdrop-blur-sm px-4 py-2 rounded-lg border border-primary text-xs text-gray-400">
                       Drag action servers to canvas to build workflow
                     </div>
                   </Panel>
@@ -1738,9 +1738,9 @@ function ActionGraphEditor() {
 
           {/* Bottom Panel - Telemetry & Assignments */}
           {selectedTemplate && (
-            <div className="border-t border-[#2a2a4a] bg-[#16162a]">
+            <div className="border-t border-primary bg-surface">
               {/* Panel Toggle Bar */}
-              <div className="flex items-center justify-between px-3 py-1.5 bg-[#1a1a2e]/50">
+              <div className="flex items-center justify-between px-3 py-1.5 bg-elevated/50">
                 <div className="flex items-center gap-1">
                   <button
                     onClick={() => setBottomPanelTab(bottomPanelTab === 'telemetry' ? null : 'telemetry')}
@@ -1773,7 +1773,7 @@ function ActionGraphEditor() {
                 {bottomPanelTab && (
                   <button
                     onClick={() => setBottomPanelTab(null)}
-                    className="p-1 text-gray-500 hover:text-white hover:bg-[#2a2a4a] rounded transition-colors"
+                    className="p-1 text-gray-500 hover:text-white hover:bg-elevated rounded transition-colors"
                   >
                     <ChevronDown size={14} />
                   </button>
@@ -1805,13 +1805,13 @@ function ActionGraphEditor() {
                           </button>
                         </div>
                         {templateAssignments.length === 0 ? (
-                          <div className="text-xs text-gray-500 p-3 bg-[#1a1a2e] rounded-lg">
+                          <div className="text-xs text-gray-500 p-3 bg-elevated rounded-lg">
                             할당된 에이전트 없음
                           </div>
                         ) : (
                           <div className="space-y-1.5 max-h-32 overflow-y-auto">
                             {templateAssignments.map(a => (
-                              <div key={a.id} className="flex items-center justify-between p-2 bg-[#1a1a2e] rounded-lg">
+                              <div key={a.id} className="flex items-center justify-between p-2 bg-elevated rounded-lg">
                                 <div className="flex items-center gap-2">
                                   <Cpu size={12} className="text-green-400" />
                                   <span className="text-xs text-white">{a.agent_name}</span>
@@ -1837,7 +1837,7 @@ function ActionGraphEditor() {
                             {(compatibleAgentsData.agents || [])
                               .filter(a => a.has_all_capabilities && !templateAssignments.some(ta => ta.agent_id === a.agent_id))
                               .map(a => (
-                                <div key={a.agent_id} className="flex items-center justify-between p-2 bg-[#1a1a2e] rounded-lg">
+                                <div key={a.agent_id} className="flex items-center justify-between p-2 bg-elevated rounded-lg">
                                   <div className="flex items-center gap-2">
                                     <Cpu size={12} className="text-purple-400" />
                                     <span className="text-xs text-white">{a.agent_name}</span>
@@ -1851,7 +1851,7 @@ function ActionGraphEditor() {
                                 </div>
                               ))}
                             {(compatibleAgentsData.agents || []).filter(a => a.has_all_capabilities && !templateAssignments.some(ta => ta.agent_id === a.agent_id)).length === 0 && (
-                              <div className="text-xs text-gray-500 p-3 bg-[#1a1a2e] rounded-lg">
+                              <div className="text-xs text-gray-500 p-3 bg-elevated rounded-lg">
                                 추가 호환 에이전트 없음
                               </div>
                             )}
@@ -1893,7 +1893,7 @@ function ActionGraphEditor() {
         ) : (
           // Debug: Modal was triggered but no template selected
           <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-            <div className="bg-[#16162a] rounded-xl shadow-2xl p-6 border border-[#2a2a4a]">
+            <div className="bg-surface rounded-xl shadow-2xl p-6 border border-primary">
               <p className="text-white mb-4">Error: No template selected</p>
               <button
                 onClick={() => setShowAssignModal(false)}
@@ -2168,8 +2168,8 @@ function CreateTemplateModal({
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-      <div className="bg-[#16162a] rounded-xl shadow-2xl w-full max-w-md border border-[#2a2a4a]">
-        <div className="px-6 py-4 border-b border-[#2a2a4a] flex items-center justify-between">
+      <div className="bg-surface rounded-xl shadow-2xl w-full max-w-md border border-primary">
+        <div className="px-6 py-4 border-b border-primary flex items-center justify-between">
           <h2 className="text-lg font-semibold text-white">Create New Template</h2>
           <button onClick={onClose} className="text-gray-500 hover:text-white">
             <X size={20} />
@@ -2199,7 +2199,7 @@ function CreateTemplateModal({
               value={formData.id}
               onChange={e => setFormData(prev => ({ ...prev, id: e.target.value }))}
               placeholder="예: pick_and_place"
-              className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white placeholder-gray-600"
+              className="w-full px-3 py-2 bg-elevated border border-primary rounded-lg text-white placeholder-gray-600"
               required
             />
           </div>
@@ -2211,7 +2211,7 @@ function CreateTemplateModal({
               value={formData.name}
               onChange={e => setFormData(prev => ({ ...prev, name: e.target.value }))}
               placeholder="예: Pick and Place"
-              className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white placeholder-gray-600"
+              className="w-full px-3 py-2 bg-elevated border border-primary rounded-lg text-white placeholder-gray-600"
               required
             />
           </div>
@@ -2222,7 +2222,7 @@ function CreateTemplateModal({
               value={formData.description}
               onChange={e => setFormData(prev => ({ ...prev, description: e.target.value }))}
               placeholder="선택사항..."
-              className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white resize-none placeholder-gray-600"
+              className="w-full px-3 py-2 bg-elevated border border-primary rounded-lg text-white resize-none placeholder-gray-600"
               rows={2}
             />
           </div>
@@ -2319,8 +2319,8 @@ function AssignTemplateModal({
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-      <div className="bg-[#16162a] rounded-xl shadow-2xl w-full max-w-lg border border-[#2a2a4a]">
-        <div className="px-6 py-4 border-b border-[#2a2a4a] flex items-center justify-between">
+      <div className="bg-surface rounded-xl shadow-2xl w-full max-w-lg border border-primary">
+        <div className="px-6 py-4 border-b border-primary flex items-center justify-between">
           <div>
             <h2 className="text-lg font-semibold text-white">Assign Template</h2>
             <p className="text-sm text-gray-500 mt-0.5">{template.name}</p>
@@ -2332,7 +2332,7 @@ function AssignTemplateModal({
 
         <div className="p-6">
           {/* Show required action types with checkmarks */}
-          <div className="mb-5 p-4 bg-[#1a1a2e] rounded-lg border border-[#2a2a4a]">
+          <div className="mb-5 p-4 bg-elevated rounded-lg border border-primary">
             <div className="text-xs text-gray-400 mb-3 font-medium uppercase tracking-wider">
               Required Action Types ({requiredActionTypes.length})
             </div>
@@ -2380,8 +2380,8 @@ function AssignTemplateModal({
                       isAssigned
                         ? 'bg-green-500/10 border-green-500/30'
                         : isCompatible
-                          ? 'bg-[#1a1a2e] border-[#2a2a4a] hover:border-[#3a3a5a]'
-                          : 'bg-[#1a1a2e] border-yellow-500/30'
+                          ? 'bg-elevated border-primary hover:border-secondary'
+                          : 'bg-elevated border-yellow-500/30'
                     }`}
                   >
                     <div className="flex items-center justify-between mb-2">
@@ -2473,7 +2473,7 @@ function AssignTemplateModal({
             )}
           </div>
 
-          <div className="mt-4 pt-4 border-t border-[#2a2a4a] flex justify-end">
+          <div className="mt-4 pt-4 border-t border-primary flex justify-end">
             <button
               onClick={onClose}
               className="px-4 py-2 bg-[#2a2a4a] text-white rounded-lg hover:bg-[#3a3a5a]"
@@ -2575,8 +2575,8 @@ function AddStateModal({
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-      <div className="bg-[#16162a] rounded-xl shadow-2xl w-full max-w-lg border border-[#2a2a4a]">
-        <div className="px-6 py-4 border-b border-[#2a2a4a] flex items-center justify-between">
+      <div className="bg-surface rounded-xl shadow-2xl w-full max-w-lg border border-primary">
+        <div className="px-6 py-4 border-b border-primary flex items-center justify-between">
           <h2 className="text-lg font-semibold text-white">Manage States</h2>
           <button onClick={onClose} className="text-gray-500 hover:text-white">
             <X size={20} />
@@ -2596,7 +2596,7 @@ function AddStateModal({
                     setError('')
                   }}
                   placeholder="State name"
-                  className="flex-1 px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white text-sm"
+                  className="flex-1 px-3 py-2 bg-elevated border border-primary rounded-lg text-white text-sm"
                   autoFocus
                 />
                 <button
@@ -2640,7 +2640,7 @@ function AddStateModal({
             </label>
             <div className="space-y-2 max-h-48 overflow-y-auto">
               {localStates.map(state => (
-                <div key={state} className="flex items-center justify-between px-3 py-2 bg-[#1a1a2e] rounded-lg">
+                <div key={state} className="flex items-center justify-between px-3 py-2 bg-elevated rounded-lg">
                   <div className="flex items-center gap-3">
                     <div className="flex gap-1">
                       {(Object.keys(STATE_COLOR_OPTIONS) as StateColorType[]).map(colorType => (
@@ -2680,7 +2680,7 @@ function AddStateModal({
             </div>
           </div>
 
-          <div className="flex justify-between items-center pt-4 border-t border-[#2a2a4a]">
+          <div className="flex justify-between items-center pt-4 border-t border-primary">
             <span className={`text-sm ${hasChanges ? 'text-yellow-400' : 'text-gray-600'}`}>
               {hasChanges ? 'Unsaved changes' : 'No changes'}
             </span>

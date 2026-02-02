@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-do
 import { Workflow, History, Globe, Server, FileCode2 } from 'lucide-react'
 
 import { useTranslation } from './i18n'
+import { ThemeToggle } from './components/ThemeToggle'
 import ActionGraph from './pages/ActionGraph'
 import PDDL from './pages/PDDL'
 import TaskHistory from './pages/TaskHistory'
@@ -16,10 +17,13 @@ function App() {
 
   return (
     <BrowserRouter>
-      <div className="flex h-screen bg-[#0f0f1a]">
+      <div className="flex h-screen bg-base">
         {/* Sidebar */}
-        <nav className="w-64 bg-[#16162a] text-white flex flex-col border-r border-[#2a2a4a]">
-          <div className="h-12 border-b border-[#2a2a4a]" />
+        <nav className="w-64 bg-surface text-primary flex flex-col border-r border-primary">
+          <div className="h-12 border-b border-primary flex items-center justify-between px-4">
+            <span className="text-sm font-semibold text-secondary">Fleet UI</span>
+            <ThemeToggle />
+          </div>
 
           <ul className="mt-4 flex-1">
             <NavItem to="/flows" icon={<Workflow size={20} />} label={t('nav.actionGraph')} />
@@ -29,10 +33,10 @@ function App() {
           </ul>
 
           {/* Language Switcher */}
-          <div className="p-4 border-t border-[#2a2a4a]">
+          <div className="p-4 border-t border-primary">
             <button
               onClick={toggleLanguage}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-[#1a1a2e] hover:bg-[#2a2a4a] rounded-lg transition-colors"
+              className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-elevated hover:bg-sunken rounded-lg transition-colors"
             >
               <Globe size={18} />
               <span>{language === 'ko' ? '한국어' : 'English'}</span>
@@ -41,7 +45,7 @@ function App() {
         </nav>
 
         {/* Main Content */}
-        <main className="flex-1 overflow-auto">
+        <main className="flex-1 overflow-auto bg-base">
           <Routes>
             <Route path="/" element={<Navigate to="/flows" replace />} />
             <Route path="/flows" element={<ActionGraph />} />
@@ -61,8 +65,8 @@ function NavItem({ to, icon, label }: { to: string; icon: React.ReactNode; label
       <NavLink
         to={to}
         className={({ isActive }) =>
-          `flex items-center gap-3 px-4 py-3 hover:bg-[#1a1a2e] transition-colors ${
-            isActive ? 'bg-[#1a1a2e] border-l-4 border-blue-500 text-blue-400' : 'text-gray-400'
+          `flex items-center gap-3 px-4 py-3 hover:bg-elevated transition-colors ${
+            isActive ? 'bg-elevated border-l-4 border-blue-500 text-blue-400' : 'text-secondary'
           }`
         }
       >

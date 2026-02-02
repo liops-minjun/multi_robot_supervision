@@ -377,14 +377,14 @@ function BehaviorTreeViewerInner({
 
   if (!behaviorTree) {
     return (
-      <div className={`flex items-center justify-center bg-[#0f0f1a] text-gray-500 ${className}`}>
+      <div className={`flex items-center justify-center bg-base text-gray-500 ${className}`}>
         <p className="text-sm">No behavior tree selected</p>
       </div>
     )
   }
 
   return (
-    <div className={`bg-[#0f0f1a] ${className}`}>
+    <div className={`bg-base ${className}`}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -407,14 +407,14 @@ function BehaviorTreeViewerInner({
         />
         {showControls && !compact && (
           <Controls
-            className="!bg-[#16162a] !border-[#2a2a4a] !rounded-lg [&>button]:!bg-[#16162a] [&>button]:!border-[#2a2a4a] [&>button]:!text-white [&>button:hover]:!bg-[#2a2a4a]"
+            className="!bg-surface !border-primary !rounded-lg [&>button]:!bg-surface [&>button]:!border-primary [&>button]:!text-white [&>button:hover]:!bg-[#2a2a4a]"
           />
         )}
         {showMiniMap && !compact && (
           <MiniMap
             nodeColor={(node) => node.data.color || '#3b82f6'}
             maskColor="rgba(0,0,0,0.8)"
-            className="!bg-[#16162a] !rounded-lg"
+            className="!bg-surface !rounded-lg"
           />
         )}
       </ReactFlow>

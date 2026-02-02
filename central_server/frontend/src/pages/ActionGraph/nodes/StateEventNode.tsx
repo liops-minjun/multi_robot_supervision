@@ -23,7 +23,7 @@ const StateEventNode = memo(({ data, selected }: NodeProps<StateEventNodeData>) 
         relative min-w-[140px] rounded-lg overflow-visible
         bg-[#1e1e2e] border-2
         shadow-lg
-        ${selected ? 'border-white/60 shadow-xl' : 'border-[#2a2a4a]'}
+        ${selected ? 'border-white/60 shadow-xl' : 'border-primary'}
         transition-all duration-150
       `}
       style={{ borderColor: selected ? 'white' : bgColor }}

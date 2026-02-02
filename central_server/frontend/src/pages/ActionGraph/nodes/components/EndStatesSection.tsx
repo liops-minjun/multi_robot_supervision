@@ -59,10 +59,10 @@ const EndStatesSection = memo(({
                   onUpdateEndState(endState.id, 'outcome', e.target.value)
                 }}
                 onClick={(e) => e.stopPropagation()}
-                className="w-16 px-1 py-0.5 bg-[#16162a] border border-gray-700 rounded text-[9px] text-gray-300 focus:outline-none cursor-pointer"
+                className="w-16 px-1 py-0.5 bg-surface border border-gray-700 rounded text-[9px] text-gray-300 focus:outline-none cursor-pointer"
               >
                 {OUTCOME_OPTIONS.map(option => (
-                  <option key={option.value} value={option.value} className="bg-[#16162a]">
+                  <option key={option.value} value={option.value} className="bg-surface">
                     {option.label}
                   </option>
                 ))}
@@ -91,10 +91,10 @@ const EndStatesSection = memo(({
                   onUpdateEndState(endState.id, 'state', e.target.value)
                 }}
                 onClick={(e) => e.stopPropagation()}
-                className="flex-1 px-1 py-0.5 bg-[#16162a] border border-gray-700 rounded text-[9px] focus:outline-none cursor-pointer"
+                className="flex-1 px-1 py-0.5 bg-surface border border-gray-700 rounded text-[9px] focus:outline-none cursor-pointer"
                 style={{ color }}
               >
-                {states.map(s => <option key={s} value={s} className="bg-[#16162a]">{s}</option>)}
+                {states.map(s => <option key={s} value={s} className="bg-surface">{s}</option>)}
               </select>
 
               {/* Delete button */}

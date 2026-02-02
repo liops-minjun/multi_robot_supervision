@@ -295,7 +295,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
       className={`
         relative min-w-[280px] max-w-[340px] rounded-lg overflow-visible
         bg-[#1e1e2e] border-2 shadow-lg
-        ${selected ? 'border-white/60 shadow-xl shadow-blue-500/20' : 'border-[#2a2a4a]'}
+        ${selected ? 'border-white/60 shadow-xl shadow-blue-500/20' : 'border-primary'}
         transition-all duration-150
       `}
     >
@@ -356,7 +356,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
               checked={autoGenerateStates}
               onChange={(e) => { e.stopPropagation(); toggleAutoGenerateStates(e.target.checked) }}
               onClick={(e) => e.stopPropagation()}
-              className="w-3.5 h-3.5 rounded border-gray-500 bg-[#1a1a2e] text-purple-500 focus:ring-purple-500 focus:ring-offset-0"
+              className="w-3.5 h-3.5 rounded border-gray-500 bg-elevated text-purple-500 focus:ring-purple-500 focus:ring-offset-0"
             />
             <Sparkles className="w-3 h-3 text-purple-400" />
             <span className="text-[10px] text-purple-400 group-hover:text-purple-300">상태 자동 생성</span>
@@ -392,10 +392,10 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
       />
 
       {/* Result Schema Section */}
-      <div className="border-b border-[#2a2a4a]">
+      <div className="border-b border-primary">
         <button
           onClick={(e) => { e.stopPropagation(); setExpandedSection(expandedSection === 'result' ? null : 'result') }}
-          className="w-full px-3 py-1.5 flex items-center justify-between hover:bg-[#2a2a4a]/50 transition-colors"
+          className="w-full px-3 py-1.5 flex items-center justify-between hover:bg-elevated/50 transition-colors"
         >
           <div className="flex items-center gap-2">
             <Download className="w-3 h-3 text-green-500" />
@@ -407,13 +407,13 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
         {expandedSection === 'result' && (
           <div className="px-3 pb-2 space-y-2">
             {resultFields.length === 0 ? (
-              <div className="p-2 bg-[#1a1a2e] rounded border border-gray-700">
+              <div className="p-2 bg-elevated rounded border border-gray-700">
                 <p className="text-[9px] text-gray-500">Result 스키마 없음</p>
               </div>
             ) : (
               <div className="space-y-1">
                 {resultFields.map((field) => (
-                  <div key={field.name} className="flex items-center justify-between px-2 py-1.5 bg-[#16162a] rounded border border-green-500/20">
+                  <div key={field.name} className="flex items-center justify-between px-2 py-1.5 bg-surface rounded border border-green-500/20">
                     <span className="text-[9px] text-green-400 font-mono">{field.name}</span>
                     <code className="text-[8px] text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded">${'{'}${jobName || id}.{field.name}{'}'}</code>
                   </div>
@@ -425,10 +425,10 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
       </div>
 
       {/* Start Conditions Section */}
-      <div className="border-b border-[#2a2a4a]">
+      <div className="border-b border-primary">
         <button
           onClick={(e) => { e.stopPropagation(); setExpandedSection(expandedSection === 'start' ? null : 'start') }}
-          className="w-full px-3 py-1.5 flex items-center justify-between hover:bg-[#2a2a4a]/50 transition-colors"
+          className="w-full px-3 py-1.5 flex items-center justify-between hover:bg-elevated/50 transition-colors"
         >
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-cyan-500" />
@@ -442,25 +442,25 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
             {startStates.map((ss, idx) => (
               <div key={ss.id} className="flex flex-wrap items-center gap-1 text-[9px] bg-cyan-500/10 px-2 py-1.5 rounded group">
                 {idx > 0 && (
-                  <select value={ss.operator || 'and'} onChange={(e) => { e.stopPropagation(); updateStartStateField(ss.id, 'operator', e.target.value as 'and' | 'or') }} onClick={(e) => e.stopPropagation()} className="bg-[#16162a] text-[9px] text-orange-400 font-bold uppercase focus:outline-none cursor-pointer rounded px-1.5 py-0.5 border border-orange-500/30">
+                  <select value={ss.operator || 'and'} onChange={(e) => { e.stopPropagation(); updateStartStateField(ss.id, 'operator', e.target.value as 'and' | 'or') }} onClick={(e) => e.stopPropagation()} className="bg-surface text-[9px] text-orange-400 font-bold uppercase focus:outline-none cursor-pointer rounded px-1.5 py-0.5 border border-orange-500/30">
                     <option value="and">AND</option>
                     <option value="or">OR</option>
                   </select>
                 )}
-                <select value={ss.quantifier || 'self'} onChange={(e) => { e.stopPropagation(); updateStartStateField(ss.id, 'quantifier', e.target.value) }} onClick={(e) => e.stopPropagation()} className="bg-[#16162a] text-[9px] text-purple-400 font-medium focus:outline-none cursor-pointer rounded px-1.5 py-0.5 border border-purple-500/30">
+                <select value={ss.quantifier || 'self'} onChange={(e) => { e.stopPropagation(); updateStartStateField(ss.id, 'quantifier', e.target.value) }} onClick={(e) => e.stopPropagation()} className="bg-surface text-[9px] text-purple-400 font-medium focus:outline-none cursor-pointer rounded px-1.5 py-0.5 border border-purple-500/30">
                   <option value="self">Self</option>
                   <option value="every">Every</option>
                   <option value="any">Any</option>
                   <option value="specific">Agent</option>
                 </select>
                 {(ss.quantifier === 'every' || ss.quantifier === 'any' || ss.quantifier === 'specific') && (
-                  <select value={ss.agentId || ''} onChange={(e) => { e.stopPropagation(); updateStartStateField(ss.id, 'agentId', e.target.value) }} onClick={(e) => e.stopPropagation()} className="bg-[#16162a] text-[9px] text-blue-400 focus:outline-none cursor-pointer rounded px-1.5 py-0.5 border border-blue-500/30 max-w-[80px] truncate">
+                  <select value={ss.agentId || ''} onChange={(e) => { e.stopPropagation(); updateStartStateField(ss.id, 'agentId', e.target.value) }} onClick={(e) => e.stopPropagation()} className="bg-surface text-[9px] text-blue-400 focus:outline-none cursor-pointer rounded px-1.5 py-0.5 border border-blue-500/30 max-w-[80px] truncate">
                     {availableAgents.length === 0 && <option value="">No agents</option>}
                     {availableAgents.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
                   </select>
                 )}
                 <span className="text-gray-500">is</span>
-                <select value={ss.state} onChange={(e) => { e.stopPropagation(); updateStartStateField(ss.id, 'state', e.target.value) }} onClick={(e) => e.stopPropagation()} className="bg-[#16162a] text-[9px] text-cyan-400 font-mono focus:outline-none cursor-pointer rounded px-1.5 py-0.5 border border-cyan-500/30 max-w-[70px] truncate">
+                <select value={ss.state} onChange={(e) => { e.stopPropagation(); updateStartStateField(ss.id, 'state', e.target.value) }} onClick={(e) => e.stopPropagation()} className="bg-surface text-[9px] text-cyan-400 font-mono focus:outline-none cursor-pointer rounded px-1.5 py-0.5 border border-cyan-500/30 max-w-[70px] truncate">
                   {states.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
                 <button onClick={(e) => { e.stopPropagation(); removeStartState(ss.id) }} className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
@@ -474,7 +474,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
       </div>
 
       {/* During States Section */}
-      <div className="px-3 py-2 border-b border-[#2a2a4a]">
+      <div className="px-3 py-2 border-b border-primary">
         <div className="flex items-center justify-between mb-1.5">
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
@@ -490,14 +490,14 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
           ) : (
             duringStateTargets.map((target, i) => (
               <div key={i} className="flex items-center gap-1 px-2 py-0.5 bg-yellow-500/10 border border-yellow-500/30 rounded-full group">
-                <select value={target.state} onChange={(e) => { e.stopPropagation(); const next = [...duringStateTargets]; next[i] = { ...next[i], state: e.target.value }; updateData('duringStateTargets', next) }} onClick={(e) => e.stopPropagation()} className="bg-[#1a1a2e] text-[9px] text-yellow-400 font-medium focus:outline-none cursor-pointer rounded px-1">
+                <select value={target.state} onChange={(e) => { e.stopPropagation(); const next = [...duringStateTargets]; next[i] = { ...next[i], state: e.target.value }; updateData('duringStateTargets', next) }} onClick={(e) => e.stopPropagation()} className="bg-elevated text-[9px] text-yellow-400 font-medium focus:outline-none cursor-pointer rounded px-1">
                   {states.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
-                <select value={target.target_type || 'self'} onChange={(e) => { e.stopPropagation(); const next = [...duringStateTargets]; const nextTarget: NormalizedDuringStateTarget = { ...next[i], target_type: e.target.value as NormalizedDuringStateTarget['target_type'] }; if (nextTarget.target_type !== 'agent') nextTarget.agent_id = undefined; else if (!nextTarget.agent_id && availableAgents.length > 0) nextTarget.agent_id = availableAgents[0].id; next[i] = nextTarget; updateData('duringStateTargets', next) }} onClick={(e) => e.stopPropagation()} className="bg-[#1a1a2e] text-[9px] text-yellow-300 font-medium focus:outline-none cursor-pointer rounded px-1">
+                <select value={target.target_type || 'self'} onChange={(e) => { e.stopPropagation(); const next = [...duringStateTargets]; const nextTarget: NormalizedDuringStateTarget = { ...next[i], target_type: e.target.value as NormalizedDuringStateTarget['target_type'] }; if (nextTarget.target_type !== 'agent') nextTarget.agent_id = undefined; else if (!nextTarget.agent_id && availableAgents.length > 0) nextTarget.agent_id = availableAgents[0].id; next[i] = nextTarget; updateData('duringStateTargets', next) }} onClick={(e) => e.stopPropagation()} className="bg-elevated text-[9px] text-yellow-300 font-medium focus:outline-none cursor-pointer rounded px-1">
                   {DURING_TARGET_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
                 {target.target_type === 'agent' && (
-                  <select value={target.agent_id || ''} onChange={(e) => { e.stopPropagation(); const next = [...duringStateTargets]; next[i] = { ...next[i], agent_id: e.target.value }; updateData('duringStateTargets', next) }} onClick={(e) => e.stopPropagation()} className="bg-[#1a1a2e] text-[9px] text-yellow-300 font-medium focus:outline-none cursor-pointer rounded px-1">
+                  <select value={target.agent_id || ''} onChange={(e) => { e.stopPropagation(); const next = [...duringStateTargets]; next[i] = { ...next[i], agent_id: e.target.value }; updateData('duringStateTargets', next) }} onClick={(e) => e.stopPropagation()} className="bg-elevated text-[9px] text-yellow-300 font-medium focus:outline-none cursor-pointer rounded px-1">
                     {availableAgents.length === 0 && <option value="">No agents</option>}
                     {availableAgents.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
                   </select>
@@ -530,11 +530,11 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
             return (
               <div key={endState.id} className="flex items-center gap-1.5 pr-5 relative group">
                 <div className="w-2.5 h-2.5 rounded-full flex-shrink-0 border" style={{ backgroundColor: stateColor, borderColor: `${stateColor}99` }} />
-                <select value={outcome} onChange={(e) => { e.stopPropagation(); updateEndState(endState.id, 'outcome', e.target.value) }} onClick={(e) => e.stopPropagation()} className="w-14 px-1 py-0.5 bg-[#16162a] border border-gray-700 rounded text-[9px] text-gray-300 focus:outline-none cursor-pointer">
+                <select value={outcome} onChange={(e) => { e.stopPropagation(); updateEndState(endState.id, 'outcome', e.target.value) }} onClick={(e) => e.stopPropagation()} className="w-14 px-1 py-0.5 bg-surface border border-gray-700 rounded text-[9px] text-gray-300 focus:outline-none cursor-pointer">
                   {OUTCOME_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
                 <span className="text-[9px] text-gray-600">→</span>
-                <select value={endState.state} onChange={(e) => { e.stopPropagation(); updateEndState(endState.id, 'state', e.target.value) }} onClick={(e) => e.stopPropagation()} className="flex-1 px-1 py-0.5 bg-[#16162a] border border-gray-700 rounded text-[9px] focus:outline-none cursor-pointer" style={{ color: stateColor }}>
+                <select value={endState.state} onChange={(e) => { e.stopPropagation(); updateEndState(endState.id, 'state', e.target.value) }} onClick={(e) => e.stopPropagation()} className="flex-1 px-1 py-0.5 bg-surface border border-gray-700 rounded text-[9px] focus:outline-none cursor-pointer" style={{ color: stateColor }}>
                   {states.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
                 {endStates.length > 1 && (
@@ -569,7 +569,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
       </div>
 
       {/* Footer */}
-      <div className="px-3 py-1 border-t border-[#2a2a4a] flex items-center justify-between" style={{ backgroundColor: '#16162a' }}>
+      <div className="px-3 py-1 border-t border-primary flex items-center justify-between" style={{ backgroundColor: '#16162a' }}>
         <span className="text-[9px] text-gray-500 font-mono truncate max-w-[180px]">{data.server || data.subtype}</span>
         <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
       </div>

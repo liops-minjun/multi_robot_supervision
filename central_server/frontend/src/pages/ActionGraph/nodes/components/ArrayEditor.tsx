@@ -124,7 +124,7 @@ const ArrayEditor = memo(({ value, onChange, fieldType, capturedTelemetry, isNum
                     updateElement(idx, parseFloat(e.target.value) || 0)
                   }}
                   onClick={(e) => e.stopPropagation()}
-                  className="flex-1 px-2 py-1 bg-[#16162a] border border-gray-700 rounded text-[10px] text-white focus:outline-none focus:border-amber-500 font-mono"
+                  className="flex-1 px-2 py-1 bg-surface border border-gray-700 rounded text-[10px] text-white focus:outline-none focus:border-amber-500 font-mono"
                   step="0.0001"
                 />
               ) : (
@@ -136,7 +136,7 @@ const ArrayEditor = memo(({ value, onChange, fieldType, capturedTelemetry, isNum
                     updateElement(idx, e.target.value)
                   }}
                   onClick={(e) => e.stopPropagation()}
-                  className="flex-1 px-2 py-1 bg-[#16162a] border border-gray-700 rounded text-[10px] text-white focus:outline-none focus:border-amber-500"
+                  className="flex-1 px-2 py-1 bg-surface border border-gray-700 rounded text-[10px] text-white focus:outline-none focus:border-amber-500"
                 />
               )}
               <button

@@ -2,16 +2,59 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================
+   Theme CSS Variables
+   ============================================ */
+
 :root {
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
+
+  /* Light Theme (default) */
+  --color-bg-base: #ffffff;
+  --color-bg-surface: #f8fafc;
+  --color-bg-elevated: #f1f5f9;
+  --color-bg-sunken: #e2e8f0;
+
+  --color-border-primary: #e2e8f0;
+  --color-border-secondary: #cbd5e1;
+
+  --color-text-primary: #1e293b;
+  --color-text-secondary: #475569;
+  --color-text-muted: #94a3b8;
+
+  /* Accent colors (same for both themes) */
+  --color-accent-blue: #3b82f6;
+  --color-accent-green: #22c55e;
+  --color-accent-red: #ef4444;
+  --color-accent-yellow: #f59e0b;
+  --color-accent-purple: #8b5cf6;
+  --color-accent-cyan: #06b6d4;
+  --color-accent-orange: #f97316;
+}
+
+[data-theme="dark"] {
+  --color-bg-base: #0f0f1a;
+  --color-bg-surface: #16162a;
+  --color-bg-elevated: #1a1a2e;
+  --color-bg-sunken: #0d0d1a;
+
+  --color-border-primary: #2a2a4a;
+  --color-border-secondary: #3a3a5a;
+
+  --color-text-primary: #ffffff;
+  --color-text-secondary: #a1a1aa;
+  --color-text-muted: #71717a;
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  background-color: var(--color-bg-base);
+  color: var(--color-text-primary);
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 /* Pulse glow animation for active Action Graph nodes */
@@ -22,4 +65,10 @@ body {
   50% {
     box-shadow: 0 0 20px 5px rgba(34, 211, 238, 0.8), 0 0 40px 10px rgba(34, 211, 238, 0.4);
   }
+}
+
+/* Smooth transitions for theme switching */
+.theme-transition,
+.theme-transition * {
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease !important;
 }

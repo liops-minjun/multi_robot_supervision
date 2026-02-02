@@ -220,7 +220,7 @@ function CapabilityCard({
   const typeName = capability.action_type.split('/').pop() || capability.action_type
 
   return (
-    <div className="bg-[#1a1a2e] rounded-lg border border-[#2a2a4a] overflow-hidden">
+    <div className="bg-elevated rounded-lg border border-primary overflow-hidden">
       <button
         onClick={onToggle}
         className="w-full p-4 flex items-center justify-between hover:bg-[#22223a] transition-colors"
@@ -277,12 +277,12 @@ function CapabilityCard({
       </button>
 
       {expanded && (
-        <div className="px-4 pb-4 border-t border-[#2a2a4a]">
+        <div className="px-4 pb-4 border-t border-primary">
           <div className="space-y-3 pt-3">
             {/* Action Server (전체 경로) */}
             <div>
               <div className="text-xs text-gray-400 uppercase tracking-wider mb-1">{t('agent.actionServer')}</div>
-              <div className="flex items-center gap-2 px-3 py-2 bg-[#16162a] rounded-lg">
+              <div className="flex items-center gap-2 px-3 py-2 bg-surface rounded-lg">
                 <Activity className="w-3 h-3 text-blue-400" />
                 <span className="text-sm text-gray-300 font-mono">{capability.action_server}</span>
               </div>
@@ -290,7 +290,7 @@ function CapabilityCard({
             {/* Action Type (전체 경로) */}
             <div>
               <div className="text-xs text-gray-400 uppercase tracking-wider mb-1">{t('common.type')}</div>
-              <div className="text-xs text-gray-500 font-mono px-3 py-2 bg-[#16162a] rounded-lg">
+              <div className="text-xs text-gray-500 font-mono px-3 py-2 bg-surface rounded-lg">
                 {capability.action_type}
               </div>
             </div>
@@ -306,7 +306,7 @@ function CapabilityCard({
               return (
                 <div>
                   <div className="text-xs text-gray-400 uppercase tracking-wider mb-1">Lifecycle State</div>
-                  <div className="flex items-center gap-2 px-3 py-2 bg-[#16162a] rounded-lg">
+                  <div className="flex items-center gap-2 px-3 py-2 bg-surface rounded-lg">
                     <div className={`w-2 h-2 rounded-full ${dotColors[info.color] || dotColors.gray}`} />
                     <span className="text-sm text-gray-300">{info.label}</span>
                     <span className="text-xs text-gray-500">- {info.description}</span>
@@ -361,11 +361,11 @@ function ExecutionLogsPanel({
   }
 
   return (
-    <div className="bg-[#0d0d1a] rounded-lg border border-[#2a2a4a] overflow-hidden">
+    <div className="bg-sunken rounded-lg border border-primary overflow-hidden">
       {/* Header */}
       <button
         onClick={onToggleExpand}
-        className="w-full flex items-center justify-between px-4 py-3 bg-[#16162a] hover:bg-[#1a1a2e] transition-colors"
+        className="w-full flex items-center justify-between px-4 py-3 bg-surface hover:bg-elevated transition-colors"
       >
         <div className="flex items-center gap-2">
           <Terminal className="w-4 h-4 text-green-400" />
@@ -400,7 +400,7 @@ function ExecutionLogsPanel({
                 return (
                   <div
                     key={`${log.timestamp_ms}-${index}`}
-                    className={`px-3 py-2 ${colors.bg} hover:bg-[#1a1a2e]/50 transition-colors`}
+                    className={`px-3 py-2 ${colors.bg} hover:bg-elevated/50 transition-colors`}
                   >
                     <div className="flex items-start gap-2">
                       {/* Timestamp */}
@@ -463,11 +463,11 @@ function TelemetryPanel({
   const hasData = telemetry && (telemetry.joint_state || telemetry.odometry || (telemetry.transforms && telemetry.transforms.length > 0))
 
   return (
-    <div className="bg-[#0d0d1a] rounded-lg border border-[#2a2a4a] overflow-hidden">
+    <div className="bg-sunken rounded-lg border border-primary overflow-hidden">
       {/* Header */}
       <button
         onClick={onToggleExpand}
-        className="w-full flex items-center justify-between px-4 py-3 bg-[#16162a] hover:bg-[#1a1a2e] transition-colors"
+        className="w-full flex items-center justify-between px-4 py-3 bg-surface hover:bg-elevated transition-colors"
       >
         <div className="flex items-center gap-2">
           <Gauge className="w-4 h-4 text-cyan-400" />
@@ -514,7 +514,7 @@ function TelemetryPanel({
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {/* JointState Section */}
               {telemetry?.joint_state && (
-                <div className="bg-[#16162a] rounded-lg p-3 border border-[#2a2a4a]">
+                <div className="bg-surface rounded-lg p-3 border border-primary">
                   <div className="flex flex-col gap-1.5 mb-3">
                     <div className="flex items-center gap-2">
                       <Gauge className="w-4 h-4 text-orange-400" />
@@ -522,14 +522,14 @@ function TelemetryPanel({
                       <span className="text-[10px] text-gray-500">({telemetry.joint_state.name.length} joints)</span>
                     </div>
                     {telemetry.joint_state.topic_name && (
-                      <div className="flex items-center gap-2 px-2 py-1 bg-[#0d0d1a] rounded">
+                      <div className="flex items-center gap-2 px-2 py-1 bg-sunken rounded">
                         <span className="text-[10px] text-gray-500">TOPIC</span>
                         <span className="text-xs text-cyan-400 font-mono">{telemetry.joint_state.topic_name}</span>
                       </div>
                     )}
                   </div>
                   <div className="space-y-1.5 max-h-[200px] overflow-y-auto">
-                    <div className="grid grid-cols-4 gap-2 text-[10px] text-gray-500 uppercase tracking-wider pb-1 border-b border-[#2a2a4a]">
+                    <div className="grid grid-cols-4 gap-2 text-[10px] text-gray-500 uppercase tracking-wider pb-1 border-b border-primary">
                       <span>Joint</span>
                       <span>Position</span>
                       <span>Velocity</span>
@@ -549,7 +549,7 @@ function TelemetryPanel({
 
               {/* Odometry Section */}
               {telemetry?.odometry && (
-                <div className="bg-[#16162a] rounded-lg p-3 border border-[#2a2a4a]">
+                <div className="bg-surface rounded-lg p-3 border border-primary">
                   <div className="flex flex-col gap-1.5 mb-3">
                     <div className="flex items-center gap-2">
                       <Navigation className="w-4 h-4 text-green-400" />
@@ -557,7 +557,7 @@ function TelemetryPanel({
                       <span className="text-[10px] text-gray-500">{telemetry.odometry.frame_id} → {telemetry.odometry.child_frame_id}</span>
                     </div>
                     {telemetry.odometry.topic_name && (
-                      <div className="flex items-center gap-2 px-2 py-1 bg-[#0d0d1a] rounded">
+                      <div className="flex items-center gap-2 px-2 py-1 bg-sunken rounded">
                         <span className="text-[10px] text-gray-500">TOPIC</span>
                         <span className="text-xs text-cyan-400 font-mono">{telemetry.odometry.topic_name}</span>
                       </div>
@@ -609,21 +609,21 @@ function TelemetryPanel({
 
               {/* Transforms Section */}
               {telemetry?.transforms && telemetry.transforms.length > 0 && (
-                <div className="bg-[#16162a] rounded-lg p-3 border border-[#2a2a4a] lg:col-span-2">
+                <div className="bg-surface rounded-lg p-3 border border-primary lg:col-span-2">
                   <div className="flex flex-col gap-1.5 mb-3">
                     <div className="flex items-center gap-2">
                       <GitBranch className="w-4 h-4 text-blue-400" />
                       <span className="text-xs font-medium text-white uppercase tracking-wider">TF Transforms</span>
                       <span className="text-[10px] text-gray-500">({telemetry.transforms.length} transforms)</span>
                     </div>
-                    <div className="flex items-center gap-2 px-2 py-1 bg-[#0d0d1a] rounded">
+                    <div className="flex items-center gap-2 px-2 py-1 bg-sunken rounded">
                       <span className="text-[10px] text-gray-500">TOPIC</span>
                       <span className="text-xs text-cyan-400 font-mono">/tf, /tf_static</span>
                     </div>
                   </div>
                   <div className="space-y-2 max-h-[200px] overflow-y-auto">
                     {telemetry.transforms.map((tf, idx) => (
-                      <div key={`${tf.frame_id}-${tf.child_frame_id}-${idx}`} className="bg-[#0d0d1a] rounded p-2 text-xs">
+                      <div key={`${tf.frame_id}-${tf.child_frame_id}-${idx}`} className="bg-sunken rounded p-2 text-xs">
                         <div className="flex items-center gap-2 mb-1">
                           <span className="text-blue-400 font-mono">{tf.frame_id}</span>
                           <span className="text-gray-600">→</span>
@@ -1032,11 +1032,11 @@ export default function AgentDashboard() {
     : agents
 
   return (
-    <div className="h-screen flex bg-[#0f0f1a]">
+    <div className="h-screen flex bg-base">
       {/* Left Panel - Agent List */}
-      <div className="w-80 bg-[#16162a] border-r border-[#2a2a4a] flex flex-col">
+      <div className="w-80 bg-surface border-r border-primary flex flex-col">
         {/* Header */}
-        <div className="p-4 border-b border-[#2a2a4a]">
+        <div className="p-4 border-b border-primary">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Server className="w-5 h-5 text-blue-400" />
@@ -1044,7 +1044,7 @@ export default function AgentDashboard() {
             </div>
             <button
               onClick={() => refetchAgents()}
-              className="p-1.5 text-gray-500 hover:text-white hover:bg-[#2a2a4a] rounded transition-colors"
+              className="p-1.5 text-gray-500 hover:text-white hover:bg-elevated rounded transition-colors"
               title={t('common.refresh')}
             >
               <RefreshCw size={16} />
@@ -1095,7 +1095,7 @@ export default function AgentDashboard() {
                   className={`w-full px-4 py-3 flex items-center gap-3 transition-colors ${
                     selectedAgentId === agent.id
                       ? 'bg-blue-600/20 border-l-2 border-blue-500'
-                      : 'hover:bg-[#1a1a2e] border-l-2 border-transparent'
+                      : 'hover:bg-elevated border-l-2 border-transparent'
                   }`}
                 >
                   {/* Status indicator */}
@@ -1124,7 +1124,7 @@ export default function AgentDashboard() {
                             type="text"
                             value={listEditedName}
                             onChange={(e) => setListEditedName(e.target.value)}
-                            className="text-sm font-medium text-white bg-[#1a1a2e] border border-blue-500 rounded px-1.5 py-0.5 w-28 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            className="text-sm font-medium text-white bg-elevated border border-blue-500 rounded px-1.5 py-0.5 w-28 focus:outline-none focus:ring-1 focus:ring-blue-500"
                             autoFocus
                             onKeyDown={(e) => {
                               if (e.key === 'Enter' && listEditedName.trim()) {
@@ -1216,7 +1216,7 @@ export default function AgentDashboard() {
         </div>
 
         {/* Summary Stats */}
-        <div className="p-4 border-t border-[#2a2a4a] bg-[#1a1a2e]">
+        <div className="p-4 border-t border-primary bg-elevated">
           <div className="grid grid-cols-2 gap-3 text-center">
             <div>
               <div className="text-xl font-bold text-green-400">{onlineCount}</div>
@@ -1235,7 +1235,7 @@ export default function AgentDashboard() {
         {selectedAgent ? (
           <>
             {/* Agent Header */}
-            <div className="bg-[#16162a] border-b border-[#2a2a4a] p-6">
+            <div className="bg-surface border-b border-primary p-6">
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-4">
                   <div
@@ -1261,7 +1261,7 @@ export default function AgentDashboard() {
                           type="text"
                           value={editedName}
                           onChange={(e) => setEditedName(e.target.value)}
-                          className="text-xl font-semibold text-white bg-[#1a1a2e] border border-blue-500 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          className="text-xl font-semibold text-white bg-elevated border border-blue-500 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
                           autoFocus
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' && editedName.trim()) {
@@ -1349,7 +1349,7 @@ export default function AgentDashboard() {
 
               {/* Stats */}
               <div className="grid grid-cols-4 gap-4 mt-6">
-                <div className="bg-[#1a1a2e] rounded-lg p-4">
+                <div className="bg-elevated rounded-lg p-4">
                   <div className="flex items-center gap-2 text-gray-400 text-sm mb-1">
                     <Zap className="w-4 h-4" />
                     {t('agent.actionServers')}
@@ -1358,7 +1358,7 @@ export default function AgentDashboard() {
                     {agentCapabilities?.total || 0}
                   </div>
                 </div>
-                <div className="bg-[#1a1a2e] rounded-lg p-4">
+                <div className="bg-elevated rounded-lg p-4">
                   <div className="flex items-center gap-2 text-gray-400 text-sm mb-1">
                     <HeartPulse className={`w-4 h-4 ${
                       connectionStatusMap[selectedAgent.id]?.heartbeat_health === 'healthy' ? 'text-green-400' :
@@ -1377,7 +1377,7 @@ export default function AgentDashboard() {
                       : t('agent.never')}
                   </div>
                 </div>
-                <div className="bg-[#1a1a2e] rounded-lg p-4">
+                <div className="bg-elevated rounded-lg p-4">
                   <div className="flex items-center gap-2 text-gray-400 text-sm mb-1">
                     <Activity className="w-4 h-4 text-blue-400" />
                     {t('agent.ping')}
@@ -1388,7 +1388,7 @@ export default function AgentDashboard() {
                       : t('agent.never')}
                   </div>
                 </div>
-                <div className="bg-[#1a1a2e] rounded-lg p-4">
+                <div className="bg-elevated rounded-lg p-4">
                   <div className="flex items-center gap-2 text-gray-400 text-sm mb-1">
                     <Clock className="w-4 h-4" />
                     {t('agent.lastSeen')}
@@ -1488,7 +1488,7 @@ export default function AgentDashboard() {
                       <select
                         value={selectedRobotId || ''}
                         onChange={(e) => setSelectedRobotId(e.target.value)}
-                        className="px-2 py-1 bg-[#1a1a2e] border border-[#2a2a4a] rounded text-xs text-white"
+                        className="px-2 py-1 bg-elevated border border-primary rounded text-xs text-white"
                         disabled={agentRobots.length === 0}
                       >
                         {agentRobots.length === 0 && (
@@ -1507,7 +1507,7 @@ export default function AgentDashboard() {
 
                     {/* Execution Status Panel */}
                     {selectedRobotState && (
-                      <div className="bg-[#16162a] rounded-lg border border-[#2a2a4a] p-4 space-y-3">
+                      <div className="bg-surface rounded-lg border border-primary p-4 space-y-3">
                         <div className="flex items-center justify-between">
                           <span className="text-xs text-gray-500 uppercase tracking-wider">Execution Status</span>
                           {/* Show different status when robot is executing a different graph */}
@@ -1526,7 +1526,7 @@ export default function AgentDashboard() {
                         </div>
 
                         {/* Execution Control Buttons */}
-                        <div className="flex items-center gap-2 pt-2 border-t border-[#2a2a4a]">
+                        <div className="flex items-center gap-2 pt-2 border-t border-primary">
                           {!selectedRobotExecuting ? (
                             // Start button - when not executing
                             <>
@@ -1701,7 +1701,7 @@ export default function AgentDashboard() {
                           <select
                             value={selectedGraphId || ''}
                             onChange={(e) => setSelectedGraphId(e.target.value)}
-                            className="flex-1 px-2 py-1 bg-[#1a1a2e] border border-[#2a2a4a] rounded text-xs text-white focus:outline-none focus:border-blue-500"
+                            className="flex-1 px-2 py-1 bg-elevated border border-primary rounded text-xs text-white focus:outline-none focus:border-blue-500"
                           >
                             {sortedActionGraphs.map((graph) => {
                               const statusIcon = graph.deployment_status === 'deployed' ? '\u2713' :
@@ -1766,7 +1766,7 @@ export default function AgentDashboard() {
                       </div>
                     )}
 
-                    <div className="h-[380px] rounded-lg border border-[#2a2a4a] overflow-hidden bg-[#0f0f1a]">
+                    <div className="h-[380px] rounded-lg border border-primary overflow-hidden bg-base">
                       <ActionGraphViewer
                         actionGraph={fleetGraph}
                         stateDef={selectedStateDef}

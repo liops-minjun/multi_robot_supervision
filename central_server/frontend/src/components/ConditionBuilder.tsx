@@ -90,8 +90,8 @@ export default function ConditionBuilder({
 
   const renderCondition = (condition: Condition, index: number) => {
     const baseClasses = compact
-      ? 'p-2 bg-[#16162a] rounded border border-[#2a2a4a]'
-      : 'p-3 bg-[#16162a] rounded-lg border border-[#2a2a4a]'
+      ? 'p-2 bg-surface rounded border border-primary'
+      : 'p-3 bg-surface rounded-lg border border-primary'
 
     return (
       <div key={condition.id} className="space-y-2">
@@ -101,7 +101,7 @@ export default function ConditionBuilder({
             <select
               value={condition.operator || 'AND'}
               onChange={(e) => updateCondition(condition.id, { operator: e.target.value as 'AND' | 'OR' })}
-              className="px-3 py-1 bg-[#1a1a2e] border border-[#3a3a5a] rounded text-xs text-purple-400 font-semibold focus:outline-none focus:border-purple-500"
+              className="px-3 py-1 bg-elevated border border-secondary rounded text-xs text-purple-400 font-semibold focus:outline-none focus:border-purple-500"
             >
               <option value="AND">AND</option>
               <option value="OR">OR</option>
@@ -188,7 +188,7 @@ export default function ConditionBuilder({
           {conditions.map((condition, index) => renderCondition(condition, index))}
         </div>
       ) : (
-        <div className={`text-center py-4 text-gray-500 text-xs border border-dashed border-[#2a2a4a] rounded-lg`}>
+        <div className={`text-center py-4 text-gray-500 text-xs border border-dashed border-primary rounded-lg`}>
           No conditions set (always execute)
         </div>
       )}
@@ -246,7 +246,7 @@ function SelfStateCondition({
       <select
         value={condition.stateOperator || '=='}
         onChange={(e) => onChange({ stateOperator: e.target.value as '==' | '!=' })}
-        className="px-2 py-1 bg-[#1a1a2e] border border-[#2a2a4a] rounded text-xs text-white focus:outline-none focus:border-blue-500"
+        className="px-2 py-1 bg-elevated border border-primary rounded text-xs text-white focus:outline-none focus:border-blue-500"
       >
         <option value="==">is</option>
         <option value="!=">is not</option>
@@ -254,7 +254,7 @@ function SelfStateCondition({
       <select
         value={condition.state || ''}
         onChange={(e) => onChange({ state: e.target.value })}
-        className="flex-1 px-2 py-1 bg-[#1a1a2e] border border-blue-500/30 rounded text-xs text-blue-400 focus:outline-none focus:border-blue-500"
+        className="flex-1 px-2 py-1 bg-elevated border border-blue-500/30 rounded text-xs text-blue-400 focus:outline-none focus:border-blue-500"
       >
         {availableStates.map(state => (
           <option key={state} value={state}>{state}</option>
@@ -304,7 +304,7 @@ function AgentStateCondition({
         <select
           value={condition.agentQuantifier || 'all'}
           onChange={(e) => onChange({ agentQuantifier: e.target.value as 'all' | 'any' | 'specific' })}
-          className="px-2 py-1 bg-[#1a1a2e] border border-[#2a2a4a] rounded text-xs text-white focus:outline-none focus:border-green-500"
+          className="px-2 py-1 bg-elevated border border-primary rounded text-xs text-white focus:outline-none focus:border-green-500"
         >
           <option value="all">All</option>
           <option value="any">Any</option>
@@ -317,7 +317,7 @@ function AgentStateCondition({
             value={agentValue}
             onChange={(e) => handleAgentChange(e.target.value)}
             placeholder="Select or enter agent"
-            className="w-full px-2 py-1 bg-[#1a1a2e] border border-green-500/30 rounded text-xs text-green-400 focus:outline-none focus:border-green-500"
+            className="w-full px-2 py-1 bg-elevated border border-green-500/30 rounded text-xs text-green-400 focus:outline-none focus:border-green-500"
           />
           <datalist id={`agent-options-${condition.id}`}>
             {availableAgents.map(agent => (
@@ -332,7 +332,7 @@ function AgentStateCondition({
         <select
           value={condition.agentState || ''}
           onChange={(e) => onChange({ agentState: e.target.value })}
-          className="flex-1 px-2 py-1 bg-[#1a1a2e] border border-green-500/30 rounded text-xs text-green-400 focus:outline-none focus:border-green-500"
+          className="flex-1 px-2 py-1 bg-elevated border border-green-500/30 rounded text-xs text-green-400 focus:outline-none focus:border-green-500"
         >
           {availableStates.map(state => (
             <option key={state} value={state}>{state}</option>
@@ -347,7 +347,7 @@ function AgentStateCondition({
             value={condition.agentId || ''}
             onChange={(e) => onChange({ agentId: e.target.value })}
             placeholder="robot_001"
-            className="flex-1 px-2 py-1 bg-[#1a1a2e] border border-[#2a2a4a] rounded text-xs text-white focus:outline-none focus:border-green-500"
+            className="flex-1 px-2 py-1 bg-elevated border border-primary rounded text-xs text-white focus:outline-none focus:border-green-500"
           />
         </div>
       )}
@@ -375,7 +375,7 @@ function SemanticTagCondition({
         <select
           value={condition.tagQuantifier || 'any'}
           onChange={(e) => onChange({ tagQuantifier: e.target.value as 'any' | 'all' | 'none' })}
-          className="px-2 py-1 bg-[#1a1a2e] border border-[#2a2a4a] rounded text-xs text-white focus:outline-none focus:border-purple-500"
+          className="px-2 py-1 bg-elevated border border-primary rounded text-xs text-white focus:outline-none focus:border-purple-500"
         >
           <option value="any">Any agent</option>
           <option value="all">All agents</option>
@@ -389,7 +389,7 @@ function SemanticTagCondition({
             value={condition.semanticTag || ''}
             onChange={(e) => onChange({ semanticTag: e.target.value })}
             placeholder="Select or enter tag"
-            className="w-full px-2 py-1 bg-[#1a1a2e] border border-purple-500/30 rounded text-xs text-purple-400 focus:outline-none focus:border-purple-500"
+            className="w-full px-2 py-1 bg-elevated border border-purple-500/30 rounded text-xs text-purple-400 focus:outline-none focus:border-purple-500"
           />
           <datalist id={`tag-options-${condition.id}`}>
             {availableSemanticTags.map(tag => (
@@ -403,7 +403,7 @@ function SemanticTagCondition({
         <select
           value={condition.tagState || ''}
           onChange={(e) => onChange({ tagState: e.target.value })}
-          className="flex-1 px-2 py-1 bg-[#1a1a2e] border border-purple-500/30 rounded text-xs text-purple-400 focus:outline-none focus:border-purple-500"
+          className="flex-1 px-2 py-1 bg-elevated border border-purple-500/30 rounded text-xs text-purple-400 focus:outline-none focus:border-purple-500"
         >
           {availableStates.map(state => (
             <option key={state} value={state}>{state}</option>
@@ -433,7 +433,7 @@ function AnyAgentStateCondition({
         <select
           value={condition.agentState || ''}
           onChange={(e) => onChange({ agentState: e.target.value })}
-          className="flex-1 px-2 py-1 bg-[#1a1a2e] border border-cyan-500/30 rounded text-xs text-cyan-400 focus:outline-none focus:border-cyan-500"
+          className="flex-1 px-2 py-1 bg-elevated border border-cyan-500/30 rounded text-xs text-cyan-400 focus:outline-none focus:border-cyan-500"
         >
           {availableStates.map(state => (
             <option key={state} value={state}>{state}</option>
@@ -446,7 +446,7 @@ function AnyAgentStateCondition({
             type="checkbox"
             checked={condition.filterOnline ?? true}
             onChange={(e) => onChange({ filterOnline: e.target.checked })}
-            className="w-3.5 h-3.5 rounded border-gray-500 bg-[#1a1a2e] text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0"
+            className="w-3.5 h-3.5 rounded border-gray-500 bg-elevated text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0"
           />
           <span className="text-gray-400">Online only</span>
         </label>
@@ -455,7 +455,7 @@ function AnyAgentStateCondition({
             type="checkbox"
             checked={condition.filterExecuting ?? false}
             onChange={(e) => onChange({ filterExecuting: e.target.checked })}
-            className="w-3.5 h-3.5 rounded border-gray-500 bg-[#1a1a2e] text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0"
+            className="w-3.5 h-3.5 rounded border-gray-500 bg-elevated text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0"
           />
           <span className="text-gray-400">Executing only</span>
         </label>
@@ -467,7 +467,7 @@ function AnyAgentStateCondition({
           value={condition.filterGraphId || ''}
           onChange={(e) => onChange({ filterGraphId: e.target.value })}
           placeholder="(optional) graph_id"
-          className="flex-1 px-2 py-1 bg-[#1a1a2e] border border-[#2a2a4a] rounded text-xs text-gray-400 focus:outline-none focus:border-cyan-500"
+          className="flex-1 px-2 py-1 bg-elevated border border-primary rounded text-xs text-gray-400 focus:outline-none focus:border-cyan-500"
         />
       </div>
     </div>

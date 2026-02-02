@@ -34,7 +34,7 @@ const StateTransitionNode = memo(({ id, data, selected }: NodeProps<StateTransit
         min-w-[180px] rounded-lg overflow-hidden
         bg-[#1e1e2e] border-2
         shadow-lg
-        ${selected ? 'border-white/60 shadow-xl' : 'border-[#2a2a4a]'}
+        ${selected ? 'border-white/60 shadow-xl' : 'border-primary'}
         transition-all duration-150
       `}
     >
@@ -51,7 +51,7 @@ const StateTransitionNode = memo(({ id, data, selected }: NodeProps<StateTransit
 
       {/* Preconditions Preview */}
       {preconditions.length > 0 && (
-        <div className="px-3 py-1.5 border-b border-[#2a2a4a] bg-[#16162a]">
+        <div className="px-3 py-1.5 border-b border-primary bg-surface">
           <ConditionPreview conditions={preconditions} />
         </div>
       )}
@@ -107,7 +107,7 @@ const StateTransitionNode = memo(({ id, data, selected }: NodeProps<StateTransit
       </div>
 
       {/* Footer */}
-      <div className="px-3 py-1 border-t border-[#2a2a4a] bg-[#16162a]">
+      <div className="px-3 py-1 border-t border-primary bg-surface">
         <span className="text-[9px] text-gray-600 uppercase tracking-wider">State Transition</span>
       </div>
 

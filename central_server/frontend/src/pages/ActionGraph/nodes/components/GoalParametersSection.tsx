@@ -96,10 +96,10 @@ const GoalParametersSection = memo(({
   const hasTelemetry = !!(liveTelemetry?.joint_state || liveTelemetry?.odometry || telemetry?.joint_state || telemetry?.odometry)
 
   return (
-    <div className="border-b border-[#2a2a4a]">
+    <div className="border-b border-primary">
       <button
         onClick={(e) => { e.stopPropagation(); onToggle() }}
-        className="w-full px-3 py-1.5 flex items-center justify-between hover:bg-[#2a2a4a]/50 transition-colors"
+        className="w-full px-3 py-1.5 flex items-center justify-between hover:bg-elevated/50 transition-colors"
       >
         <div className="flex items-center gap-2">
           <Upload className="w-3 h-3 text-amber-500" />
@@ -137,7 +137,7 @@ const GoalParametersSection = memo(({
                 }
               }}
               onClick={(e) => e.stopPropagation()}
-              className="flex-1 px-2 py-1 bg-[#1a1a2e] border border-gray-700 rounded text-[10px] text-white focus:outline-none focus:border-purple-500 cursor-pointer"
+              className="flex-1 px-2 py-1 bg-elevated border border-gray-700 rounded text-[10px] text-white focus:outline-none focus:border-purple-500 cursor-pointer"
             >
               <option value="">로봇 선택...</option>
               {robots.map((robot) => (
@@ -163,7 +163,7 @@ const GoalParametersSection = memo(({
               <span className="text-[9px] text-gray-500">액션 인터페이스 로딩 중...</span>
             </div>
           ) : goalFields.length === 0 ? (
-            <div className="p-2 bg-[#1a1a2e] rounded border border-gray-700">
+            <div className="p-2 bg-elevated rounded border border-gray-700">
               <p className="text-[9px] text-gray-500">
                 스키마 없음. Action Type을 선택하면 파라미터가 자동으로 표시됩니다.
               </p>
@@ -171,7 +171,7 @@ const GoalParametersSection = memo(({
           ) : (
             <div className="space-y-2">
               {goalFields.map((field) => (
-                <div key={field.name} className="p-2 bg-[#16162a] rounded border border-gray-700/50">
+                <div key={field.name} className="p-2 bg-surface rounded border border-gray-700/50">
                   {/* Field header */}
                   <div className="flex items-center gap-2 pb-1 mb-2 border-b border-gray-700/30">
                     <span className="text-[11px] text-white font-medium">{field.name}</span>

@@ -104,7 +104,7 @@ function JointStateView({
   }
 
   return (
-    <div className="bg-[#16162a] rounded-lg p-3 border border-[#2a2a4a]">
+    <div className="bg-surface rounded-lg p-3 border border-primary">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold text-cyan-400">JointState</span>
@@ -131,7 +131,7 @@ function JointStateView({
         </div>
       </div>
       {jointState.topic_name && (
-        <div className="flex items-center gap-2 px-2 py-1 bg-[#0d0d1a] rounded mb-2">
+        <div className="flex items-center gap-2 px-2 py-1 bg-sunken rounded mb-2">
           <span className="text-[10px] text-gray-500">TOPIC</span>
           <span className="text-xs text-cyan-400 font-mono">{jointState.topic_name}</span>
         </div>
@@ -179,7 +179,7 @@ function JointStateView({
         </div>
         <div className="space-y-0.5 max-h-48 overflow-y-auto">
           {jointState.name.map((name, idx) => (
-            <div key={name} className="grid grid-cols-4 gap-2 text-xs font-mono px-1 py-0.5 hover:bg-[#1a1a2e] rounded">
+            <div key={name} className="grid grid-cols-4 gap-2 text-xs font-mono px-1 py-0.5 hover:bg-elevated rounded">
               <span className="text-gray-300 truncate" title={name}>{name}</span>
               <span className="text-cyan-400">{formatNumber(jointState.position?.[idx] ?? 0)}</span>
               <span className="text-yellow-400">{formatNumber(jointState.velocity?.[idx] ?? 0)}</span>
@@ -211,7 +211,7 @@ function OdometryView({
   }
 
   return (
-    <div className="bg-[#16162a] rounded-lg p-3 border border-[#2a2a4a]">
+    <div className="bg-surface rounded-lg p-3 border border-primary">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold text-green-400">Odometry</span>
@@ -226,7 +226,7 @@ function OdometryView({
         </button>
       </div>
       {odometry.topic_name && (
-        <div className="flex items-center gap-2 px-2 py-1 bg-[#0d0d1a] rounded mb-2">
+        <div className="flex items-center gap-2 px-2 py-1 bg-sunken rounded mb-2">
           <span className="text-[10px] text-gray-500">TOPIC</span>
           <span className="text-xs text-green-400 font-mono">{odometry.topic_name}</span>
         </div>
@@ -246,7 +246,7 @@ function OdometryView({
               </button>
             )}
           </div>
-          <div className="grid grid-cols-3 gap-2 text-xs font-mono bg-[#0d0d1a] rounded p-2">
+          <div className="grid grid-cols-3 gap-2 text-xs font-mono bg-sunken rounded p-2">
             <div>
               <span className="text-[9px] text-gray-500">X</span>
               <div className="text-cyan-400">{formatNumber(odometry.pose?.position?.x ?? 0)}</div>
@@ -260,7 +260,7 @@ function OdometryView({
               <div className="text-cyan-400">{formatNumber(odometry.pose?.position?.z ?? 0)}</div>
             </div>
           </div>
-          <div className="grid grid-cols-4 gap-2 text-xs font-mono bg-[#0d0d1a] rounded p-2 mt-1">
+          <div className="grid grid-cols-4 gap-2 text-xs font-mono bg-sunken rounded p-2 mt-1">
             <div>
               <span className="text-[9px] text-gray-500">QX</span>
               <div className="text-yellow-400">{formatNumber(odometry.pose?.orientation?.x ?? 0)}</div>
@@ -293,7 +293,7 @@ function OdometryView({
               </button>
             )}
           </div>
-          <div className="grid grid-cols-2 gap-2 text-xs font-mono bg-[#0d0d1a] rounded p-2">
+          <div className="grid grid-cols-2 gap-2 text-xs font-mono bg-sunken rounded p-2">
             <div>
               <span className="text-[9px] text-gray-500">Linear</span>
               <div className="text-green-400">
@@ -444,12 +444,12 @@ export function TelemetryPanel({
     return (
       <div className="flex h-full">
         {/* Robot Selector - Left */}
-        <div className="w-40 flex-shrink-0 border-r border-[#2a2a4a] p-2">
+        <div className="w-40 flex-shrink-0 border-r border-primary p-2">
           <div className="text-[10px] text-gray-500 uppercase mb-1.5">로봇</div>
           <select
             value={selectedRobotId || ''}
             onChange={(e) => setSelectedRobotId(e.target.value || null)}
-            className="w-full px-2 py-1 bg-[#1a1a2e] border border-[#2a2a4a] rounded text-xs text-white focus:outline-none focus:border-green-500 cursor-pointer"
+            className="w-full px-2 py-1 bg-elevated border border-primary rounded text-xs text-white focus:outline-none focus:border-green-500 cursor-pointer"
           >
             <option value="">선택...</option>
             {robots.map((robot) => (
@@ -495,7 +495,7 @@ export function TelemetryPanel({
             <>
               {/* Joint State - Compact horizontal */}
               {telemetry.joint_state && (
-                <div className="flex-shrink-0 w-80 bg-[#1a1a2e] rounded border border-[#2a2a4a] p-2">
+                <div className="flex-shrink-0 w-80 bg-elevated rounded border border-primary p-2">
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-[10px] font-semibold text-cyan-400">JointState</span>
                     <div className="flex items-center gap-1">
@@ -516,7 +516,7 @@ export function TelemetryPanel({
                       <span>Eff</span>
                     </div>
                     {telemetry.joint_state.name.slice(0, 6).map((name, idx) => (
-                      <div key={name} className="grid grid-cols-4 gap-1 text-[9px] font-mono px-1 py-0.5 hover:bg-[#0d0d1a] rounded">
+                      <div key={name} className="grid grid-cols-4 gap-1 text-[9px] font-mono px-1 py-0.5 hover:bg-sunken rounded">
                         <span className="text-gray-300 truncate" title={name}>{name}</span>
                         <span className="text-cyan-400">{formatNumber(telemetry.joint_state!.position?.[idx] ?? 0)}</span>
                         <span className="text-yellow-400">{formatNumber(telemetry.joint_state!.velocity?.[idx] ?? 0)}</span>
@@ -532,7 +532,7 @@ export function TelemetryPanel({
 
               {/* Odometry - Compact horizontal */}
               {telemetry.odometry && (
-                <div className="flex-shrink-0 w-56 bg-[#1a1a2e] rounded border border-[#2a2a4a] p-2">
+                <div className="flex-shrink-0 w-56 bg-elevated rounded border border-primary p-2">
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-[10px] font-semibold text-green-400">Odometry</span>
                     <button
@@ -546,7 +546,7 @@ export function TelemetryPanel({
                   <div className="space-y-1.5">
                     <div>
                       <div className="text-[8px] text-gray-500 mb-0.5">Position</div>
-                      <div className="grid grid-cols-3 gap-1 text-[9px] font-mono bg-[#0d0d1a] rounded p-1">
+                      <div className="grid grid-cols-3 gap-1 text-[9px] font-mono bg-sunken rounded p-1">
                         <div>
                           <span className="text-[7px] text-gray-500">X</span>
                           <div className="text-cyan-400">{formatNumber(telemetry.odometry.pose?.position?.x ?? 0)}</div>
@@ -563,7 +563,7 @@ export function TelemetryPanel({
                     </div>
                     <div>
                       <div className="text-[8px] text-gray-500 mb-0.5">Orientation</div>
-                      <div className="grid grid-cols-4 gap-0.5 text-[8px] font-mono bg-[#0d0d1a] rounded p-1">
+                      <div className="grid grid-cols-4 gap-0.5 text-[8px] font-mono bg-sunken rounded p-1">
                         <div className="text-yellow-400">{formatNumber(telemetry.odometry.pose?.orientation?.x ?? 0)}</div>
                         <div className="text-yellow-400">{formatNumber(telemetry.odometry.pose?.orientation?.y ?? 0)}</div>
                         <div className="text-yellow-400">{formatNumber(telemetry.odometry.pose?.orientation?.z ?? 0)}</div>
@@ -576,14 +576,14 @@ export function TelemetryPanel({
 
               {/* Transforms - Compact horizontal */}
               {telemetry.transforms && telemetry.transforms.length > 0 && (
-                <div className="flex-shrink-0 w-48 bg-[#1a1a2e] rounded border border-[#2a2a4a] p-2">
+                <div className="flex-shrink-0 w-48 bg-elevated rounded border border-primary p-2">
                   <div className="flex items-center gap-1 mb-1.5">
                     <span className="text-[10px] font-semibold text-orange-400">TF</span>
                     <span className="text-[8px] text-gray-500">({telemetry.transforms.length})</span>
                   </div>
                   <div className="max-h-28 overflow-y-auto space-y-0.5">
                     {telemetry.transforms.slice(0, 4).map((tf, idx) => (
-                      <div key={idx} className="text-[8px] font-mono p-1 bg-[#0d0d1a] rounded truncate">
+                      <div key={idx} className="text-[8px] font-mono p-1 bg-sunken rounded truncate">
                         <span className="text-orange-400">{tf.frame_id}</span>
                         <span className="text-gray-500"> → </span>
                         <span className="text-yellow-400">{tf.child_frame_id}</span>
@@ -600,7 +600,7 @@ export function TelemetryPanel({
         </div>
 
         {/* Status - Right */}
-        <div className="w-32 flex-shrink-0 border-l border-[#2a2a4a] p-2 flex flex-col justify-between">
+        <div className="w-32 flex-shrink-0 border-l border-primary p-2 flex flex-col justify-between">
           {hasData && telemetry && (
             <div className="text-[9px]">
               <div className="text-gray-500 mb-0.5">업데이트</div>
@@ -622,11 +622,11 @@ export function TelemetryPanel({
   const content = (
     <>
       {/* Robot Selector */}
-      <div className="px-3 py-2 border-b border-[#2a2a4a]">
+      <div className="px-3 py-2 border-b border-primary">
         <select
           value={selectedRobotId || ''}
           onChange={(e) => setSelectedRobotId(e.target.value || null)}
-          className="w-full px-2 py-1.5 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-xs text-white focus:outline-none focus:border-green-500 cursor-pointer"
+          className="w-full px-2 py-1.5 bg-elevated border border-primary rounded-lg text-xs text-white focus:outline-none focus:border-green-500 cursor-pointer"
         >
           <option value="">로봇 선택...</option>
           {robots.map((robot) => (
@@ -688,14 +688,14 @@ export function TelemetryPanel({
 
             {/* Transforms */}
             {telemetry.transforms && telemetry.transforms.length > 0 && (
-              <div className="bg-[#16162a] rounded-lg p-3 border border-[#2a2a4a]">
+              <div className="bg-surface rounded-lg p-3 border border-primary">
                 <div className="flex items-center gap-2 mb-2">
                   <span className="text-xs font-semibold text-orange-400">Transforms</span>
                   <span className="text-[10px] text-gray-500">({telemetry.transforms.length})</span>
                 </div>
                 <div className="space-y-1 max-h-32 overflow-y-auto">
                   {telemetry.transforms.map((tf, idx) => (
-                    <div key={idx} className="text-[10px] font-mono p-1.5 bg-[#0d0d1a] rounded">
+                    <div key={idx} className="text-[10px] font-mono p-1.5 bg-sunken rounded">
                       <span className="text-orange-400">{tf.frame_id}</span>
                       <span className="text-gray-500"> → </span>
                       <span className="text-yellow-400">{tf.child_frame_id}</span>
@@ -709,7 +709,7 @@ export function TelemetryPanel({
       </div>
 
       {/* Capture Mode Info */}
-      <div className="px-3 py-2 border-t border-[#2a2a4a] bg-purple-500/5">
+      <div className="px-3 py-2 border-t border-primary bg-purple-500/5">
         {capturedValue ? (
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-[10px] text-green-400">
@@ -737,7 +737,7 @@ export function TelemetryPanel({
       </div>
 
       {/* Type Compatibility Info */}
-      <div className="px-3 py-2 border-t border-[#2a2a4a] bg-[#0d0d1a]">
+      <div className="px-3 py-2 border-t border-primary bg-sunken">
         <div className="text-[9px] text-gray-500 space-y-0.5">
           <div className="font-semibold text-gray-400 mb-1">호환 타입:</div>
           <div>• <span className="text-cyan-400">Position</span> → array, float64[]</div>
@@ -756,9 +756,9 @@ export function TelemetryPanel({
 
   // Standalone mode with full container
   return (
-    <div className="w-80 bg-[#16162a] border-l border-[#2a2a4a] flex flex-col h-full">
+    <div className="w-80 bg-surface border-l border-primary flex flex-col h-full">
       {/* Header */}
-      <div className="px-3 py-2 border-b border-[#2a2a4a] flex items-center justify-between">
+      <div className="px-3 py-2 border-b border-primary flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Radio size={14} className="text-green-400 animate-pulse" />
           <span className="text-xs font-semibold text-white">Telemetry Monitor</span>
