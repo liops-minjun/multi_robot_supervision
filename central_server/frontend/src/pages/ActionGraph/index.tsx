@@ -332,6 +332,11 @@ function ActionGraphEditor() {
   // Validation state
   const [validationErrors, setValidationErrors] = useState<Array<{ nodeId: string; nodeName: string; errors: string[] }>>([])
 
+  // Draft persistence state
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  const lastSavedStateRef = useRef<{ nodes: string; edges: string } | null>(null)
+  const draftLoadedRef = useRef<string | null>(null)  // Track which template's draft was loaded
+
   // ReactFlow
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition } = useReactFlow()
@@ -476,9 +481,15 @@ function ActionGraphEditor() {
       }
       return templateApi.update(templateId, payload)
     },
-    onSuccess: () => {
+    onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['template', selectedTemplateId] })
       queryClient.invalidateQueries({ queryKey: ['templates-all'] })
+
+      // Clear draft after successful save
+      const draftKey = `behavior-tree-draft-${variables.templateId}`
+      sessionStorage.removeItem(draftKey)
+      setHasUnsavedChanges(false)
+      draftLoadedRef.current = null
     },
   })
 
@@ -660,14 +671,101 @@ function ActionGraphEditor() {
   // Only reset graph when template changes (by ID), not when state definition loads
   // This prevents newly added nodes from being lost when async data loads
   const templateId = selectedTemplate?.id
+
+  // Helper to get draft storage key
+  const getDraftKey = useCallback((id: string) => `behavior-tree-draft-${id}`, [])
+
+  // Load template or draft when template changes
   useEffect(() => {
     if (selectedTemplate && templateId) {
+      // Check if we have a draft for this template
+      const draftKey = getDraftKey(templateId)
+      const savedDraft = sessionStorage.getItem(draftKey)
+
+      if (savedDraft && draftLoadedRef.current !== templateId) {
+        // Load from draft
+        try {
+          const draft = JSON.parse(savedDraft)
+          if (draft.nodes && draft.edges) {
+            console.log('[Draft] Restoring draft for template:', templateId)
+            setNodes(draft.nodes)
+            setEdges(draft.edges)
+            draftLoadedRef.current = templateId
+            lastSavedStateRef.current = {
+              nodes: JSON.stringify(draft.nodes),
+              edges: JSON.stringify(draft.edges),
+            }
+            setHasUnsavedChanges(true)  // Draft means unsaved changes
+            return
+          }
+        } catch (e) {
+          console.error('[Draft] Failed to parse draft:', e)
+          sessionStorage.removeItem(draftKey)
+        }
+      }
+
+      // No draft, load from server
       const { initialNodes, initialEdges } = convertActionGraphToGraph(selectedTemplate, selectedStateDef, availableStates, availableAgents)
       setNodes(initialNodes)
       setEdges(initialEdges)
+      draftLoadedRef.current = null
+      lastSavedStateRef.current = {
+        nodes: JSON.stringify(initialNodes),
+        edges: JSON.stringify(initialEdges),
+      }
+      setHasUnsavedChanges(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateId]) // Only depend on template ID change
+
+  // Detect changes and save draft to sessionStorage
+  useEffect(() => {
+    if (!templateId || nodes.length === 0) return
+
+    const currentState = {
+      nodes: JSON.stringify(nodes),
+      edges: JSON.stringify(edges),
+    }
+
+    // Compare with last saved state
+    if (lastSavedStateRef.current) {
+      const changed =
+        currentState.nodes !== lastSavedStateRef.current.nodes ||
+        currentState.edges !== lastSavedStateRef.current.edges
+      setHasUnsavedChanges(changed)
+
+      // Save draft if there are changes
+      if (changed) {
+        const draftKey = getDraftKey(templateId)
+        sessionStorage.setItem(draftKey, JSON.stringify({ nodes, edges, timestamp: Date.now() }))
+      }
+    }
+  }, [nodes, edges, templateId, getDraftKey])
+
+  // Warn user before leaving with unsaved changes
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasUnsavedChanges) {
+        e.preventDefault()
+        e.returnValue = '저장하지 않은 변경사항이 있습니다. 정말 떠나시겠습니까?'
+        return e.returnValue
+      }
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [hasUnsavedChanges])
+
+  // Update lastSavedStateRef after successful save
+  useEffect(() => {
+    if (saveTemplate.isSuccess) {
+      lastSavedStateRef.current = {
+        nodes: JSON.stringify(nodes),
+        edges: JSON.stringify(edges),
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saveTemplate.isSuccess])
 
   // Clear validation errors when template changes
   useEffect(() => {
@@ -1646,10 +1744,14 @@ function ActionGraphEditor() {
               <button
                 onClick={handleSave}
                 disabled={saveTemplate.isPending}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600/20 text-green-400 rounded-lg hover:bg-green-600/30 text-sm disabled:opacity-50"
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm disabled:opacity-50 ${
+                  hasUnsavedChanges
+                    ? 'bg-yellow-600/30 text-yellow-400 hover:bg-yellow-600/40 ring-1 ring-yellow-500/50'
+                    : 'bg-green-600/20 text-green-400 hover:bg-green-600/30'
+                }`}
               >
                 <Save size={14} />
-                {saveTemplate.isPending ? '저장 중...' : '저장'}
+                {saveTemplate.isPending ? '저장 중...' : hasUnsavedChanges ? '저장 (변경됨)' : '저장'}
               </button>
               <button
                 onClick={() => {
