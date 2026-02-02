@@ -324,16 +324,18 @@ func relTypeForEdge(edgeType string) string {
 func decodeAgent(node neo4j.Node) Agent {
 	props := node.Props
 	return Agent{
-		ID:           getString(props, "id"),
-		Name:         getString(props, "name"),
-		Namespace:    getString(props, "namespace"),
-		IPAddress:    toNullString(getString(props, "ip_address")),
-		Tags:         datatypes.JSON([]byte(getString(props, "tags_json"))),
-		LastSeen:     toNullTimeMillis(getInt64(props, "last_seen_ms")),
-		CurrentState: getString(props, "current_state"),
-		Status:       getString(props, "status"),
-		CreatedAt:    time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
-		UpdatedAt:    time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
+		ID:                  getString(props, "id"),
+		Name:                getString(props, "name"),
+		Namespace:           getString(props, "namespace"),
+		IPAddress:           toNullString(getString(props, "ip_address")),
+		Tags:                datatypes.JSON([]byte(getString(props, "tags_json"))),
+		LastSeen:            toNullTimeMillis(getInt64(props, "last_seen_ms")),
+		CurrentState:        getString(props, "current_state"),
+		Status:              getString(props, "status"),
+		HardwareFingerprint: toNullString(getString(props, "hardware_fingerprint")),
+		AssignedByServer:    getBool(props, "assigned_by_server"),
+		CreatedAt:           time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
+		UpdatedAt:           time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
 	}
 }
 
