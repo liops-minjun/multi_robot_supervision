@@ -336,6 +336,7 @@ function ActionGraphEditor() {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const lastSavedStateRef = useRef<{ nodes: string; edges: string } | null>(null)
   const draftLoadedRef = useRef<string | null>(null)  // Track which template's draft was loaded
+  const loadedTemplateIdRef = useRef<string | null>(null)  // Track which template's data is currently loaded on canvas
 
   // ReactFlow
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
@@ -675,9 +676,32 @@ function ActionGraphEditor() {
   // Helper to get draft storage key
   const getDraftKey = useCallback((id: string) => `behavior-tree-draft-${id}`, [])
 
-  // Load template or draft when template changes
+  // Clear canvas immediately when switching to a different template
+  // This prevents showing stale data from the previous template
   useEffect(() => {
-    if (selectedTemplate && templateId) {
+    if (templateId !== loadedTemplateIdRef.current && loadedTemplateIdRef.current !== null) {
+      // Template ID changed - clear canvas to prevent showing old data
+      console.log('[Template] Switching from', loadedTemplateIdRef.current, 'to', templateId, '- clearing canvas')
+      setNodes([])
+      setEdges([])
+      setHasUnsavedChanges(false)
+      lastSavedStateRef.current = null
+      draftLoadedRef.current = null
+      // Don't set loadedTemplateIdRef here - wait until actual data is loaded
+    }
+  }, [templateId, setNodes, setEdges])
+
+  // Load template or draft when template data is ready
+  useEffect(() => {
+    // IMPORTANT: Verify selectedTemplate.id matches templateId to prevent stale data
+    // When switching templates, templateId changes immediately but selectedTemplate
+    // may still hold the previous template's data until the query completes
+    if (selectedTemplate && templateId && selectedTemplate.id === templateId) {
+      // Skip if we already loaded this template
+      if (loadedTemplateIdRef.current === templateId && draftLoadedRef.current !== templateId) {
+        return
+      }
+
       // Check if we have a draft for this template
       const draftKey = getDraftKey(templateId)
       const savedDraft = sessionStorage.getItem(draftKey)
@@ -691,6 +715,7 @@ function ActionGraphEditor() {
             setNodes(draft.nodes)
             setEdges(draft.edges)
             draftLoadedRef.current = templateId
+            loadedTemplateIdRef.current = templateId
             lastSavedStateRef.current = {
               nodes: JSON.stringify(draft.nodes),
               edges: JSON.stringify(draft.edges),
@@ -705,18 +730,20 @@ function ActionGraphEditor() {
       }
 
       // No draft, load from server
+      console.log('[Template] Loading template data:', templateId, 'steps:', selectedTemplate.steps?.length || 0)
       const { initialNodes, initialEdges } = convertActionGraphToGraph(selectedTemplate, selectedStateDef, availableStates, availableAgents)
       setNodes(initialNodes)
       setEdges(initialEdges)
       draftLoadedRef.current = null
+      loadedTemplateIdRef.current = templateId
       lastSavedStateRef.current = {
         nodes: JSON.stringify(initialNodes),
         edges: JSON.stringify(initialEdges),
       }
       setHasUnsavedChanges(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [templateId]) // Only depend on template ID change
+    // Include selectedTemplate.id to re-run when the query completes with matching data
+  }, [templateId, selectedTemplate?.id, getDraftKey, setNodes, setEdges, selectedStateDef, availableStates, availableAgents])
 
   // Detect changes and save draft to sessionStorage
   useEffect(() => {
