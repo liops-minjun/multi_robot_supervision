@@ -26,7 +26,7 @@ import {
 import { templateApi, stateDefinitionApi, agentApi, capabilityApi } from '../../api/client'
 import type {
   ActionGraph, StateDefinition, ActionMapping,
-  AssignmentInfo, AgentOverviewInfo, TemplateListItem,
+  AssignmentInfo, TemplateListItem,
   StartCondition, StartStateConfig, EndStateConfig, ActionOutcome, OutcomeTransition, DuringStateTarget
 } from '../../types'
 
@@ -312,12 +312,12 @@ function DeploymentBadge({ status }: { status: string }) {
 
 function ActionGraphEditor() {
   // View state
-  const [viewMode, setViewMode] = useState<'templates' | 'assignments'>('templates')
+  // Bottom panel state (replaces right side panel)
+  const [bottomPanelTab, setBottomPanelTab] = useState<'telemetry' | 'assignments' | null>(null)
 
   // Agent filtering for capabilities
   const [selectedAgentFilter, setSelectedAgentFilter] = useState<string | null>(null)
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null)
-  const [expandedAgents, setExpandedAgents] = useState<string[]>([])
 
   // Modal state
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -326,8 +326,6 @@ function ActionGraphEditor() {
 
   const [expandedCategories, setExpandedCategories] = useState<string[]>(['Discovered Actions', 'Configured Actions', 'End Nodes'])
 
-  // Right Panel (Telemetry & Assignments)
-  const [rightPanelTab, setRightPanelTab] = useState<'telemetry' | 'assignments' | null>(null)
 
   // Validation state
   const [validationErrors, setValidationErrors] = useState<Array<{ nodeId: string; nodeName: string; errors: string[] }>>([])
@@ -390,11 +388,6 @@ function ActionGraphEditor() {
     queryFn: () => templateApi.list(),
   })
 
-  // Fetch agents overview (agents with assignments)
-  const { data: agentsOverview = [], isLoading: agentsLoading } = useQuery({
-    queryKey: ['agents-overview'],
-    queryFn: () => templateApi.getAgentsOverview(),
-  })
 
   // Fetch selected template
   const { data: selectedTemplate } = useQuery({
@@ -1276,237 +1269,68 @@ function ActionGraphEditor() {
     )
   }
 
-  const toggleAgent = (agentId: string) => {
-    setExpandedAgents(prev =>
-      prev.includes(agentId) ? prev.filter(a => a !== agentId) : [...prev, agentId]
-    )
-  }
-
-
   return (
     <div className="h-screen flex bg-[#0f0f1a]">
-      {/* Left Sidebar - Templates/Assignments Navigation */}
-      <div className="w-80 bg-[#16162a] border-r border-[#2a2a4a] flex flex-col">
-        {/* View Mode Toggle */}
-        <div className="p-3 border-b border-[#2a2a4a]">
-          <div className="flex bg-[#1a1a2e] rounded-lg p-0.5">
-            <button
-              onClick={() => setViewMode('templates')}
-              className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-md text-sm font-medium transition-colors ${
-                viewMode === 'templates'
-                  ? 'bg-blue-600 text-white'
-                  : 'text-gray-400 hover:text-white'
-              }`}
-            >
-              <FileCode size={16} />
-              Templates
-            </button>
-            <button
-              onClick={() => setViewMode('assignments')}
-              className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-md text-sm font-medium transition-colors ${
-                viewMode === 'assignments'
-                  ? 'bg-blue-600 text-white'
-                  : 'text-gray-400 hover:text-white'
-              }`}
-            >
-              <Users size={16} />
-              Assignments
-            </button>
-          </div>
-        </div>
-
-        {/* Content based on view mode */}
+      {/* Left Sidebar - Templates */}
+      <div className="w-64 bg-[#16162a] border-r border-[#2a2a4a] flex flex-col">
+        {/* Templates List */}
         <div className="flex-1 overflow-y-auto">
-          {viewMode === 'templates' ? (
-            // Templates View - Capability-based (flat list)
-            <div className="py-2">
-              <div className="px-3 py-2 flex items-center justify-between">
-                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                  템플릿
-                </span>
-                <button
-                  onClick={() => setShowCreateModal(true)}
-                  className="p-1 text-blue-400 hover:bg-blue-500/20 rounded"
-                  title="새 템플릿 생성"
-                >
-                  <PlusCircle size={14} />
-                </button>
-              </div>
-
-              {templatesLoading ? (
-                <div className="px-3 py-4 text-center text-gray-500 text-sm">로딩 중...</div>
-              ) : allTemplates.length === 0 ? (
-                <div className="px-3 py-4 text-center text-gray-500 text-sm">
-                  템플릿이 없습니다. 새로 생성하세요.
-                </div>
-              ) : (
-                <div className="space-y-0.5">
-                  {allTemplates.map((template: TemplateListItem) => (
-                    <div
-                      key={template.id}
-                      onClick={() => setSelectedTemplateId(template.id)}
-                      className={`w-full px-3 py-2.5 flex items-start gap-2 text-left transition-colors cursor-pointer group ${
-                        selectedTemplateId === template.id
-                          ? 'bg-blue-600/20 text-blue-400 border-l-2 border-blue-500'
-                          : 'text-gray-400 hover:bg-[#1a1a2e] hover:text-white'
-                      }`}
-                    >
-                      <FileCode size={16} className="mt-0.5 flex-shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium truncate">{template.name}</div>
-                        {/* Show required action types as capability tags */}
-                        {template.required_action_types && template.required_action_types.length > 0 ? (
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {template.required_action_types.slice(0, 2).map(at => (
-                              <span key={at} className="text-[9px] px-1.5 py-0.5 bg-purple-500/20 text-purple-400 rounded">
-                                {at.split('/').pop()}
-                              </span>
-                            ))}
-                            {template.required_action_types.length > 2 && (
-                              <span className="text-[9px] px-1.5 py-0.5 bg-gray-500/20 text-gray-500 rounded">
-                                +{template.required_action_types.length - 2}
-                              </span>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-[10px] text-gray-600 italic">액션 없음</span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1 flex-shrink-0">
-                        <span className="text-[10px] text-gray-600">
-                          {template.assignment_count} agent{template.assignment_count !== 1 ? 's' : ''}
-                        </span>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            if (confirm(`Delete template "${template.name}"?`)) {
-                              deleteTemplate.mutate(template.id)
-                            }
-                          }}
-                          className="p-1 text-gray-600 hover:text-red-400 hover:bg-red-500/20 rounded opacity-0 group-hover:opacity-100 transition-opacity"
-                          title="템플릿 삭제"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+          <div className="py-2">
+            <div className="px-3 py-2 flex items-center justify-between">
+              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                템플릿
+              </span>
+              <button
+                onClick={() => setShowCreateModal(true)}
+                className="p-1 text-blue-400 hover:bg-blue-500/20 rounded"
+                title="새 템플릿 생성"
+              >
+                <PlusCircle size={14} />
+              </button>
             </div>
-          ) : (
-            // Assignments View - By Agent
-            <div className="py-2">
-              <div className="px-3 py-2">
-                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                  에이전트 & 할당
-                </span>
+
+            {templatesLoading ? (
+              <div className="px-3 py-4 text-center text-gray-500 text-sm">로딩 중...</div>
+            ) : allTemplates.length === 0 ? (
+              <div className="px-3 py-4 text-center text-gray-500 text-sm">
+                템플릿이 없습니다. 새로 생성하세요.
               </div>
-
-              {agentsLoading ? (
-                <div className="px-3 py-4 text-center text-gray-500 text-sm">로딩 중...</div>
-              ) : agentsOverview.length === 0 ? (
-                <div className="px-3 py-4 text-center text-gray-500 text-sm">
-                  연결된 에이전트 없음
-                </div>
-              ) : (
-                agentsOverview.map((agent: AgentOverviewInfo) => {
-                  const actionServers = agent.action_servers || []
-                  const actionTypes = agent.action_types || []
-                  const assignedTemplates = agent.assigned_templates || []
-
-                  return (
-                  <div key={agent.agent_id} className="border-b border-[#2a2a4a]/50">
-                    <button
-                      onClick={() => toggleAgent(agent.agent_id)}
-                      className="w-full px-3 py-2.5 flex items-center gap-2 hover:bg-[#1a1a2e] transition-colors"
-                    >
-                      {expandedAgents.includes(agent.agent_id) ? (
-                        <ChevronDown size={14} className="text-gray-500" />
-                      ) : (
-                        <ChevronRight size={14} className="text-gray-500" />
-                      )}
-                      <Cpu size={16} className="text-green-400" />
-                      <span className="flex-1 text-left text-sm text-white">{agent.agent_name}</span>
-                      <span className={`w-2 h-2 rounded-full ${
-                        agent.status === 'online' ? 'bg-green-500' :
-                        agent.status === 'warning' ? 'bg-yellow-500' : 'bg-red-500'
-                      }`} />
-                    </button>
-
-                    {/* Expanded: Show capabilities and assigned templates */}
-                    {expandedAgents.includes(agent.agent_id) && (
-                      <div className="bg-[#0f0f1a]/50">
-                        {/* Action Servers (individual) */}
-                        {actionServers.length > 0 ? (
-                          <div className="pl-8 pr-3 py-2 border-t border-[#2a2a4a]/30">
-                            <div className="flex flex-wrap gap-1">
-                              {actionServers.slice(0, 4).map(srv => (
-                                <span
-                                  key={srv.action_server}
-                                  className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${
-                                    srv.is_available
-                                      ? 'bg-purple-500/20 text-purple-400'
-                                      : 'bg-gray-500/20 text-gray-500'
-                                  }`}
-                                  title={`${srv.action_type} - ${srv.status}`}
-                                >
-                                  {srv.action_server.replace(/^\//, '')}
-                                </span>
-                              ))}
-                              {actionServers.length > 4 && (
-                                <span className="text-[9px] px-1.5 py-0.5 bg-gray-500/20 text-gray-500 rounded">
-                                  +{actionServers.length - 4}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        ) : actionTypes.length > 0 && (
-                          /* Fallback to action_types if action_servers not available */
-                          <div className="pl-8 pr-3 py-2 border-t border-[#2a2a4a]/30">
-                            <div className="flex flex-wrap gap-1">
-                              {actionTypes.slice(0, 4).map(at => (
-                                <span key={at} className="text-[9px] px-1.5 py-0.5 bg-purple-500/20 text-purple-400 rounded">
-                                  {at.split('/').pop()}
-                                </span>
-                              ))}
-                              {actionTypes.length > 4 && (
-                                <span className="text-[9px] px-1.5 py-0.5 bg-gray-500/20 text-gray-500 rounded">
-                                  +{actionTypes.length - 4}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                        {/* Assigned templates */}
-                        {assignedTemplates.length === 0 ? (
-                          <div className="pl-10 pr-3 py-2 text-xs text-gray-600 italic border-t border-[#2a2a4a]/30">
-                            No templates assigned
-                          </div>
-                        ) : (
-                          assignedTemplates.map(at => (
-                            <button
-                              key={at.assignment_id}
-                              onClick={() => setSelectedTemplateId(at.template_id)}
-                              className={`w-full pl-10 pr-3 py-1.5 flex items-center gap-2 text-left transition-colors border-t border-[#2a2a4a]/30 ${
-                                selectedTemplateId === at.template_id
-                                  ? 'bg-blue-600/20 text-blue-400'
-                                  : 'text-gray-400 hover:bg-[#1a1a2e] hover:text-white'
-                              }`}
-                            >
-                              <Link2 size={12} className="text-gray-500" />
-                              <span className="flex-1 text-xs truncate">{at.template_name}</span>
-                              <DeploymentBadge status={at.status} />
-                            </button>
-                          ))
-                        )}
-                      </div>
+            ) : (
+              <div className="space-y-0.5">
+                {allTemplates.map((template: TemplateListItem) => (
+                  <div
+                    key={template.id}
+                    onClick={() => setSelectedTemplateId(template.id)}
+                    className={`w-full px-3 py-2 flex items-center gap-2 text-left transition-colors cursor-pointer group ${
+                      selectedTemplateId === template.id
+                        ? 'bg-blue-600/20 text-blue-400 border-l-2 border-blue-500'
+                        : 'text-gray-400 hover:bg-[#1a1a2e] hover:text-white'
+                    }`}
+                  >
+                    <FileCode size={14} className="flex-shrink-0" />
+                    <span className="flex-1 text-sm font-medium truncate">{template.name}</span>
+                    {template.assignment_count > 0 && (
+                      <span className="text-[10px] px-1.5 py-0.5 bg-green-500/20 text-green-400 rounded">
+                        {template.assignment_count}
+                      </span>
                     )}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        if (confirm(`Delete template "${template.name}"?`)) {
+                          deleteTemplate.mutate(template.id)
+                        }
+                      }}
+                      className="p-1 text-gray-600 hover:text-red-400 hover:bg-red-500/20 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="템플릿 삭제"
+                    >
+                      <Trash2 size={12} />
+                    </button>
                   </div>
-                )})
-              )}
-            </div>
-          )}
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Selected Template Info */}
@@ -1852,8 +1676,9 @@ function ActionGraphEditor() {
           )}
         </div>
 
-        {/* Canvas or Welcome */}
-        <div className="flex-1 flex">
+        {/* Canvas and Bottom Panel */}
+        <div className="flex-1 flex flex-col">
+          {/* Canvas Area */}
           <div ref={reactFlowWrapper} className="flex-1">
             {selectedTemplate ? (
               <ReactFlow
@@ -1882,11 +1707,13 @@ function ActionGraphEditor() {
               >
                 <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="#2a2a4a" />
                 <Controls className="!bg-[#16162a] !border-[#2a2a4a] !rounded-lg [&>button]:!bg-[#16162a] [&>button]:!border-[#2a2a4a] [&>button]:!text-white [&>button:hover]:!bg-[#2a2a4a]" />
-                <Panel position="bottom-center" className="mb-4">
-                  <div className="bg-[#16162a]/90 backdrop-blur-sm px-4 py-2 rounded-lg border border-[#2a2a4a] text-xs text-gray-400">
-                    Drag action servers to canvas to build workflow
-                  </div>
-                </Panel>
+                {!bottomPanelTab && (
+                  <Panel position="bottom-center" className="mb-4">
+                    <div className="bg-[#16162a]/90 backdrop-blur-sm px-4 py-2 rounded-lg border border-[#2a2a4a] text-xs text-gray-400">
+                      Drag action servers to canvas to build workflow
+                    </div>
+                  </Panel>
+                )}
               </ReactFlow>
             ) : (
               <div className="h-full flex items-center justify-center">
@@ -1909,106 +1736,132 @@ function ActionGraphEditor() {
             )}
           </div>
 
-          {/* Right Side Panel - Telemetry & Assignments */}
-          {selectedTemplate && rightPanelTab && (
-            <div className="w-80 bg-[#16162a] border-l border-[#2a2a4a] flex flex-col h-full">
-              {/* Panel Tabs */}
-              <div className="flex border-b border-[#2a2a4a]">
-                <button
-                  onClick={() => setRightPanelTab('telemetry')}
-                  className={`flex-1 px-3 py-2 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors ${
-                    rightPanelTab === 'telemetry'
-                      ? 'text-green-400 bg-green-500/10 border-b-2 border-green-500'
-                      : 'text-gray-400 hover:text-white hover:bg-[#1a1a2e]'
-                  }`}
-                >
-                  <Radio size={12} className={rightPanelTab === 'telemetry' ? 'animate-pulse' : ''} />
-                  Telemetry
-                </button>
-                <button
-                  onClick={() => setRightPanelTab('assignments')}
-                  className={`flex-1 px-3 py-2 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors ${
-                    rightPanelTab === 'assignments'
-                      ? 'text-blue-400 bg-blue-500/10 border-b-2 border-blue-500'
-                      : 'text-gray-400 hover:text-white hover:bg-[#1a1a2e]'
-                  }`}
-                >
-                  <Link2 size={12} />
-                  Assignments
-                </button>
-                <button
-                  onClick={() => setRightPanelTab(null)}
-                  className="px-2 py-2 text-gray-500 hover:text-white hover:bg-[#1a1a2e] transition-colors"
-                >
-                  <X size={14} />
-                </button>
+          {/* Bottom Panel - Telemetry & Assignments */}
+          {selectedTemplate && (
+            <div className="border-t border-[#2a2a4a] bg-[#16162a]">
+              {/* Panel Toggle Bar */}
+              <div className="flex items-center justify-between px-3 py-1.5 bg-[#1a1a2e]/50">
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setBottomPanelTab(bottomPanelTab === 'telemetry' ? null : 'telemetry')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                      bottomPanelTab === 'telemetry'
+                        ? 'bg-green-500/20 text-green-400'
+                        : 'text-gray-400 hover:text-green-400 hover:bg-green-500/10'
+                    }`}
+                  >
+                    <Radio size={12} className={bottomPanelTab === 'telemetry' ? 'animate-pulse' : ''} />
+                    Telemetry
+                  </button>
+                  <button
+                    onClick={() => setBottomPanelTab(bottomPanelTab === 'assignments' ? null : 'assignments')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                      bottomPanelTab === 'assignments'
+                        ? 'bg-blue-500/20 text-blue-400'
+                        : 'text-gray-400 hover:text-blue-400 hover:bg-blue-500/10'
+                    }`}
+                  >
+                    <Link2 size={12} />
+                    Assignments
+                    {templateAssignments.length > 0 && (
+                      <span className="px-1.5 py-0.5 bg-blue-500/30 rounded text-[10px]">
+                        {templateAssignments.length}
+                      </span>
+                    )}
+                  </button>
+                </div>
+                {bottomPanelTab && (
+                  <button
+                    onClick={() => setBottomPanelTab(null)}
+                    className="p-1 text-gray-500 hover:text-white hover:bg-[#2a2a4a] rounded transition-colors"
+                  >
+                    <ChevronDown size={14} />
+                  </button>
+                )}
               </div>
 
               {/* Panel Content */}
-              {rightPanelTab === 'telemetry' ? (
-                <TelemetryPanel
-                  isOpen={true}
-                  onClose={() => setRightPanelTab(null)}
-                  embedded={true}
-                />
-              ) : rightPanelTab === 'assignments' ? (
-                <div className="flex-1 overflow-y-auto p-3">
-                  <div className="mb-4">
-                    <h3 className="text-sm font-semibold text-white mb-2">할당된 에이전트</h3>
-                    {templateAssignments.length === 0 ? (
-                      <div className="text-xs text-gray-500 p-3 bg-[#1a1a2e] rounded-lg">
-                        이 템플릿은 아직 에이전트에 할당되지 않았습니다.
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {templateAssignments.map(a => (
-                          <div key={a.id} className="flex items-center justify-between p-2 bg-[#1a1a2e] rounded-lg">
-                            <div className="flex items-center gap-2">
-                              <Cpu size={14} className="text-green-400" />
-                              <span className="text-sm text-white">{a.agent_name}</span>
-                            </div>
-                            <button
-                              onClick={() => unassignTemplate.mutate({ templateId: selectedTemplate.id, agentId: a.agent_id })}
-                              className="p-1 text-red-400 hover:bg-red-500/20 rounded"
-                              title="할당 해제"
-                            >
-                              <Unlink size={12} />
-                            </button>
+              {bottomPanelTab && (
+                <div className="h-48 overflow-hidden">
+                  {bottomPanelTab === 'telemetry' ? (
+                    <TelemetryPanel
+                      isOpen={true}
+                      onClose={() => setBottomPanelTab(null)}
+                      embedded={true}
+                      horizontal={true}
+                    />
+                  ) : bottomPanelTab === 'assignments' ? (
+                    <div className="h-full flex gap-4 p-3 overflow-x-auto">
+                      {/* Assigned Agents */}
+                      <div className="flex-shrink-0 w-72">
+                        <div className="flex items-center justify-between mb-2">
+                          <h3 className="text-xs font-semibold text-gray-400 uppercase">할당된 에이전트</h3>
+                          <button
+                            onClick={() => setShowAssignModal(true)}
+                            className="p-1 text-blue-400 hover:bg-blue-500/20 rounded"
+                            title="에이전트에 할당"
+                          >
+                            <Plus size={14} />
+                          </button>
+                        </div>
+                        {templateAssignments.length === 0 ? (
+                          <div className="text-xs text-gray-500 p-3 bg-[#1a1a2e] rounded-lg">
+                            할당된 에이전트 없음
                           </div>
-                        ))}
+                        ) : (
+                          <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                            {templateAssignments.map(a => (
+                              <div key={a.id} className="flex items-center justify-between p-2 bg-[#1a1a2e] rounded-lg">
+                                <div className="flex items-center gap-2">
+                                  <Cpu size={12} className="text-green-400" />
+                                  <span className="text-xs text-white">{a.agent_name}</span>
+                                </div>
+                                <button
+                                  onClick={() => unassignTemplate.mutate({ templateId: selectedTemplate.id, agentId: a.agent_id })}
+                                  className="p-1 text-red-400 hover:bg-red-500/20 rounded"
+                                  title="할당 해제"
+                                >
+                                  <Unlink size={10} />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
 
-                  <button
-                    onClick={() => setShowAssignModal(true)}
-                    className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-blue-600/20 text-blue-400 rounded-lg hover:bg-blue-600/30 text-sm"
-                  >
-                    <Plus size={14} />
-                    에이전트에 할당
-                  </button>
+                      {/* Compatible Agents */}
+                      {compatibleAgentsData && (
+                        <div className="flex-shrink-0 w-72">
+                          <h3 className="text-xs font-semibold text-gray-400 uppercase mb-2">호환 에이전트</h3>
+                          <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                            {(compatibleAgentsData.agents || [])
+                              .filter(a => a.has_all_capabilities && !templateAssignments.some(ta => ta.agent_id === a.agent_id))
+                              .map(a => (
+                                <div key={a.agent_id} className="flex items-center justify-between p-2 bg-[#1a1a2e] rounded-lg">
+                                  <div className="flex items-center gap-2">
+                                    <Cpu size={12} className="text-purple-400" />
+                                    <span className="text-xs text-white">{a.agent_name}</span>
+                                  </div>
+                                  <button
+                                    onClick={() => assignTemplate.mutate({ templateId: selectedTemplate.id, agentId: a.agent_id })}
+                                    className="px-2 py-1 text-[10px] bg-blue-600/20 text-blue-400 rounded hover:bg-blue-600/30"
+                                  >
+                                    할당
+                                  </button>
+                                </div>
+                              ))}
+                            {(compatibleAgentsData.agents || []).filter(a => a.has_all_capabilities && !templateAssignments.some(ta => ta.agent_id === a.agent_id)).length === 0 && (
+                              <div className="text-xs text-gray-500 p-3 bg-[#1a1a2e] rounded-lg">
+                                추가 호환 에이전트 없음
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
-            </div>
-          )}
-
-          {/* Right Panel Toggle Buttons - when panel is closed */}
-          {selectedTemplate && !rightPanelTab && (
-            <div className="flex flex-col gap-1 p-2 bg-[#16162a] border-l border-[#2a2a4a]">
-              <button
-                onClick={() => setRightPanelTab('telemetry')}
-                className="p-2 text-gray-400 hover:text-green-400 hover:bg-green-500/10 rounded-lg transition-colors"
-                title="Telemetry 패널 열기"
-              >
-                <Radio size={18} />
-              </button>
-              <button
-                onClick={() => setRightPanelTab('assignments')}
-                className="p-2 text-gray-400 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-colors"
-                title="Assignments 패널 열기"
-              >
-                <Link2 size={18} />
-              </button>
+              )}
             </div>
           )}
         </div>

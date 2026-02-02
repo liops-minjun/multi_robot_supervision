@@ -12,6 +12,7 @@ interface TelemetryPanelProps {
   onClose: () => void
   selectedRobotId?: string | null
   embedded?: boolean  // When true, don't render outer container (used in tabbed panels)
+  horizontal?: boolean  // When true, display in horizontal layout for bottom panel
 }
 
 // Format number to 4 decimal places
@@ -317,6 +318,7 @@ export function TelemetryPanel({
   onClose,
   selectedRobotId: externalRobotId,
   embedded = false,
+  horizontal = false,
 }: TelemetryPanelProps) {
   // Use telemetry context for capturing values and live telemetry sync
   const {
@@ -437,6 +439,186 @@ export function TelemetryPanel({
 
   const hasData = telemetry && (telemetry.joint_state || telemetry.odometry || (telemetry.transforms && telemetry.transforms.length > 0))
 
+  // Horizontal layout content for bottom panel
+  if (horizontal) {
+    return (
+      <div className="flex h-full">
+        {/* Robot Selector - Left */}
+        <div className="w-40 flex-shrink-0 border-r border-[#2a2a4a] p-2">
+          <div className="text-[10px] text-gray-500 uppercase mb-1.5">로봇</div>
+          <select
+            value={selectedRobotId || ''}
+            onChange={(e) => setSelectedRobotId(e.target.value || null)}
+            className="w-full px-2 py-1 bg-[#1a1a2e] border border-[#2a2a4a] rounded text-xs text-white focus:outline-none focus:border-green-500 cursor-pointer"
+          >
+            <option value="">선택...</option>
+            {robots.map((robot) => (
+              <option key={robot.id} value={robot.id}>
+                {robot.name || robot.id}
+              </option>
+            ))}
+          </select>
+          {/* Capture Status */}
+          {capturedValue && (
+            <div className="mt-2 p-1.5 bg-green-500/10 rounded">
+              <div className="flex items-center gap-1 text-[9px] text-green-400">
+                <Check size={10} />
+                <span className="truncate">{capturedValue.type}</span>
+              </div>
+              <button
+                onClick={() => setCapturedValue(null)}
+                className="text-[8px] text-gray-500 hover:text-gray-300 mt-0.5"
+              >
+                취소
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Telemetry Content - Center (scrollable horizontally) */}
+        <div className="flex-1 flex gap-3 p-2 overflow-x-auto">
+          {!selectedRobotId ? (
+            <div className="flex items-center justify-center w-full text-gray-500 text-xs">
+              <Radio size={16} className="mr-2" />
+              로봇을 선택하세요
+            </div>
+          ) : isLoading ? (
+            <div className="flex items-center justify-center w-full">
+              <RefreshCw size={16} className="text-gray-500 animate-spin" />
+            </div>
+          ) : !hasData ? (
+            <div className="flex items-center justify-center w-full text-gray-500 text-xs">
+              <Radio size={16} className="mr-2" />
+              텔레메트리 없음
+            </div>
+          ) : (
+            <>
+              {/* Joint State - Compact horizontal */}
+              {telemetry.joint_state && (
+                <div className="flex-shrink-0 w-80 bg-[#1a1a2e] rounded border border-[#2a2a4a] p-2">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-semibold text-cyan-400">JointState</span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={handleCaptureJointState}
+                        className="px-1.5 py-0.5 text-[9px] bg-purple-500/20 text-purple-400 rounded hover:bg-purple-500/30 flex items-center gap-0.5"
+                      >
+                        <Crosshair size={8} />
+                        캡처
+                      </button>
+                    </div>
+                  </div>
+                  <div className="max-h-28 overflow-y-auto">
+                    <div className="grid grid-cols-4 gap-1 text-[8px] text-gray-500 font-semibold px-1 mb-0.5">
+                      <span>Joint</span>
+                      <span>Pos</span>
+                      <span>Vel</span>
+                      <span>Eff</span>
+                    </div>
+                    {telemetry.joint_state.name.slice(0, 6).map((name, idx) => (
+                      <div key={name} className="grid grid-cols-4 gap-1 text-[9px] font-mono px-1 py-0.5 hover:bg-[#0d0d1a] rounded">
+                        <span className="text-gray-300 truncate" title={name}>{name}</span>
+                        <span className="text-cyan-400">{formatNumber(telemetry.joint_state!.position?.[idx] ?? 0)}</span>
+                        <span className="text-yellow-400">{formatNumber(telemetry.joint_state!.velocity?.[idx] ?? 0)}</span>
+                        <span className="text-purple-400">{formatNumber(telemetry.joint_state!.effort?.[idx] ?? 0)}</span>
+                      </div>
+                    ))}
+                    {telemetry.joint_state.name.length > 6 && (
+                      <div className="text-[8px] text-gray-500 px-1">+{telemetry.joint_state.name.length - 6} more</div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Odometry - Compact horizontal */}
+              {telemetry.odometry && (
+                <div className="flex-shrink-0 w-56 bg-[#1a1a2e] rounded border border-[#2a2a4a] p-2">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-semibold text-green-400">Odometry</span>
+                    <button
+                      onClick={handleCapturePose}
+                      className="px-1.5 py-0.5 text-[9px] bg-purple-500/20 text-purple-400 rounded hover:bg-purple-500/30 flex items-center gap-0.5"
+                    >
+                      <Crosshair size={8} />
+                      Pose
+                    </button>
+                  </div>
+                  <div className="space-y-1.5">
+                    <div>
+                      <div className="text-[8px] text-gray-500 mb-0.5">Position</div>
+                      <div className="grid grid-cols-3 gap-1 text-[9px] font-mono bg-[#0d0d1a] rounded p-1">
+                        <div>
+                          <span className="text-[7px] text-gray-500">X</span>
+                          <div className="text-cyan-400">{formatNumber(telemetry.odometry.pose?.position?.x ?? 0)}</div>
+                        </div>
+                        <div>
+                          <span className="text-[7px] text-gray-500">Y</span>
+                          <div className="text-cyan-400">{formatNumber(telemetry.odometry.pose?.position?.y ?? 0)}</div>
+                        </div>
+                        <div>
+                          <span className="text-[7px] text-gray-500">Z</span>
+                          <div className="text-cyan-400">{formatNumber(telemetry.odometry.pose?.position?.z ?? 0)}</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[8px] text-gray-500 mb-0.5">Orientation</div>
+                      <div className="grid grid-cols-4 gap-0.5 text-[8px] font-mono bg-[#0d0d1a] rounded p-1">
+                        <div className="text-yellow-400">{formatNumber(telemetry.odometry.pose?.orientation?.x ?? 0)}</div>
+                        <div className="text-yellow-400">{formatNumber(telemetry.odometry.pose?.orientation?.y ?? 0)}</div>
+                        <div className="text-yellow-400">{formatNumber(telemetry.odometry.pose?.orientation?.z ?? 0)}</div>
+                        <div className="text-yellow-400">{formatNumber(telemetry.odometry.pose?.orientation?.w ?? 0)}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Transforms - Compact horizontal */}
+              {telemetry.transforms && telemetry.transforms.length > 0 && (
+                <div className="flex-shrink-0 w-48 bg-[#1a1a2e] rounded border border-[#2a2a4a] p-2">
+                  <div className="flex items-center gap-1 mb-1.5">
+                    <span className="text-[10px] font-semibold text-orange-400">TF</span>
+                    <span className="text-[8px] text-gray-500">({telemetry.transforms.length})</span>
+                  </div>
+                  <div className="max-h-28 overflow-y-auto space-y-0.5">
+                    {telemetry.transforms.slice(0, 4).map((tf, idx) => (
+                      <div key={idx} className="text-[8px] font-mono p-1 bg-[#0d0d1a] rounded truncate">
+                        <span className="text-orange-400">{tf.frame_id}</span>
+                        <span className="text-gray-500"> → </span>
+                        <span className="text-yellow-400">{tf.child_frame_id}</span>
+                      </div>
+                    ))}
+                    {telemetry.transforms.length > 4 && (
+                      <div className="text-[8px] text-gray-500 px-1">+{telemetry.transforms.length - 4} more</div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Status - Right */}
+        <div className="w-32 flex-shrink-0 border-l border-[#2a2a4a] p-2 flex flex-col justify-between">
+          {hasData && telemetry && (
+            <div className="text-[9px]">
+              <div className="text-gray-500 mb-0.5">업데이트</div>
+              <div className={telemetry.is_stale ? 'text-yellow-500' : 'text-green-400'}>
+                {new Date(telemetry.updated_at).toLocaleTimeString()}
+              </div>
+            </div>
+          )}
+          <div className="text-[8px] text-gray-600">
+            <Crosshair size={10} className="inline mr-1 text-purple-400" />
+            캡처 후 파라미터 적용
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Vertical layout content (default)
   const content = (
     <>
       {/* Robot Selector */}
