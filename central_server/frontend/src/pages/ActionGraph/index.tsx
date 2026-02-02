@@ -26,7 +26,7 @@ import {
 import { templateApi, stateDefinitionApi, agentApi, capabilityApi } from '../../api/client'
 import type {
   ActionGraph, StateDefinition, ActionMapping,
-  AssignmentInfo, AgentOverviewInfo, Agent, TemplateListItem,
+  AssignmentInfo, AgentOverviewInfo, TemplateListItem,
   StartCondition, StartStateConfig, EndStateConfig, ActionOutcome, OutcomeTransition, DuringStateTarget
 } from '../../types'
 
@@ -1601,51 +1601,80 @@ function ActionGraphEditor() {
           </div>
 
           {/* Compatible Agents Section - Prominent placement */}
-          {selectedTemplate && compatibleAgentsData && (
-            <div className="mx-3 my-2 p-2.5 bg-gradient-to-r from-green-500/10 to-emerald-500/5 border border-green-500/30 rounded-lg">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <Users size={14} className="text-green-400" />
-                  <span className="text-xs font-semibold text-green-400">
-                    호환 에이전트
+          {selectedTemplate && compatibleAgentsData && (() => {
+            // Merge compatible agents with assigned agents
+            const assignedAgentIds = new Set(templateAssignments.map(a => a.agent_id))
+            const compatibleAgents = compatibleAgentsData.agents?.filter(a => a.has_all_capabilities) || []
+            const compatibleAgentIds = new Set(compatibleAgents.map(a => a.agent_id))
+
+            // Find assigned agents not in compatible list (may have partial or no capabilities data)
+            const assignedOnlyAgents = templateAssignments.filter(a => !compatibleAgentIds.has(a.agent_id))
+
+            // Total count: compatible + assigned-only
+            const totalCount = compatibleAgents.length + assignedOnlyAgents.length
+
+            return (
+              <div className="mx-3 my-2 p-2.5 bg-gradient-to-r from-green-500/10 to-emerald-500/5 border border-green-500/30 rounded-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Users size={14} className="text-green-400" />
+                    <span className="text-xs font-semibold text-green-400">
+                      호환 에이전트
+                    </span>
+                  </div>
+                  <span className="text-xs text-green-300 font-bold">
+                    {totalCount}개
                   </span>
                 </div>
-                <span className="text-xs text-green-300 font-bold">
-                  {compatibleAgentsData.agents?.filter(a => a.has_all_capabilities).length || 0}개
-                </span>
-              </div>
-              {compatibleAgentsData.agents?.filter(a => a.has_all_capabilities).length > 0 ? (
-                <div className="flex flex-wrap gap-1.5">
-                  {compatibleAgentsData.agents
-                    .filter(agent => agent.has_all_capabilities)
-                    .map(agent => (
+                {totalCount > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {/* Show compatible agents first */}
+                    {compatibleAgents.map(agent => {
+                      const isAssigned = assignedAgentIds.has(agent.agent_id)
+                      return (
+                        <div
+                          key={agent.agent_id}
+                          className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium ${
+                            agent.status === 'online'
+                              ? 'bg-green-500/20 text-green-300 border border-green-500/40'
+                              : 'bg-gray-600/20 text-gray-400 border border-gray-500/30'
+                          }`}
+                        >
+                          <div className={`w-1.5 h-1.5 rounded-full ${
+                            agent.status === 'online' ? 'bg-green-400' : 'bg-gray-500'
+                          }`} />
+                          {agent.agent_name}
+                          {isAssigned && (
+                            <Check size={10} className="text-blue-400" />
+                          )}
+                        </div>
+                      )
+                    })}
+                    {/* Show assigned-only agents (not in compatible list) */}
+                    {assignedOnlyAgents.map(agent => (
                       <div
                         key={agent.agent_id}
-                        className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium ${
-                          agent.status === 'online'
-                            ? 'bg-green-500/20 text-green-300 border border-green-500/40'
-                            : 'bg-gray-600/20 text-gray-400 border border-gray-500/30'
-                        }`}
+                        className="flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium bg-blue-500/20 text-blue-300 border border-blue-500/40"
                       >
-                        <div className={`w-1.5 h-1.5 rounded-full ${
-                          agent.status === 'online' ? 'bg-green-400' : 'bg-gray-500'
-                        }`} />
+                        <div className="w-1.5 h-1.5 rounded-full bg-blue-400" />
                         {agent.agent_name}
+                        <Check size={10} className="text-blue-400" />
                       </div>
                     ))}
-                </div>
-              ) : (
-                <div className="text-[10px] text-yellow-400 bg-yellow-500/10 px-2 py-1 rounded">
-                  ⚠️ 호환되는 에이전트 없음 - Action Type 확인 필요
-                </div>
-              )}
-              {compatibleAgentsData.agents?.filter(a => !a.has_all_capabilities).length > 0 && (
-                <div className="text-[9px] text-gray-500 mt-1.5">
-                  +{compatibleAgentsData.agents.filter(a => !a.has_all_capabilities).length}개 부분 호환
-                </div>
-              )}
-            </div>
-          )}
+                  </div>
+                ) : (
+                  <div className="text-[10px] text-yellow-400 bg-yellow-500/10 px-2 py-1 rounded">
+                    ⚠️ 호환되는 에이전트 없음 - Action Type 확인 필요
+                  </div>
+                )}
+                {compatibleAgentsData.agents?.filter(a => !a.has_all_capabilities).length > 0 && (
+                  <div className="text-[9px] text-gray-500 mt-1.5">
+                    +{compatibleAgentsData.agents.filter(a => !a.has_all_capabilities).length}개 부분 호환
+                  </div>
+                )}
+              </div>
+            )
+          })()}
 
           {/* Node Palette */}
           <div className="flex-1 overflow-y-auto">
@@ -1932,7 +1961,6 @@ function ActionGraphEditor() {
       {/* Create Template Modal */}
       {showCreateModal && (
         <CreateTemplateModal
-          agents={agents}
           onClose={() => setShowCreateModal(false)}
           onCreated={(id) => {
             setShowCreateModal(false)
@@ -2205,11 +2233,9 @@ function convertActionGraphToGraph(
 }
 
 function CreateTemplateModal({
-  agents,
   onClose,
   onCreated,
 }: {
-  agents: Agent[]
   onClose: () => void
   onCreated: (id: string) => void
 }) {
@@ -2217,16 +2243,8 @@ function CreateTemplateModal({
     id: '',
     name: '',
     description: '',
-    baseAgentId: '', // Optional: base template on agent's capabilities
   })
   const [error, setError] = useState('')
-
-  // Fetch capabilities for selected agent (if any)
-  const { data: agentCapabilities } = useQuery({
-    queryKey: ['agent-capabilities', formData.baseAgentId],
-    queryFn: () => agentApi.getCapabilities(formData.baseAgentId),
-    enabled: !!formData.baseAgentId,
-  })
 
   const createTemplate = useMutation({
     mutationFn: (data: typeof formData) => templateApi.create({
@@ -2299,51 +2317,6 @@ function CreateTemplateModal({
               rows={2}
             />
           </div>
-
-          {/* Optional: Base on Agent for capability reference */}
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              기준 에이전트 <span className="text-gray-500 font-normal">(선택사항)</span>
-            </label>
-            <select
-              value={formData.baseAgentId}
-              onChange={e => setFormData(prev => ({ ...prev, baseAgentId: e.target.value }))}
-              className="w-full px-3 py-2 bg-[#1a1a2e] border border-[#2a2a4a] rounded-lg text-white"
-            >
-              <option value="">-- 사용 가능한 액션 확인을 위해 선택 --</option>
-              {agents.map(agent => (
-                <option key={agent.id} value={agent.id}>
-                  {agent.name}
-                </option>
-              ))}
-            </select>
-            <p className="text-xs text-gray-500 mt-1">
-              에이전트를 선택하면 템플릿에서 사용 가능한 액션 타입을 확인할 수 있습니다.
-            </p>
-          </div>
-
-          {/* Show agent's action servers if selected */}
-          {formData.baseAgentId && agentCapabilities && (
-            <div className="p-3 bg-[#1a1a2e] rounded-lg border border-[#2a2a4a]">
-              <div className="text-xs text-gray-400 mb-2">
-                사용 가능한 액션 서버 ({agentCapabilities.total}개):
-              </div>
-              <div className="flex flex-wrap gap-1">
-                {agentCapabilities.capabilities.map(cap => (
-                  <span
-                    key={cap.action_server}
-                    className="text-[10px] px-2 py-1 bg-purple-500/20 text-purple-400 rounded font-mono"
-                    title={cap.action_type}
-                  >
-                    {cap.action_server.replace(/^\//, '')}
-                  </span>
-                ))}
-                {agentCapabilities.capabilities.length === 0 && (
-                  <span className="text-xs text-gray-500 italic">감지된 액션 서버 없음</span>
-                )}
-              </div>
-            </div>
-          )}
 
           <div className="flex justify-end gap-3 pt-4">
             <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white">
