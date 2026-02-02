@@ -332,11 +332,12 @@ function ActionGraphEditor() {
   // Validation state
   const [validationErrors, setValidationErrors] = useState<Array<{ nodeId: string; nodeName: string; errors: string[] }>>([])
 
-  // Draft persistence state
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  // Auto-save state
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const lastSavedStateRef = useRef<{ nodes: string; edges: string } | null>(null)
-  const draftLoadedRef = useRef<string | null>(null)  // Track which template's draft was loaded
   const loadedTemplateIdRef = useRef<string | null>(null)  // Track which template's data is currently loaded on canvas
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isAutoSavingRef = useRef(false)  // Prevent re-trigger during save
 
   // ReactFlow
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
@@ -482,15 +483,19 @@ function ActionGraphEditor() {
       }
       return templateApi.update(templateId, payload)
     },
-    onSuccess: (_, variables) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['template', selectedTemplateId] })
       queryClient.invalidateQueries({ queryKey: ['templates-all'] })
-
-      // Clear draft after successful save
-      const draftKey = `behavior-tree-draft-${variables.templateId}`
-      sessionStorage.removeItem(draftKey)
-      setHasUnsavedChanges(false)
-      draftLoadedRef.current = null
+      setSaveStatus('saved')
+      isAutoSavingRef.current = false
+      // Reset to idle after 2 seconds
+      setTimeout(() => setSaveStatus('idle'), 2000)
+    },
+    onError: () => {
+      setSaveStatus('error')
+      isAutoSavingRef.current = false
+      // Reset to idle after 3 seconds
+      setTimeout(() => setSaveStatus('idle'), 3000)
     },
   })
 
@@ -673,9 +678,6 @@ function ActionGraphEditor() {
   // This prevents newly added nodes from being lost when async data loads
   const templateId = selectedTemplate?.id
 
-  // Helper to get draft storage key
-  const getDraftKey = useCallback((id: string) => `behavior-tree-draft-${id}`, [])
-
   // Clear canvas immediately when switching to a different template
   // This prevents showing stale data from the previous template
   useEffect(() => {
@@ -684,70 +686,45 @@ function ActionGraphEditor() {
       console.log('[Template] Switching from', loadedTemplateIdRef.current, 'to', templateId, '- clearing canvas')
       setNodes([])
       setEdges([])
-      setHasUnsavedChanges(false)
+      setSaveStatus('idle')
       lastSavedStateRef.current = null
-      draftLoadedRef.current = null
-      // Don't set loadedTemplateIdRef here - wait until actual data is loaded
+      // Cancel any pending auto-save
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current)
+        autoSaveTimerRef.current = null
+      }
     }
   }, [templateId, setNodes, setEdges])
 
-  // Load template or draft when template data is ready
+  // Load template from server when template data is ready
   useEffect(() => {
     // IMPORTANT: Verify selectedTemplate.id matches templateId to prevent stale data
     // When switching templates, templateId changes immediately but selectedTemplate
     // may still hold the previous template's data until the query completes
     if (selectedTemplate && templateId && selectedTemplate.id === templateId) {
       // Skip if we already loaded this template
-      if (loadedTemplateIdRef.current === templateId && draftLoadedRef.current !== templateId) {
+      if (loadedTemplateIdRef.current === templateId) {
         return
       }
 
-      // Check if we have a draft for this template
-      const draftKey = getDraftKey(templateId)
-      const savedDraft = sessionStorage.getItem(draftKey)
-
-      if (savedDraft && draftLoadedRef.current !== templateId) {
-        // Load from draft
-        try {
-          const draft = JSON.parse(savedDraft)
-          if (draft.nodes && draft.edges) {
-            console.log('[Draft] Restoring draft for template:', templateId)
-            setNodes(draft.nodes)
-            setEdges(draft.edges)
-            draftLoadedRef.current = templateId
-            loadedTemplateIdRef.current = templateId
-            lastSavedStateRef.current = {
-              nodes: JSON.stringify(draft.nodes),
-              edges: JSON.stringify(draft.edges),
-            }
-            setHasUnsavedChanges(true)  // Draft means unsaved changes
-            return
-          }
-        } catch (e) {
-          console.error('[Draft] Failed to parse draft:', e)
-          sessionStorage.removeItem(draftKey)
-        }
-      }
-
-      // No draft, load from server
+      // Load from server
       console.log('[Template] Loading template data:', templateId, 'steps:', selectedTemplate.steps?.length || 0)
       const { initialNodes, initialEdges } = convertActionGraphToGraph(selectedTemplate, selectedStateDef, availableStates, availableAgents)
       setNodes(initialNodes)
       setEdges(initialEdges)
-      draftLoadedRef.current = null
       loadedTemplateIdRef.current = templateId
       lastSavedStateRef.current = {
         nodes: JSON.stringify(initialNodes),
         edges: JSON.stringify(initialEdges),
       }
-      setHasUnsavedChanges(false)
+      setSaveStatus('idle')
     }
-    // Include selectedTemplate.id to re-run when the query completes with matching data
-  }, [templateId, selectedTemplate?.id, getDraftKey, setNodes, setEdges, selectedStateDef, availableStates, availableAgents])
+  }, [templateId, selectedTemplate?.id, setNodes, setEdges, selectedStateDef, availableStates, availableAgents])
 
-  // Detect changes and save draft to sessionStorage
+  // Auto-save: detect changes and trigger save with debounce
   useEffect(() => {
-    if (!templateId || nodes.length === 0) return
+    if (!templateId || nodes.length === 0 || !lastSavedStateRef.current) return
+    if (isAutoSavingRef.current) return  // Already saving
 
     const currentState = {
       nodes: JSON.stringify(nodes),
@@ -755,44 +732,51 @@ function ActionGraphEditor() {
     }
 
     // Compare with last saved state
-    if (lastSavedStateRef.current) {
-      const changed =
-        currentState.nodes !== lastSavedStateRef.current.nodes ||
-        currentState.edges !== lastSavedStateRef.current.edges
-      setHasUnsavedChanges(changed)
+    const hasChanges =
+      currentState.nodes !== lastSavedStateRef.current.nodes ||
+      currentState.edges !== lastSavedStateRef.current.edges
 
-      // Save draft if there are changes
-      if (changed) {
-        const draftKey = getDraftKey(templateId)
-        sessionStorage.setItem(draftKey, JSON.stringify({ nodes, edges, timestamp: Date.now() }))
-      }
-    }
-  }, [nodes, edges, templateId, getDraftKey])
+    if (!hasChanges) return
 
-  // Warn user before leaving with unsaved changes
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (hasUnsavedChanges) {
-        e.preventDefault()
-        e.returnValue = '저장하지 않은 변경사항이 있습니다. 정말 떠나시겠습니까?'
-        return e.returnValue
-      }
+    // Clear existing timer
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current)
     }
 
-    window.addEventListener('beforeunload', handleBeforeUnload)
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
-  }, [hasUnsavedChanges])
+    // Set debounce timer (2 seconds)
+    autoSaveTimerRef.current = setTimeout(() => {
+      if (isAutoSavingRef.current) return
+      isAutoSavingRef.current = true
+      setSaveStatus('saving')
 
-  // Update lastSavedStateRef after successful save
-  useEffect(() => {
-    if (saveTemplate.isSuccess) {
-      lastSavedStateRef.current = {
+      // Capture current state before save (will be finalized in onSuccess)
+      const stateToSave = {
         nodes: JSON.stringify(nodes),
         edges: JSON.stringify(edges),
       }
+
+      // Trigger save
+      const { steps, entryPoint, generatedStates } = convertGraphToSteps()
+      saveTemplate.mutate({
+        templateId,
+        steps,
+        entryPoint,
+        states: generatedStates,
+      }, {
+        onSuccess: () => {
+          // Update lastSavedStateRef only after successful save
+          lastSavedStateRef.current = stateToSave
+        }
+      })
+    }, 2000)
+
+    return () => {
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current)
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [saveTemplate.isSuccess])
+  }, [nodes, edges, templateId])  // convertGraphToSteps and saveTemplate are stable refs
 
   // Clear validation errors when template changes
   useEffect(() => {
@@ -1074,9 +1058,28 @@ function ActionGraphEditor() {
       if (!proceed) return
     }
 
+    // Clear any pending auto-save timer
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current)
+      autoSaveTimerRef.current = null
+    }
+
+    setSaveStatus('saving')
+
+    // Capture current state before save
+    const stateToSave = {
+      nodes: JSON.stringify(nodes),
+      edges: JSON.stringify(edges),
+    }
+
     const { steps, entryPoint, generatedStates } = convertGraphToSteps()
-    saveTemplate.mutate({ templateId: selectedTemplateId, steps, entryPoint, states: generatedStates })
-  }, [selectedTemplateId, convertGraphToSteps, saveTemplate, validateGraph])
+    saveTemplate.mutate({ templateId: selectedTemplateId, steps, entryPoint, states: generatedStates }, {
+      onSuccess: () => {
+        // Update lastSavedStateRef only after successful save
+        lastSavedStateRef.current = stateToSave
+      }
+    })
+  }, [selectedTemplateId, convertGraphToSteps, saveTemplate, validateGraph, nodes, edges])
 
   const onConnect = useCallback(
     (params: Connection) => {
@@ -1797,17 +1800,43 @@ function ActionGraphEditor() {
                   <span>{validationErrors.length}개 문제 발견</span>
                 </div>
               )}
+              {/* Auto-save status indicator */}
+              <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm ${
+                saveStatus === 'saving' ? 'bg-blue-600/20 text-blue-400' :
+                saveStatus === 'saved' ? 'bg-green-600/20 text-green-400' :
+                saveStatus === 'error' ? 'bg-red-600/20 text-red-400' :
+                'bg-zinc-700/50 text-zinc-400'
+              }`}>
+                {saveStatus === 'saving' ? (
+                  <>
+                    <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                    <span>저장 중...</span>
+                  </>
+                ) : saveStatus === 'saved' ? (
+                  <>
+                    <Check size={14} />
+                    <span>저장됨</span>
+                  </>
+                ) : saveStatus === 'error' ? (
+                  <>
+                    <AlertCircle size={14} />
+                    <span>저장 오류</span>
+                  </>
+                ) : (
+                  <>
+                    <Save size={14} />
+                    <span>자동 저장</span>
+                  </>
+                )}
+              </div>
+              {/* Manual save button (in case user wants to force save) */}
               <button
                 onClick={handleSave}
-                disabled={saveTemplate.isPending}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm disabled:opacity-50 ${
-                  hasUnsavedChanges
-                    ? 'bg-yellow-600/30 text-yellow-400 hover:bg-yellow-600/40 ring-1 ring-yellow-500/50'
-                    : 'bg-green-600/20 text-green-400 hover:bg-green-600/30'
-                }`}
+                disabled={saveTemplate.isPending || saveStatus === 'saving'}
+                className="p-1.5 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/50 rounded-md transition-colors disabled:opacity-50"
+                title="수동 저장"
               >
-                <Save size={14} />
-                {saveTemplate.isPending ? '저장 중...' : hasUnsavedChanges ? '저장 (변경됨)' : '저장'}
+                <Save size={16} />
               </button>
               <button
                 onClick={() => {
