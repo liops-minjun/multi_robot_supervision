@@ -8,8 +8,8 @@ import { useTranslation } from '../../i18n'
 // Execution status component
 function ExecutionStatusIndicator({ phase, size = 'sm' }: { phase: ExecutionPhase | string | undefined; size?: 'sm' | 'md' }) {
   const config: Record<string, { bg: string; text: string; icon: React.ReactNode; label: string }> = {
-    idle: { bg: 'bg-gray-500/20', text: 'text-gray-400', icon: <Circle className={size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} />, label: 'Idle' },
-    offline: { bg: 'bg-gray-600/20', text: 'text-gray-500', icon: <XCircle className={size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} />, label: 'Offline' },
+    idle: { bg: 'bg-gray-500/20', text: 'text-secondary', icon: <Circle className={size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} />, label: 'Idle' },
+    offline: { bg: 'bg-gray-600/20', text: 'text-muted', icon: <XCircle className={size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} />, label: 'Offline' },
     starting: { bg: 'bg-yellow-500/20', text: 'text-yellow-400', icon: <Loader2 className={`${size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} animate-spin`} />, label: 'Starting' },
     executing: { bg: 'bg-blue-500/20', text: 'text-blue-400', icon: <Play className={size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} />, label: 'Executing' },
     completing: { bg: 'bg-green-500/20', text: 'text-green-400', icon: <CheckCircle className={size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} />, label: 'Completing' },
@@ -60,18 +60,18 @@ function BlockingConditionsDisplay({ conditions, compact = false }: {
           <div key={condition.condition_id || idx} className="flex items-start gap-2 text-[11px]">
             <AlertTriangle className="w-3 h-3 text-orange-400 mt-0.5 flex-shrink-0" />
             <div className="flex-1 min-w-0">
-              <div className="text-gray-300">{condition.description}</div>
+              <div className="text-secondary">{condition.description}</div>
               {condition.target_agent_name && (
-                <div className="text-gray-500 mt-0.5">
+                <div className="text-muted mt-0.5">
                   Target: <span className="text-orange-300">{condition.target_agent_name}</span>
                   {condition.current_state && (
                     <span className="ml-2">
-                      (Current: <span className="text-gray-400">{condition.current_state}</span> → Need: <span className="text-green-400">{condition.required_state}</span>)
+                      (Current: <span className="text-secondary">{condition.current_state}</span> → Need: <span className="text-green-400">{condition.required_state}</span>)
                     </span>
                   )}
                 </div>
               )}
-              <div className="text-gray-600 text-[10px] mt-0.5">{condition.reason}</div>
+              <div className="text-muted text-[10px] mt-0.5">{condition.reason}</div>
             </div>
           </div>
         ))}
@@ -158,17 +158,17 @@ export default function Monitoring() {
   })
 
   return (
-    <div className="h-screen flex bg-[#0f0f1a]">
+    <div className="h-screen flex bg-base">
       {/* Left Panel - Robot Agents */}
-      <div className="w-80 bg-[#16162a] border-r border-[#2a2a4a] flex flex-col">
-        <div className="p-4 border-b border-[#2a2a4a] flex items-center justify-between">
+      <div className="w-80 bg-surface border-r border-primary flex flex-col">
+        <div className="p-4 border-b border-primary flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Bot className="w-5 h-5 text-blue-400" />
-            <h2 className="font-semibold text-white">{t('monitoring.title')}</h2>
+            <h2 className="font-semibold text-primary">{t('monitoring.title')}</h2>
           </div>
           <button
             onClick={() => refetchRobots()}
-            className="p-1.5 text-gray-500 hover:text-white hover:bg-[#2a2a4a] rounded transition-colors"
+            className="p-1.5 text-muted hover:text-primary hover:bg-elevated rounded transition-colors"
           >
             <RefreshCw size={16} />
           </button>
@@ -176,27 +176,27 @@ export default function Monitoring() {
 
         <div className="flex-1 overflow-y-auto">
           {robotsLoading ? (
-            <div className="p-4 text-center text-gray-500">{t('monitoring.loading')}</div>
+            <div className="p-4 text-center text-muted">{t('monitoring.loading')}</div>
           ) : Object.keys(robotsByAgent).length === 0 ? (
             <div className="p-4 text-center">
-              <Bot className="w-12 h-12 mx-auto mb-3 text-gray-600" />
-              <p className="text-gray-500 text-sm">{t('monitoring.noRobots')}</p>
+              <Bot className="w-12 h-12 mx-auto mb-3 text-muted" />
+              <p className="text-muted text-sm">{t('monitoring.noRobots')}</p>
             </div>
           ) : (
             Object.entries(robotsByAgent).map(([agentId, agentRobots]) => {
               const agent = getAgent(agentId)
               const isOnline = agent?.status === 'online'
               return (
-              <div key={agentId} className="border-b border-[#2a2a4a]">
+              <div key={agentId} className="border-b border-primary">
                 {/* Agent Header */}
-                <div className="px-4 py-2 bg-[#1a1a2e] flex items-center justify-between">
+                <div className="px-4 py-2 bg-elevated flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <Server className={`w-3 h-3 ${isOnline ? 'text-green-500' : 'text-gray-600'}`} />
-                    <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                    <Server className={`w-3 h-3 ${isOnline ? 'text-green-500' : 'text-muted'}`} />
+                    <span className="text-xs font-semibold text-secondary uppercase tracking-wider">
                       {agent?.name || agentId}
                     </span>
                     {agent?.ip_address && (
-                      <span className="text-[10px] text-gray-600 font-mono">
+                      <span className="text-[10px] text-muted font-mono">
                         {agent.ip_address}
                       </span>
                     )}
@@ -218,7 +218,7 @@ export default function Monitoring() {
                           ? 'bg-blue-600/20 border-l-2 border-blue-500'
                           : isWaitingForPrecondition
                             ? 'bg-orange-500/5 hover:bg-orange-500/10'
-                            : 'hover:bg-[#1a1a2e]'
+                            : 'hover:bg-elevated'
                       }`}
                     >
                       {/* Online Status */}
@@ -226,23 +226,23 @@ export default function Monitoring() {
                         {robot.is_online ? (
                           <Wifi className="w-4 h-4 text-green-500" />
                         ) : (
-                          <WifiOff className="w-4 h-4 text-gray-600" />
+                          <WifiOff className="w-4 h-4 text-muted" />
                         )}
                       </div>
 
                       {/* Robot Info */}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-white truncate">
+                          <span className="text-sm font-medium text-primary truncate">
                             {robot.name}
                           </span>
                           {/* Execution phase indicator */}
                           <ExecutionStatusIndicator phase={executionPhase} />
                         </div>
                         <div className="flex items-center gap-2 mt-0.5">
-                          <span className="text-[10px] text-gray-600 font-mono">{robot.ip_address}</span>
+                          <span className="text-[10px] text-muted font-mono">{robot.ip_address}</span>
                           {robot.is_online && (stateSnapshot?.current_state || stateSnapshot?.state_code) && (
-                            <span className="text-[10px] text-gray-500">{stateSnapshot.current_state || stateSnapshot.state_code}</span>
+                            <span className="text-[10px] text-muted">{stateSnapshot.current_state || stateSnapshot.state_code}</span>
                           )}
                         </div>
                         {/* Compact blocking conditions display */}
@@ -251,7 +251,7 @@ export default function Monitoring() {
                         )}
                       </div>
 
-                      <ChevronRight className="w-4 h-4 text-gray-600" />
+                      <ChevronRight className="w-4 h-4 text-muted" />
                     </div>
                   )
                 })}
@@ -261,19 +261,19 @@ export default function Monitoring() {
         </div>
 
         {/* Summary */}
-        <div className="p-4 border-t border-[#2a2a4a] bg-[#1a1a2e]">
+        <div className="p-4 border-t border-primary bg-elevated">
           <div className="grid grid-cols-2 gap-4 text-center">
             <div>
               <div className="text-2xl font-bold text-green-400">
                 {robots.filter(r => r.is_online).length}
               </div>
-              <div className="text-[10px] text-gray-500 uppercase">{t('agent.online')}</div>
+              <div className="text-[10px] text-muted uppercase">{t('agent.online')}</div>
             </div>
             <div>
-              <div className="text-2xl font-bold text-gray-400">
+              <div className="text-2xl font-bold text-secondary">
                 {robots.filter(r => !r.is_online).length}
               </div>
-              <div className="text-[10px] text-gray-500 uppercase">{t('agent.offline')}</div>
+              <div className="text-[10px] text-muted uppercase">{t('agent.offline')}</div>
             </div>
           </div>
         </div>
@@ -284,7 +284,7 @@ export default function Monitoring() {
         {selectedRobot ? (
           <>
             {/* Robot Header */}
-            <div className="bg-[#16162a] border-b border-[#2a2a4a] p-4">
+            <div className="bg-surface border-b border-primary p-4">
               {(() => {
                 const stateSnapshot = getRobotStateSnapshot(selectedRobot.id)
                 const executionPhase = stateSnapshot?.execution_phase || (selectedRobot.is_online ? 'idle' : 'offline')
@@ -296,11 +296,11 @@ export default function Monitoring() {
                       <div className="flex items-center gap-3">
                         <div className={`w-3 h-3 rounded-full ${
                           isWaitingForPrecondition ? 'bg-orange-500 animate-pulse' :
-                          selectedRobot.is_online ? 'bg-green-500' : 'bg-gray-600'
+                          selectedRobot.is_online ? 'bg-green-500' : 'bg-muted'
                         }`} />
                         <div>
-                          <h2 className="text-lg font-semibold text-white">{selectedRobot.name}</h2>
-                          <p className="text-sm text-gray-500">
+                          <h2 className="text-lg font-semibold text-primary">{selectedRobot.name}</h2>
+                          <p className="text-sm text-muted">
                             {getAgent(selectedRobot.agent_id)?.name || 'Unassigned'} • {selectedRobot.ip_address}
                           </p>
                         </div>
@@ -308,14 +308,14 @@ export default function Monitoring() {
                       <div className="flex items-center gap-4">
                         {/* Execution Status */}
                         <div className="text-right">
-                          <div className="text-xs text-gray-500 mb-1">{t('monitoring.currentState')}</div>
+                          <div className="text-xs text-muted mb-1">{t('monitoring.currentState')}</div>
                           <ExecutionStatusIndicator phase={executionPhase} size="md" />
                         </div>
 
                         {/* State Code */}
                         {selectedRobot.is_online && (
                           <div className="text-right">
-                            <div className="text-xs text-gray-500">State Code</div>
+                            <div className="text-xs text-muted">State Code</div>
                             <div
                               className="text-sm font-medium"
                               style={{ color: getStateColor(stateSnapshot?.current_state || stateSnapshot?.state_code || selectedRobot.current_state) }}
@@ -328,7 +328,7 @@ export default function Monitoring() {
                         {/* Current Graph */}
                         {stateSnapshot?.current_graph_id && (
                           <div className="text-right">
-                            <div className="text-xs text-gray-500">Graph</div>
+                            <div className="text-xs text-muted">Graph</div>
                             <div className="text-sm font-medium text-blue-400">
                               {actionGraphs.find(g => g.id === stateSnapshot.current_graph_id)?.name
                                 || stateSnapshot.current_graph_id.slice(0, 8)}
@@ -339,7 +339,7 @@ export default function Monitoring() {
                         {/* Waiting Time */}
                         {isWaitingForPrecondition && stateSnapshot?.waiting_for_precondition_since && (
                           <div className="text-right">
-                            <div className="text-xs text-gray-500">Waiting Since</div>
+                            <div className="text-xs text-muted">Waiting Since</div>
                             <div className="text-sm font-medium text-orange-400">
                               {formatWaitingTime(stateSnapshot.waiting_for_precondition_since)}
                             </div>
@@ -361,17 +361,17 @@ export default function Monitoring() {
             <div className="flex-1 overflow-auto p-4">
               <div className="flex items-center gap-2 mb-4">
                 <Workflow className="w-4 h-4 text-blue-400" />
-                <h3 className="text-sm font-semibold text-white">{t('monitoring.availableWorkflows')}</h3>
-                <span className="text-xs text-gray-600">
+                <h3 className="text-sm font-semibold text-primary">{t('monitoring.availableWorkflows')}</h3>
+                <span className="text-xs text-muted">
                   ({getActionGraphsForAgent(selectedRobot.agent_id).length})
                 </span>
               </div>
 
               {getActionGraphsForAgent(selectedRobot.agent_id).length === 0 ? (
                 <div className="text-center py-12">
-                  <Workflow className="w-12 h-12 mx-auto mb-3 text-gray-600" />
-                  <p className="text-gray-500">{t('monitoring.noWorkflows')}</p>
-                  <p className="text-xs text-gray-600 mt-1">
+                  <Workflow className="w-12 h-12 mx-auto mb-3 text-muted" />
+                  <p className="text-muted">{t('monitoring.noWorkflows')}</p>
+                  <p className="text-xs text-muted mt-1">
                     {t('monitoring.createWorkflowsHint')}
                   </p>
                 </div>
@@ -381,24 +381,24 @@ export default function Monitoring() {
                     <div
                       key={actionGraph.id}
                       onClick={() => setSelectedActionGraphId(actionGraph.id)}
-                      className={`bg-[#16162a] rounded-lg border cursor-pointer transition-all ${
+                      className={`bg-surface rounded-lg border cursor-pointer transition-all ${
                         selectedActionGraphId === actionGraph.id
                           ? 'border-blue-500 ring-1 ring-blue-500/50'
-                          : 'border-[#2a2a4a] hover:border-[#3a3a5a]'
+                          : 'border-primary hover:border-secondary'
                       }`}
                     >
                       <div className="p-4">
                         <div className="flex items-center justify-between mb-2">
-                          <h4 className="font-medium text-white">{actionGraph.name}</h4>
-                          <span className="text-xs text-gray-500">v{actionGraph.version}</span>
+                          <h4 className="font-medium text-primary">{actionGraph.name}</h4>
+                          <span className="text-xs text-muted">v{actionGraph.version}</span>
                         </div>
                         {actionGraph.description && (
-                          <p className="text-xs text-gray-500 mb-3 line-clamp-2">
+                          <p className="text-xs text-muted mb-3 line-clamp-2">
                             {actionGraph.description}
                           </p>
                         )}
                         <div className="flex items-center justify-between text-xs">
-                          <span className="text-gray-600">
+                          <span className="text-muted">
                             {t('monitoring.actionGraphId')}: {actionGraph.id.slice(0, 8)}...
                           </span>
                           <button
@@ -432,9 +432,9 @@ export default function Monitoring() {
         ) : (
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
-              <Bot className="w-16 h-16 mx-auto mb-4 text-gray-600" />
-              <h3 className="text-lg font-medium text-gray-400 mb-2">{t('monitoring.selectRobot')}</h3>
-              <p className="text-sm text-gray-600">
+              <Bot className="w-16 h-16 mx-auto mb-4 text-muted" />
+              <h3 className="text-lg font-medium text-secondary mb-2">{t('monitoring.selectRobot')}</h3>
+              <p className="text-sm text-muted">
                 {t('monitoring.selectRobotHint')}
               </p>
             </div>

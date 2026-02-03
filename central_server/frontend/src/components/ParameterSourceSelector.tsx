@@ -142,8 +142,8 @@ export default function ParameterSourceSelector({
             }`}>
               {!isBinding && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
             </div>
-            <Hash className={`w-3 h-3 ${!isBinding ? 'text-amber-400' : 'text-gray-500'}`} />
-            <span className={`text-[11px] font-medium ${!isBinding ? 'text-amber-400' : 'text-gray-400'}`}>
+            <Hash className={`w-3 h-3 ${!isBinding ? 'text-amber-400' : 'text-muted'}`} />
+            <span className={`text-[11px] font-medium ${!isBinding ? 'text-amber-400' : 'text-secondary'}`}>
               고정값 입력
             </span>
           </div>
@@ -163,7 +163,7 @@ export default function ParameterSourceSelector({
                     onClick={(e) => e.stopPropagation()}
                     className="w-4 h-4 rounded border-gray-600 bg-sunken text-amber-500 focus:ring-amber-500"
                   />
-                  <span className="text-[11px] text-gray-300">{constantValue ? 'true' : 'false'}</span>
+                  <span className="text-[11px] text-primary">{constantValue ? 'true' : 'false'}</span>
                 </label>
               ) : inputType === 'number' ? (
                 <input
@@ -174,7 +174,7 @@ export default function ParameterSourceSelector({
                     onConstantChange(e.target.value === '' ? undefined : parseFloat(e.target.value))
                   }}
                   onClick={(e) => e.stopPropagation()}
-                  className="w-full px-2 py-1.5 bg-sunken border border-amber-500/30 rounded text-[11px] text-white focus:outline-none focus:border-amber-500"
+                  className="w-full px-2 py-1.5 bg-sunken border border-amber-500/30 rounded text-[11px] text-primary focus:outline-none focus:border-amber-500"
                   placeholder="숫자 입력..."
                 />
               ) : (
@@ -186,7 +186,7 @@ export default function ParameterSourceSelector({
                     onConstantChange(e.target.value)
                   }}
                   onClick={(e) => e.stopPropagation()}
-                  className="w-full px-2 py-1.5 bg-sunken border border-amber-500/30 rounded text-[11px] text-white focus:outline-none focus:border-amber-500"
+                  className="w-full px-2 py-1.5 bg-sunken border border-amber-500/30 rounded text-[11px] text-primary focus:outline-none focus:border-amber-500"
                   placeholder="값 입력..."
                 />
               )}
@@ -216,12 +216,12 @@ export default function ParameterSourceSelector({
             }`}>
               {isBinding && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
             </div>
-            <Link2 className={`w-3 h-3 ${isBinding ? 'text-purple-400' : 'text-gray-500'}`} />
-            <span className={`text-[11px] font-medium ${isBinding ? 'text-purple-400' : 'text-gray-400'}`}>
+            <Link2 className={`w-3 h-3 ${isBinding ? 'text-purple-400' : 'text-muted'}`} />
+            <span className={`text-[11px] font-medium ${isBinding ? 'text-purple-400' : 'text-secondary'}`}>
               이전 Step 결과 사용
             </span>
             {!hasBindableSteps && (
-              <span className="text-[9px] text-gray-600 ml-auto">사용 가능한 Step 없음</span>
+              <span className="text-[9px] text-muted ml-auto">사용 가능한 Step 없음</span>
             )}
           </div>
 
@@ -231,11 +231,11 @@ export default function ParameterSourceSelector({
               {/* Current binding preview */}
               {selectedStep && selectedField && (
                 <div className="flex items-center gap-1.5 px-2 py-1.5 bg-purple-900/30 rounded border border-purple-500/30">
-                  <span className="text-[9px] text-gray-400">바인딩:</span>
+                  <span className="text-[9px] text-secondary">바인딩:</span>
                   <code className="text-[11px] text-purple-300 font-mono">
                     {selectedStep.name || selectedStep.id}.{selectedField.name}
                   </code>
-                  <span className="text-[9px] text-gray-500 ml-auto">
+                  <span className="text-[9px] text-muted ml-auto">
                     {selectedField.type}
                   </span>
                   {targetTypeInfo && (
@@ -251,7 +251,7 @@ export default function ParameterSourceSelector({
 
               {/* Step and field selection */}
               <div className="space-y-1">
-                <div className="text-[9px] text-gray-500">사용할 결과값 선택:</div>
+                <div className="text-[9px] text-muted">사용할 결과값 선택:</div>
                 <div className="max-h-[140px] overflow-y-auto space-y-1">
                   {availableSteps.map(step => {
                     const hasFields = step.resultFields && step.resultFields.length > 0
@@ -265,10 +265,10 @@ export default function ParameterSourceSelector({
                         {/* Step header */}
                         <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-800/50 border-b border-gray-700">
                           <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                          <span className="text-[10px] font-medium text-gray-300">
+                          <span className="text-[10px] font-medium text-primary">
                             {step.name || step.id}
                           </span>
-                          <span className="text-[9px] text-gray-600 ml-auto">
+                          <span className="text-[9px] text-muted ml-auto">
                             {step.resultFields!.length}개
                           </span>
                         </div>
@@ -315,13 +315,13 @@ export default function ParameterSourceSelector({
 
                                 {/* Field name */}
                                 <span className={`text-[11px] font-mono ${
-                                  isSelected ? 'text-purple-300' : 'text-gray-300'
+                                  isSelected ? 'text-purple-300' : 'text-primary'
                                 }`}>
                                   {field.name}
                                 </span>
 
                                 {/* Field type */}
-                                <span className="text-[9px] text-gray-600 ml-auto font-mono">
+                                <span className="text-[9px] text-muted ml-auto font-mono">
                                   {field.type}
                                 </span>
                               </button>

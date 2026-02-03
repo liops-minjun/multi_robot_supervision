@@ -127,7 +127,7 @@ echo "  - Go Server: Use server.key, server.crt, ca.crt (for client verification
 echo "  - Python Agent: Use agent.key, agent.crt, ca.crt (for server verification)"
 echo ""
 echo "Copy agent certificates to robot agent:"
-echo "  scp agent.key agent.crt ca.crt robot@<robot-ip>:/etc/fleet_agent/certs/"
+echo "  scp agent.key agent.crt ca.crt robot@<robot-ip>:/etc/robot_agent/certs/"
 echo ""
 
 # Verify certificates

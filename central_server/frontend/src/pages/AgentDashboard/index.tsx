@@ -42,7 +42,7 @@ import { useTranslation } from '../../i18n'
 function StatusBadge({ status, t }: { status: string; t: (key: 'agent.online' | 'agent.offline' | 'agent.warning') => string }) {
   const config: Record<string, { bg: string; text: string; dot: string; labelKey: 'agent.online' | 'agent.offline' | 'agent.warning' }> = {
     online: { bg: 'bg-green-500/20', text: 'text-green-400', dot: 'bg-green-500', labelKey: 'agent.online' },
-    offline: { bg: 'bg-gray-500/20', text: 'text-gray-400', dot: 'bg-gray-500', labelKey: 'agent.offline' },
+    offline: { bg: 'bg-gray-500/20', text: 'text-secondary', dot: 'bg-gray-500', labelKey: 'agent.offline' },
     warning: { bg: 'bg-yellow-500/20', text: 'text-yellow-400', dot: 'bg-yellow-500', labelKey: 'agent.warning' },
   }
   const c = config[status] || config.offline
@@ -115,13 +115,13 @@ function ExecutionPhaseBadge({
   const config: Record<string, { bg: string; text: string; icon: React.ReactNode; label: string }> = {
     idle: {
       bg: 'bg-gray-500/20',
-      text: 'text-gray-400',
+      text: 'text-secondary',
       icon: <Circle className="w-3 h-3" />,
       label: 'Idle'
     },
     offline: {
       bg: 'bg-gray-600/20',
-      text: 'text-gray-500',
+      text: 'text-muted',
       icon: <XCircle className="w-3 h-3" />,
       label: 'Offline'
     },
@@ -161,9 +161,9 @@ function ExecutionPhaseBadge({
           <span className="font-medium">{c.label}</span>
         </div>
         {(phase === 'executing' || phase === 'starting') && graphName && (
-          <span className="text-xs text-gray-500">
+          <span className="text-xs text-muted">
             {graphName}
-            {currentStepName && <span className="text-gray-400"> / {currentStepName}</span>}
+            {currentStepName && <span className="text-secondary"> / {currentStepName}</span>}
           </span>
         )}
         {phase === 'waiting_for_precondition' && blockingConditions && blockingConditions.length > 0 && (
@@ -181,13 +181,13 @@ function ExecutionPhaseBadge({
           </div>
           <div className="space-y-1">
             {blockingConditions.map((condition, idx) => (
-              <div key={condition.condition_id || idx} className="text-[11px] text-gray-300">
-                <span className="text-gray-500">{condition.description}</span>
+              <div key={condition.condition_id || idx} className="text-[11px] text-primary">
+                <span className="text-muted">{condition.description}</span>
                 {condition.target_agent_name && (
                   <span className="ml-1 text-orange-300">({condition.target_agent_name})</span>
                 )}
                 {condition.current_state && (
-                  <span className="ml-1 text-gray-500">
+                  <span className="ml-1 text-muted">
                     {condition.current_state} → <span className="text-green-400">{condition.required_state}</span>
                   </span>
                 )}
@@ -223,13 +223,13 @@ function CapabilityCard({
     <div className="bg-elevated rounded-lg border border-primary overflow-hidden">
       <button
         onClick={onToggle}
-        className="w-full p-4 flex items-center justify-between hover:bg-[#22223a] transition-colors"
+        className="w-full p-4 flex items-center justify-between hover:bg-surface transition-colors"
       >
         <div className="flex items-center gap-3">
           <Zap className="w-4 h-4 text-purple-400" />
           <div className="flex flex-col items-start">
-            <span className="text-white font-medium font-mono">{serverName}</span>
-            <span className="text-[10px] text-gray-500">{typeName}</span>
+            <span className="text-primary font-medium font-mono">{serverName}</span>
+            <span className="text-[10px] text-muted">{typeName}</span>
           </div>
           {inUseByStep ? (
             <span className="text-xs px-2 py-0.5 bg-cyan-500/20 text-cyan-400 rounded flex items-center gap-1">
@@ -244,7 +244,7 @@ function CapabilityCard({
                 const colorClasses: Record<string, string> = {
                   green: 'bg-green-500/20 text-green-400',
                   yellow: 'bg-yellow-500/20 text-yellow-400',
-                  gray: 'bg-gray-500/20 text-gray-400',
+                  gray: 'bg-gray-500/20 text-secondary',
                   red: 'bg-red-500/20 text-red-400',
                 }
                 return (
@@ -262,7 +262,7 @@ function CapabilityCard({
                   {t('agent.available')}
                 </span>
               ) : (
-                <span className="text-xs px-2 py-0.5 bg-gray-500/20 text-gray-400 rounded">
+                <span className="text-xs px-2 py-0.5 bg-gray-500/20 text-secondary rounded">
                   {t('agent.unavailable')}
                 </span>
               )}
@@ -270,7 +270,7 @@ function CapabilityCard({
           )}
         </div>
         <ChevronRight
-          className={`w-4 h-4 text-gray-500 transition-transform duration-200 ${
+          className={`w-4 h-4 text-muted transition-transform duration-200 ${
             expanded ? 'rotate-90' : ''
           }`}
         />
@@ -281,16 +281,16 @@ function CapabilityCard({
           <div className="space-y-3 pt-3">
             {/* Action Server (전체 경로) */}
             <div>
-              <div className="text-xs text-gray-400 uppercase tracking-wider mb-1">{t('agent.actionServer')}</div>
+              <div className="text-xs text-secondary uppercase tracking-wider mb-1">{t('agent.actionServer')}</div>
               <div className="flex items-center gap-2 px-3 py-2 bg-surface rounded-lg">
                 <Activity className="w-3 h-3 text-blue-400" />
-                <span className="text-sm text-gray-300 font-mono">{capability.action_server}</span>
+                <span className="text-sm text-primary font-mono">{capability.action_server}</span>
               </div>
             </div>
             {/* Action Type (전체 경로) */}
             <div>
-              <div className="text-xs text-gray-400 uppercase tracking-wider mb-1">{t('common.type')}</div>
-              <div className="text-xs text-gray-500 font-mono px-3 py-2 bg-surface rounded-lg">
+              <div className="text-xs text-secondary uppercase tracking-wider mb-1">{t('common.type')}</div>
+              <div className="text-xs text-muted font-mono px-3 py-2 bg-surface rounded-lg">
                 {capability.action_type}
               </div>
             </div>
@@ -305,18 +305,18 @@ function CapabilityCard({
               }
               return (
                 <div>
-                  <div className="text-xs text-gray-400 uppercase tracking-wider mb-1">Lifecycle State</div>
+                  <div className="text-xs text-secondary uppercase tracking-wider mb-1">Lifecycle State</div>
                   <div className="flex items-center gap-2 px-3 py-2 bg-surface rounded-lg">
                     <div className={`w-2 h-2 rounded-full ${dotColors[info.color] || dotColors.gray}`} />
-                    <span className="text-sm text-gray-300">{info.label}</span>
-                    <span className="text-xs text-gray-500">- {info.description}</span>
+                    <span className="text-sm text-primary">{info.label}</span>
+                    <span className="text-xs text-muted">- {info.description}</span>
                   </div>
                 </div>
               )
             })()}
             {capability.status && (
-              <div className="text-xs text-gray-500">
-                {t('common.status')}: <span className="text-gray-400">{capability.status}</span>
+              <div className="text-xs text-muted">
+                {t('common.status')}: <span className="text-secondary">{capability.status}</span>
               </div>
             )}
           </div>
@@ -339,11 +339,11 @@ function ExecutionLogsPanel({
   onToggleExpand: () => void
 }) {
   const logLevelColors: Record<TaskLogLevel, { bg: string; text: string; border: string }> = {
-    DEBUG: { bg: 'bg-gray-500/10', text: 'text-gray-400', border: 'border-gray-600' },
-    INFO: { bg: 'bg-blue-500/10', text: 'text-blue-400', border: 'border-blue-600' },
-    WARN: { bg: 'bg-yellow-500/10', text: 'text-yellow-400', border: 'border-yellow-600' },
-    ERROR: { bg: 'bg-red-500/10', text: 'text-red-400', border: 'border-red-600' },
-    UNKNOWN: { bg: 'bg-gray-500/10', text: 'text-gray-400', border: 'border-gray-600' },
+    DEBUG: { bg: 'bg-elevated', text: 'text-secondary', border: 'border-secondary' },
+    INFO: { bg: 'bg-btn-blue', text: 'text-btn-blue', border: 'border-btn-blue' },
+    WARN: { bg: 'bg-btn-yellow', text: 'text-btn-yellow', border: 'border-btn-yellow' },
+    ERROR: { bg: 'bg-btn-red', text: 'text-btn-red', border: 'border-btn-red' },
+    UNKNOWN: { bg: 'bg-elevated', text: 'text-secondary', border: 'border-secondary' },
   }
 
   const formatTime = (timestamp: string | number) => {
@@ -369,13 +369,13 @@ function ExecutionLogsPanel({
       >
         <div className="flex items-center gap-2">
           <Terminal className="w-4 h-4 text-green-400" />
-          <span className="text-sm font-medium text-white">Execution Logs</span>
-          <span className="text-xs text-gray-500">({logs.length})</span>
+          <span className="text-sm font-medium text-primary">Execution Logs</span>
+          <span className="text-xs text-muted">({logs.length})</span>
         </div>
         {isExpanded ? (
-          <ChevronUp className="w-4 h-4 text-gray-500" />
+          <ChevronUp className="w-4 h-4 text-muted" />
         ) : (
-          <ChevronDown className="w-4 h-4 text-gray-500" />
+          <ChevronDown className="w-4 h-4 text-muted" />
         )}
       </button>
 
@@ -383,12 +383,12 @@ function ExecutionLogsPanel({
       {isExpanded && (
         <div className="max-h-[300px] overflow-y-auto font-mono text-xs">
           {isLoading ? (
-            <div className="flex items-center justify-center py-8 text-gray-500">
+            <div className="flex items-center justify-center py-8 text-muted">
               <Loader2 className="w-4 h-4 animate-spin mr-2" />
               Loading logs...
             </div>
           ) : logs.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8 text-gray-500">
+            <div className="flex flex-col items-center justify-center py-8 text-muted">
               <Terminal className="w-8 h-8 mb-2 opacity-50" />
               <p>No execution logs yet</p>
               <p className="text-[10px] mt-1">Logs will appear here during task execution</p>
@@ -404,7 +404,7 @@ function ExecutionLogsPanel({
                   >
                     <div className="flex items-start gap-2">
                       {/* Timestamp */}
-                      <span className="text-gray-500 flex-shrink-0">
+                      <span className="text-muted flex-shrink-0">
                         {formatTime(log.timestamp_ms || log.timestamp)}
                       </span>
                       {/* Level badge */}
@@ -424,7 +424,7 @@ function ExecutionLogsPanel({
                     </div>
                     {/* Step/Task info */}
                     {(log.step_id || log.task_id) && (
-                      <div className="mt-1 ml-[72px] text-[10px] text-gray-600">
+                      <div className="mt-1 ml-[72px] text-[10px] text-muted">
                         {log.task_id && <span>task:{log.task_id.slice(0, 8)}</span>}
                         {log.step_id && <span className="ml-2">step:{log.step_id}</span>}
                       </div>
@@ -471,9 +471,9 @@ function TelemetryPanel({
       >
         <div className="flex items-center gap-2">
           <Gauge className="w-4 h-4 text-cyan-400" />
-          <span className="text-sm font-medium text-white">Telemetry</span>
+          <span className="text-sm font-medium text-primary">Telemetry</span>
           {hasData && (
-            <span className="text-xs text-gray-500">
+            <span className="text-xs text-muted">
               ({[
                 telemetry?.joint_state && 'JointState',
                 telemetry?.odometry && 'Odometry',
@@ -484,14 +484,14 @@ function TelemetryPanel({
         </div>
         <div className="flex items-center gap-2">
           {lastUpdated && (
-            <span className="text-[10px] text-gray-500">
+            <span className="text-[10px] text-muted">
               {new Date(lastUpdated).toLocaleTimeString()}
             </span>
           )}
           {isExpanded ? (
-            <ChevronUp className="w-4 h-4 text-gray-500" />
+            <ChevronUp className="w-4 h-4 text-muted" />
           ) : (
-            <ChevronDown className="w-4 h-4 text-gray-500" />
+            <ChevronDown className="w-4 h-4 text-muted" />
           )}
         </div>
       </button>
@@ -500,12 +500,12 @@ function TelemetryPanel({
       {isExpanded && (
         <div className="p-4 space-y-4">
           {isLoading ? (
-            <div className="flex items-center justify-center py-6 text-gray-500">
+            <div className="flex items-center justify-center py-6 text-muted">
               <Loader2 className="w-4 h-4 animate-spin mr-2" />
               Loading telemetry...
             </div>
           ) : !hasData ? (
-            <div className="flex flex-col items-center justify-center py-6 text-gray-500">
+            <div className="flex flex-col items-center justify-center py-6 text-muted">
               <Gauge className="w-8 h-8 mb-2 opacity-50" />
               <p className="text-sm">No telemetry data available</p>
               <p className="text-[10px] mt-1">Telemetry will appear when the agent sends data</p>
@@ -518,18 +518,18 @@ function TelemetryPanel({
                   <div className="flex flex-col gap-1.5 mb-3">
                     <div className="flex items-center gap-2">
                       <Gauge className="w-4 h-4 text-orange-400" />
-                      <span className="text-xs font-medium text-white uppercase tracking-wider">JointState</span>
-                      <span className="text-[10px] text-gray-500">({telemetry.joint_state.name.length} joints)</span>
+                      <span className="text-xs font-medium text-primary uppercase tracking-wider">JointState</span>
+                      <span className="text-[10px] text-muted">({telemetry.joint_state.name.length} joints)</span>
                     </div>
                     {telemetry.joint_state.topic_name && (
                       <div className="flex items-center gap-2 px-2 py-1 bg-sunken rounded">
-                        <span className="text-[10px] text-gray-500">TOPIC</span>
+                        <span className="text-[10px] text-muted">TOPIC</span>
                         <span className="text-xs text-cyan-400 font-mono">{telemetry.joint_state.topic_name}</span>
                       </div>
                     )}
                   </div>
                   <div className="space-y-1.5 max-h-[200px] overflow-y-auto">
-                    <div className="grid grid-cols-4 gap-2 text-[10px] text-gray-500 uppercase tracking-wider pb-1 border-b border-primary">
+                    <div className="grid grid-cols-4 gap-2 text-[10px] text-muted uppercase tracking-wider pb-1 border-b border-primary">
                       <span>Joint</span>
                       <span>Position</span>
                       <span>Velocity</span>
@@ -537,7 +537,7 @@ function TelemetryPanel({
                     </div>
                     {telemetry.joint_state.name.map((name, idx) => (
                       <div key={name} className="grid grid-cols-4 gap-2 text-xs font-mono">
-                        <span className="text-gray-300 truncate" title={name}>{name}</span>
+                        <span className="text-primary truncate" title={name}>{name}</span>
                         <span className="text-cyan-400">{formatNumber(telemetry.joint_state?.position?.[idx] ?? 0)}</span>
                         <span className="text-yellow-400">{formatNumber(telemetry.joint_state?.velocity?.[idx] ?? 0)}</span>
                         <span className="text-purple-400">{formatNumber(telemetry.joint_state?.effort?.[idx] ?? 0)}</span>
@@ -553,12 +553,12 @@ function TelemetryPanel({
                   <div className="flex flex-col gap-1.5 mb-3">
                     <div className="flex items-center gap-2">
                       <Navigation className="w-4 h-4 text-green-400" />
-                      <span className="text-xs font-medium text-white uppercase tracking-wider">Odometry</span>
-                      <span className="text-[10px] text-gray-500">{telemetry.odometry.frame_id} → {telemetry.odometry.child_frame_id}</span>
+                      <span className="text-xs font-medium text-primary uppercase tracking-wider">Odometry</span>
+                      <span className="text-[10px] text-muted">{telemetry.odometry.frame_id} → {telemetry.odometry.child_frame_id}</span>
                     </div>
                     {telemetry.odometry.topic_name && (
                       <div className="flex items-center gap-2 px-2 py-1 bg-sunken rounded">
-                        <span className="text-[10px] text-gray-500">TOPIC</span>
+                        <span className="text-[10px] text-muted">TOPIC</span>
                         <span className="text-xs text-cyan-400 font-mono">{telemetry.odometry.topic_name}</span>
                       </div>
                     )}
@@ -566,39 +566,39 @@ function TelemetryPanel({
                   <div className="space-y-3">
                     {/* Position */}
                     <div>
-                      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Position</div>
+                      <div className="text-[10px] text-muted uppercase tracking-wider mb-1">Position</div>
                       <div className="grid grid-cols-3 gap-2 text-xs font-mono">
                         <div>
-                          <span className="text-gray-500">X: </span>
+                          <span className="text-muted">X: </span>
                           <span className="text-cyan-400">{formatNumber(telemetry.odometry.pose.position.x)}</span>
                         </div>
                         <div>
-                          <span className="text-gray-500">Y: </span>
+                          <span className="text-muted">Y: </span>
                           <span className="text-cyan-400">{formatNumber(telemetry.odometry.pose.position.y)}</span>
                         </div>
                         <div>
-                          <span className="text-gray-500">Z: </span>
+                          <span className="text-muted">Z: </span>
                           <span className="text-cyan-400">{formatNumber(telemetry.odometry.pose.position.z)}</span>
                         </div>
                       </div>
                     </div>
                     {/* Orientation */}
                     <div>
-                      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Orientation (Quaternion)</div>
+                      <div className="text-[10px] text-muted uppercase tracking-wider mb-1">Orientation (Quaternion)</div>
                       <div className="text-xs font-mono text-yellow-400">
                         {formatQuaternion(telemetry.odometry.pose.orientation)}
                       </div>
                     </div>
                     {/* Linear Velocity */}
                     <div>
-                      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Linear Velocity</div>
+                      <div className="text-[10px] text-muted uppercase tracking-wider mb-1">Linear Velocity</div>
                       <div className="text-xs font-mono text-green-400">
                         {formatVector3(telemetry.odometry.twist.linear)} m/s
                       </div>
                     </div>
                     {/* Angular Velocity */}
                     <div>
-                      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Angular Velocity</div>
+                      <div className="text-[10px] text-muted uppercase tracking-wider mb-1">Angular Velocity</div>
                       <div className="text-xs font-mono text-purple-400">
                         {formatVector3(telemetry.odometry.twist.angular)} rad/s
                       </div>
@@ -613,11 +613,11 @@ function TelemetryPanel({
                   <div className="flex flex-col gap-1.5 mb-3">
                     <div className="flex items-center gap-2">
                       <GitBranch className="w-4 h-4 text-blue-400" />
-                      <span className="text-xs font-medium text-white uppercase tracking-wider">TF Transforms</span>
-                      <span className="text-[10px] text-gray-500">({telemetry.transforms.length} transforms)</span>
+                      <span className="text-xs font-medium text-primary uppercase tracking-wider">TF Transforms</span>
+                      <span className="text-[10px] text-muted">({telemetry.transforms.length} transforms)</span>
                     </div>
                     <div className="flex items-center gap-2 px-2 py-1 bg-sunken rounded">
-                      <span className="text-[10px] text-gray-500">TOPIC</span>
+                      <span className="text-[10px] text-muted">TOPIC</span>
                       <span className="text-xs text-cyan-400 font-mono">/tf, /tf_static</span>
                     </div>
                   </div>
@@ -626,16 +626,16 @@ function TelemetryPanel({
                       <div key={`${tf.frame_id}-${tf.child_frame_id}-${idx}`} className="bg-sunken rounded p-2 text-xs">
                         <div className="flex items-center gap-2 mb-1">
                           <span className="text-blue-400 font-mono">{tf.frame_id}</span>
-                          <span className="text-gray-600">→</span>
+                          <span className="text-muted">→</span>
                           <span className="text-cyan-400 font-mono">{tf.child_frame_id}</span>
                         </div>
                         <div className="grid grid-cols-2 gap-2 font-mono text-[10px]">
                           <div>
-                            <span className="text-gray-500">T: </span>
+                            <span className="text-muted">T: </span>
                             <span className="text-green-400">{formatVector3(tf.translation)}</span>
                           </div>
                           <div>
-                            <span className="text-gray-500">R: </span>
+                            <span className="text-muted">R: </span>
                             <span className="text-yellow-400">{formatQuaternion(tf.rotation)}</span>
                           </div>
                         </div>
@@ -1040,11 +1040,11 @@ export default function AgentDashboard() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Server className="w-5 h-5 text-blue-400" />
-              <h2 className="font-semibold text-white">{t('agent.title')}</h2>
+              <h2 className="font-semibold text-primary">{t('agent.title')}</h2>
             </div>
             <button
               onClick={() => refetchAgents()}
-              className="p-1.5 text-gray-500 hover:text-white hover:bg-elevated rounded transition-colors"
+              className="p-1.5 text-muted hover:text-primary hover:bg-elevated rounded transition-colors"
               title={t('common.refresh')}
             >
               <RefreshCw size={16} />
@@ -1057,13 +1057,13 @@ export default function AgentDashboard() {
               className={`text-xs px-2 py-1 rounded transition-colors ${
                 showOnlineOnly
                   ? 'bg-green-500/20 text-green-400 border border-green-500/30'
-                  : 'bg-gray-500/20 text-gray-400 border border-gray-500/30'
+                  : 'bg-gray-500/20 text-secondary border border-gray-500/30'
               }`}
             >
               {showOnlineOnly ? `Online only (${onlineCount})` : `All (${agents.length})`}
             </button>
             {!showOnlineOnly && offlineCount > 0 && (
-              <span className="text-[10px] text-gray-500">
+              <span className="text-[10px] text-muted">
                 {offlineCount} offline
               </span>
             )}
@@ -1073,14 +1073,14 @@ export default function AgentDashboard() {
         {/* Agent List */}
         <div className="flex-1 overflow-y-auto">
           {agentsLoading ? (
-            <div className="p-4 text-center text-gray-500">{t('agent.loading')}</div>
+            <div className="p-4 text-center text-muted">{t('agent.loading')}</div>
           ) : filteredAgents.length === 0 ? (
             <div className="p-8 text-center">
-              <Server className="w-12 h-12 mx-auto mb-3 text-gray-600" />
-              <p className="text-gray-500 text-sm">
+              <Server className="w-12 h-12 mx-auto mb-3 text-muted" />
+              <p className="text-muted text-sm">
                 {showOnlineOnly ? 'No online agents' : t('agent.noAgents')}
               </p>
-              <p className="text-xs text-gray-600 mt-1">
+              <p className="text-xs text-muted mt-1">
                 {showOnlineOnly && agents.length > 0
                   ? `${offlineCount} offline agent(s) hidden`
                   : t('agent.noAgentsHint')}
@@ -1103,7 +1103,7 @@ export default function AgentDashboard() {
                     {agent.status === 'online' ? (
                       <Wifi className="w-4 h-4 text-green-500" />
                     ) : (
-                      <WifiOff className="w-4 h-4 text-gray-600" />
+                      <WifiOff className="w-4 h-4 text-muted" />
                     )}
                     {/* Heartbeat indicator */}
                     {connectionStatusMap[agent.id] && (
@@ -1124,7 +1124,7 @@ export default function AgentDashboard() {
                             type="text"
                             value={listEditedName}
                             onChange={(e) => setListEditedName(e.target.value)}
-                            className="text-sm font-medium text-white bg-elevated border border-blue-500 rounded px-1.5 py-0.5 w-28 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            className="text-sm font-medium text-primary bg-elevated border border-blue-500 rounded px-1.5 py-0.5 w-28 focus:outline-none focus:ring-1 focus:ring-blue-500"
                             autoFocus
                             onKeyDown={(e) => {
                               if (e.key === 'Enter' && listEditedName.trim()) {
@@ -1145,7 +1145,7 @@ export default function AgentDashboard() {
                       ) : (
                         <>
                           <span
-                            className="text-sm font-medium text-white truncate cursor-pointer hover:text-blue-300"
+                            className="text-sm font-medium text-primary truncate cursor-pointer hover:text-blue-300"
                             onDoubleClick={(e) => {
                               e.stopPropagation()
                               setListEditedName(agent.name)
@@ -1161,7 +1161,7 @@ export default function AgentDashboard() {
                               setListEditedName(agent.name)
                               setEditingAgentInList(agent.id)
                             }}
-                            className="p-0.5 text-gray-600 hover:text-blue-400 transition-colors"
+                            className="p-0.5 text-muted hover:text-blue-400 transition-colors"
                             title="Rename"
                           >
                             <Pencil className="w-3 h-3" />
@@ -1175,7 +1175,7 @@ export default function AgentDashboard() {
                                   deleteAgentMutation.mutate(agent.id)
                                 }
                               }}
-                              className="p-0.5 text-gray-600 hover:text-red-400 transition-colors"
+                              className="p-0.5 text-muted hover:text-red-400 transition-colors"
                               title="Delete agent"
                             >
                               <Trash2 className="w-3 h-3" />
@@ -1186,7 +1186,7 @@ export default function AgentDashboard() {
                     </div>
                     <div className="flex items-center gap-2 mt-0.5">
                       {agent.ip_address && (
-                        <span className="text-[10px] text-gray-600 font-mono">
+                        <span className="text-[10px] text-muted font-mono">
                           {agent.ip_address}
                         </span>
                       )}
@@ -1194,7 +1194,7 @@ export default function AgentDashboard() {
                   </div>
 
                   {agent.status === 'online' ? (
-                    <ChevronRight className="w-4 h-4 text-gray-600" />
+                    <ChevronRight className="w-4 h-4 text-muted" />
                   ) : (
                     <button
                       onClick={(e) => {
@@ -1203,7 +1203,7 @@ export default function AgentDashboard() {
                           deleteAgentMutation.mutate(agent.id)
                         }
                       }}
-                      className="p-1.5 text-gray-600 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+                      className="p-1.5 text-muted hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
                       title="Delete agent"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -1220,11 +1220,11 @@ export default function AgentDashboard() {
           <div className="grid grid-cols-2 gap-3 text-center">
             <div>
               <div className="text-xl font-bold text-green-400">{onlineCount}</div>
-              <div className="text-[10px] text-gray-500 uppercase">{t('agent.online')}</div>
+              <div className="text-[10px] text-muted uppercase">{t('agent.online')}</div>
             </div>
             <div>
-              <div className="text-xl font-bold text-gray-400">{offlineCount}</div>
-              <div className="text-[10px] text-gray-500 uppercase">{t('agent.offline')}</div>
+              <div className="text-xl font-bold text-secondary">{offlineCount}</div>
+              <div className="text-[10px] text-muted uppercase">{t('agent.offline')}</div>
             </div>
           </div>
         </div>
@@ -1249,7 +1249,7 @@ export default function AgentDashboard() {
                       className={`w-6 h-6 ${
                         selectedAgent.status === 'online'
                           ? 'text-green-400'
-                          : 'text-gray-400'
+                          : 'text-secondary'
                       }`}
                     />
                   </div>
@@ -1261,7 +1261,7 @@ export default function AgentDashboard() {
                           type="text"
                           value={editedName}
                           onChange={(e) => setEditedName(e.target.value)}
-                          className="text-xl font-semibold text-white bg-elevated border border-blue-500 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          className="text-xl font-semibold text-primary bg-elevated border border-blue-500 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
                           autoFocus
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' && editedName.trim()) {
@@ -1279,7 +1279,7 @@ export default function AgentDashboard() {
                             }
                           }}
                           disabled={!editedName.trim() || renameAgentMutation.isPending}
-                          className="p-1 text-green-400 hover:text-green-300 disabled:text-gray-600"
+                          className="p-1 text-green-400 hover:text-green-300 disabled:text-muted"
                           title="Save"
                         >
                           {renameAgentMutation.isPending ? (
@@ -1293,7 +1293,7 @@ export default function AgentDashboard() {
                             setIsEditingName(false)
                             setEditedName(selectedAgent.name)
                           }}
-                          className="p-1 text-gray-400 hover:text-gray-300"
+                          className="p-1 text-secondary hover:text-primary"
                           title="Cancel"
                         >
                           <X className="w-5 h-5" />
@@ -1302,7 +1302,7 @@ export default function AgentDashboard() {
                     ) : (
                       <div className="flex items-center gap-2">
                         <h2
-                          className="text-xl font-semibold text-white cursor-pointer hover:text-blue-300 transition-colors"
+                          className="text-xl font-semibold text-primary cursor-pointer hover:text-blue-300 transition-colors"
                           onDoubleClick={() => {
                             setEditedName(selectedAgent.name)
                             setIsEditingName(true)
@@ -1316,7 +1316,7 @@ export default function AgentDashboard() {
                             setEditedName(selectedAgent.name)
                             setIsEditingName(true)
                           }}
-                          className="p-1 text-gray-500 hover:text-blue-400 transition-colors"
+                          className="p-1 text-muted hover:text-blue-400 transition-colors"
                           title="Rename agent"
                         >
                           <Pencil className="w-4 h-4" />
@@ -1324,12 +1324,12 @@ export default function AgentDashboard() {
                       </div>
                     )}
                     <div className="flex items-center gap-3 mt-1">
-                      <span className="text-sm text-gray-500 font-mono" title="Server-assigned ID">{selectedAgent.id}</span>
+                      <span className="text-sm text-muted font-mono" title="Server-assigned ID">{selectedAgent.id}</span>
                       <span className="text-[10px] px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded">Server ID</span>
                       {selectedAgent.ip_address && (
                         <>
-                          <span className="text-gray-600">|</span>
-                          <span className="text-sm text-gray-500">{selectedAgent.ip_address}</span>
+                          <span className="text-muted">|</span>
+                          <span className="text-sm text-muted">{selectedAgent.ip_address}</span>
                         </>
                       )}
                     </div>
@@ -1350,16 +1350,16 @@ export default function AgentDashboard() {
               {/* Stats */}
               <div className="grid grid-cols-4 gap-4 mt-6">
                 <div className="bg-elevated rounded-lg p-4">
-                  <div className="flex items-center gap-2 text-gray-400 text-sm mb-1">
+                  <div className="flex items-center gap-2 text-secondary text-sm mb-1">
                     <Zap className="w-4 h-4" />
                     {t('agent.actionServers')}
                   </div>
-                  <div className="text-2xl font-bold text-white">
+                  <div className="text-2xl font-bold text-primary">
                     {agentCapabilities?.total || 0}
                   </div>
                 </div>
                 <div className="bg-elevated rounded-lg p-4">
-                  <div className="flex items-center gap-2 text-gray-400 text-sm mb-1">
+                  <div className="flex items-center gap-2 text-secondary text-sm mb-1">
                     <HeartPulse className={`w-4 h-4 ${
                       connectionStatusMap[selectedAgent.id]?.heartbeat_health === 'healthy' ? 'text-green-400' :
                       connectionStatusMap[selectedAgent.id]?.heartbeat_health === 'warning' ? 'text-yellow-400' :
@@ -1378,22 +1378,22 @@ export default function AgentDashboard() {
                   </div>
                 </div>
                 <div className="bg-elevated rounded-lg p-4">
-                  <div className="flex items-center gap-2 text-gray-400 text-sm mb-1">
+                  <div className="flex items-center gap-2 text-secondary text-sm mb-1">
                     <Activity className="w-4 h-4 text-blue-400" />
                     {t('agent.ping')}
                   </div>
-                  <div className="text-sm font-medium text-white">
+                  <div className="text-sm font-medium text-primary">
                     {pingLatencyText
                       ? pingLatencyText
                       : t('agent.never')}
                   </div>
                 </div>
                 <div className="bg-elevated rounded-lg p-4">
-                  <div className="flex items-center gap-2 text-gray-400 text-sm mb-1">
+                  <div className="flex items-center gap-2 text-secondary text-sm mb-1">
                     <Clock className="w-4 h-4" />
                     {t('agent.lastSeen')}
                   </div>
-                  <div className="text-sm font-medium text-white">
+                  <div className="text-sm font-medium text-primary">
                     {selectedAgent.last_seen
                       ? new Date(selectedAgent.last_seen).toLocaleTimeString()
                       : t('agent.never')}
@@ -1408,19 +1408,19 @@ export default function AgentDashboard() {
               <div>
                 <div className="flex items-center gap-2 mb-4">
                   <Activity className="w-5 h-5 text-purple-400" />
-                  <h3 className="text-lg font-semibold text-white">{t('agent.detectedActionServers')}</h3>
-                  <span className="text-sm text-gray-500">
+                  <h3 className="text-lg font-semibold text-primary">{t('agent.detectedActionServers')}</h3>
+                  <span className="text-sm text-muted">
                     ({agentCapabilities?.capabilities?.length || 0} {t('agent.actionTypes')})
                   </span>
                 </div>
 
                 {capabilitiesLoading ? (
-                  <div className="text-center py-8 text-gray-500">{t('agent.loadingActionServers')}</div>
+                  <div className="text-center py-8 text-muted">{t('agent.loadingActionServers')}</div>
                 ) : !agentCapabilities?.capabilities?.length ? (
                   <div className="text-center py-8">
-                    <Activity className="w-10 h-10 mx-auto mb-3 text-gray-600" />
-                    <p className="text-gray-500 text-sm">{t('agent.noActionServers')}</p>
-                    <p className="text-xs text-gray-600 mt-1">
+                    <Activity className="w-10 h-10 mx-auto mb-3 text-muted" />
+                    <p className="text-muted text-sm">{t('agent.noActionServers')}</p>
+                    <p className="text-xs text-muted mt-1">
                       {t('agent.noActionServersHint')}
                     </p>
                   </div>
@@ -1459,36 +1459,36 @@ export default function AgentDashboard() {
               <div>
                 <div className="flex items-center gap-2 mb-4">
                   <Layout className="w-5 h-5 text-cyan-400" />
-                  <h3 className="text-lg font-semibold text-white">Behavior Tree</h3>
+                  <h3 className="text-lg font-semibold text-primary">Behavior Tree</h3>
                   {fleetGraph && (
-                    <span className="text-sm text-gray-500">v{fleetGraph.version}</span>
+                    <span className="text-sm text-muted">v{fleetGraph.version}</span>
                   )}
                 </div>
 
                 {graphsLoading ? (
-                  <div className="text-center py-8 text-gray-500">Loading behavior tree...</div>
+                  <div className="text-center py-8 text-muted">Loading behavior tree...</div>
                 ) : !fleetGraph ? (
                   <div className="text-center py-8">
-                    <Layout className="w-10 h-10 mx-auto mb-3 text-gray-600" />
-                    <p className="text-gray-500 text-sm">No behavior tree configured</p>
-                    <p className="text-xs text-gray-600 mt-1">
+                    <Layout className="w-10 h-10 mx-auto mb-3 text-muted" />
+                    <p className="text-muted text-sm">No behavior tree configured</p>
+                    <p className="text-xs text-muted mt-1">
                       Create a Behavior Tree to visualize execution for this agent.
                     </p>
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-gray-400">
-                      <span className="uppercase tracking-wider text-[10px] text-gray-500">Graph</span>
-                      <span className="text-gray-200 font-medium">{fleetGraph.name}</span>
-                      <span className="text-gray-600">{fleetGraph.id}</span>
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-secondary">
+                      <span className="uppercase tracking-wider text-[10px] text-muted">Graph</span>
+                      <span className="text-primary font-medium">{fleetGraph.name}</span>
+                      <span className="text-muted">{fleetGraph.id}</span>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-3">
-                      <label className="text-xs text-gray-400">Robot</label>
+                      <label className="text-xs text-secondary">Robot</label>
                       <select
                         value={selectedRobotId || ''}
                         onChange={(e) => setSelectedRobotId(e.target.value)}
-                        className="px-2 py-1 bg-elevated border border-primary rounded text-xs text-white"
+                        className="px-2 py-1 bg-elevated border border-primary rounded text-xs text-primary"
                         disabled={agentRobots.length === 0}
                       >
                         {agentRobots.length === 0 && (
@@ -1509,7 +1509,7 @@ export default function AgentDashboard() {
                     {selectedRobotState && (
                       <div className="bg-surface rounded-lg border border-primary p-4 space-y-3">
                         <div className="flex items-center justify-between">
-                          <span className="text-xs text-gray-500 uppercase tracking-wider">Execution Status</span>
+                          <span className="text-xs text-muted uppercase tracking-wider">Execution Status</span>
                           {/* Show different status when robot is executing a different graph */}
                           {selectedRobotExecuting && !isExecutingCurrentGraph ? (
                             <span className="px-2 py-1 bg-yellow-500/20 text-yellow-400 text-xs rounded">
@@ -1540,7 +1540,7 @@ export default function AgentDashboard() {
                                   }
                                 }}
                                 disabled={!fleetGraph || isExecutionLoading || !selectedRobotState.is_online || !canExecute}
-                                className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors"
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-primary text-xs font-medium rounded transition-colors"
                                 title={
                                   !selectedRobotState.is_online
                                     ? 'Agent is offline'
@@ -1582,7 +1582,7 @@ export default function AgentDashboard() {
                                   }
                                 }}
                                 disabled={!currentTaskId || isExecutionLoading}
-                                className="flex items-center gap-1.5 px-3 py-1.5 bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors"
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-primary text-xs font-medium rounded transition-colors"
                                 title="Pause execution"
                               >
                                 {pauseTaskMutation.isPending ? (
@@ -1602,7 +1602,7 @@ export default function AgentDashboard() {
                                   }
                                 }}
                                 disabled={!currentTaskId || isExecutionLoading}
-                                className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors"
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-primary text-xs font-medium rounded transition-colors"
                                 title="Stop execution"
                               >
                                 {cancelTaskMutation.isPending ? (
@@ -1622,7 +1622,7 @@ export default function AgentDashboard() {
                               }
                             }}
                             disabled={isExecutionLoading || selectedRobotExecuting}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-600 hover:bg-gray-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors ml-auto"
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-600 hover:bg-gray-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-primary text-xs font-medium rounded transition-colors ml-auto"
                             title={selectedRobotExecuting ? 'Cannot reset while executing' : 'Reset agent state to idle'}
                           >
                             {resetStateMutation.isPending ? (
@@ -1634,7 +1634,7 @@ export default function AgentDashboard() {
                           </button>
                           {/* Show task ID if executing */}
                           {currentTaskId && (
-                            <span className="text-[10px] text-gray-500 font-mono">
+                            <span className="text-[10px] text-muted font-mono">
                               Task: {currentTaskId.slice(0, 8)}...
                             </span>
                           )}
@@ -1643,16 +1643,16 @@ export default function AgentDashboard() {
                         <div className="grid grid-cols-2 gap-4 text-xs">
                           {/* Current State */}
                           <div>
-                            <span className="text-gray-500">State:</span>
-                            <div className="text-gray-200 font-medium mt-0.5">
+                            <span className="text-muted">State:</span>
+                            <div className="text-primary font-medium mt-0.5">
                               {selectedRobotCurrentState || selectedRobotState.state_code || 'idle'}
                             </div>
                           </div>
 
                           {/* Graph Info */}
                           <div>
-                            <span className="text-gray-500">Graph:</span>
-                            <div className="text-gray-200 font-medium mt-0.5">
+                            <span className="text-muted">Graph:</span>
+                            <div className="text-primary font-medium mt-0.5">
                               {selectedRobotState.current_graph_id
                                 ? fleetGraph?.name || selectedRobotState.current_graph_id.slice(0, 8)
                                 : 'None assigned'}
@@ -1662,7 +1662,7 @@ export default function AgentDashboard() {
                           {/* Current Step */}
                           {selectedRobotExecuting && currentStepId && (
                             <div>
-                              <span className="text-gray-500">Current Step:</span>
+                              <span className="text-muted">Current Step:</span>
                               <div className="text-blue-400 font-medium mt-0.5">
                                 {fleetGraph?.steps.find(s => s.id === currentStepId)?.job_name || fleetGraph?.steps.find(s => s.id === currentStepId)?.name || currentStepId}
                               </div>
@@ -1672,7 +1672,7 @@ export default function AgentDashboard() {
                           {/* Semantic Tags */}
                           {selectedRobotState.semantic_tags && selectedRobotState.semantic_tags.length > 0 && (
                             <div className="col-span-2">
-                              <span className="text-gray-500">Tags:</span>
+                              <span className="text-muted">Tags:</span>
                               <div className="flex flex-wrap gap-1 mt-1">
                                 {selectedRobotState.semantic_tags.map((tag) => (
                                   <span key={tag} className="px-1.5 py-0.5 bg-purple-500/20 text-purple-400 rounded text-[10px]">
@@ -1697,11 +1697,11 @@ export default function AgentDashboard() {
                     ) : (
                       <div className="mb-2 space-y-2">
                         <div className="flex items-center gap-2">
-                          <label className="text-xs text-gray-400">Behavior Tree:</label>
+                          <label className="text-xs text-secondary">Behavior Tree:</label>
                           <select
                             value={selectedGraphId || ''}
                             onChange={(e) => setSelectedGraphId(e.target.value)}
-                            className="flex-1 px-2 py-1 bg-elevated border border-primary rounded text-xs text-white focus:outline-none focus:border-blue-500"
+                            className="flex-1 px-2 py-1 bg-elevated border border-primary rounded text-xs text-primary focus:outline-none focus:border-blue-500"
                           >
                             {sortedActionGraphs.map((graph) => {
                               const statusIcon = graph.deployment_status === 'deployed' ? '\u2713' :
@@ -1715,7 +1715,7 @@ export default function AgentDashboard() {
                               )
                             })}
                           </select>
-                          <span className="text-[10px] text-gray-500">
+                          <span className="text-[10px] text-muted">
                             {sortedActionGraphs.length} graphs
                           </span>
                         </div>
@@ -1751,7 +1751,7 @@ export default function AgentDashboard() {
                               <button
                                 onClick={() => deployGraphMutation.mutate({ graphId: fleetGraphMeta.id, agentId: selectedAgentId })}
                                 disabled={deployGraphMutation.isPending}
-                                className="flex items-center gap-1 px-2 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 text-white rounded text-xs transition-colors"
+                                className="flex items-center gap-1 px-2 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 text-primary rounded text-xs transition-colors"
                               >
                                 {deployGraphMutation.isPending ? (
                                   <Loader2 className="w-3 h-3 animate-spin" />
@@ -1807,9 +1807,9 @@ export default function AgentDashboard() {
         ) : (
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
-              <Server className="w-16 h-16 mx-auto mb-4 text-gray-700" />
-              <h3 className="text-lg font-medium text-gray-400 mb-2">{t('agent.selectAgent')}</h3>
-              <p className="text-sm text-gray-600 max-w-md">
+              <Server className="w-16 h-16 mx-auto mb-4 text-muted" />
+              <h3 className="text-lg font-medium text-secondary mb-2">{t('agent.selectAgent')}</h3>
+              <p className="text-sm text-muted max-w-md">
                 {t('agent.selectAgentHint')}
               </p>
             </div>

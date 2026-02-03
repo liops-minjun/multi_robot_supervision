@@ -51,12 +51,12 @@ export default function TaskHistory() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-3xl font-bold text-white">{t('task.title')}</h1>
+          <h1 className="text-3xl font-bold text-primary">{t('task.title')}</h1>
           <p className="text-slate-400 mt-1">Task Execution History & Control</p>
         </div>
         <button
           onClick={() => refetch()}
-          className="flex items-center gap-2 px-4 py-2.5 bg-slate-700 hover:bg-slate-600 text-white rounded-xl transition-colors"
+          className="flex items-center gap-2 px-4 py-2.5 bg-elevated hover:bg-slate-600 text-primary rounded-xl transition-colors"
         >
           <RefreshCw size={18} />
           {t('common.refresh')}
@@ -72,7 +72,7 @@ export default function TaskHistory() {
             className={`px-4 py-2 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
               filter === f.value
                 ? `${f.color} ring-2 ring-offset-2 ring-offset-slate-900 ${f.color.replace('text-', 'ring-').replace('/20', '/50')}`
-                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                : 'bg-surface text-slate-400 hover:bg-elevated'
             }`}
           >
             {f.label}
@@ -82,15 +82,15 @@ export default function TaskHistory() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* List */}
-        <div className="lg:col-span-1 bg-slate-800/50 backdrop-blur-sm rounded-2xl border border-slate-700/50 overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-700/50 flex items-center justify-between">
+        <div className="lg:col-span-1 bg-surface/50 backdrop-blur-sm rounded-2xl border border-primary/50 overflow-hidden">
+          <div className="px-5 py-4 border-b border-primary/50 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-purple-500/10 rounded-lg">
                 <Timer className="w-5 h-5 text-purple-400" />
               </div>
-              <h2 className="text-lg font-semibold text-white">{t('task.list')}</h2>
+              <h2 className="text-lg font-semibold text-primary">{t('task.list')}</h2>
             </div>
-            <span className="text-sm bg-slate-700 px-2.5 py-1 rounded-lg text-slate-300">
+            <span className="text-sm bg-elevated px-2.5 py-1 rounded-lg text-slate-300">
               {tasks.length}
             </span>
           </div>
@@ -119,7 +119,7 @@ export default function TaskHistory() {
         </div>
 
         {/* Detail */}
-        <div className="lg:col-span-2 bg-slate-800/50 backdrop-blur-sm rounded-2xl border border-slate-700/50 overflow-hidden">
+        <div className="lg:col-span-2 bg-surface/50 backdrop-blur-sm rounded-2xl border border-primary/50 overflow-hidden">
           {selected ? (
             <TaskDetail
               task={selected}
@@ -130,7 +130,7 @@ export default function TaskHistory() {
           ) : (
             <div className="h-full min-h-[400px] flex items-center justify-center">
               <div className="text-center">
-                <div className="w-20 h-20 mx-auto mb-4 rounded-2xl bg-slate-700/50 flex items-center justify-center">
+                <div className="w-20 h-20 mx-auto mb-4 rounded-2xl bg-elevated/50 flex items-center justify-center">
                   <Workflow className="w-10 h-10 text-slate-500" />
                 </div>
                 <p className="text-slate-400">{t('task.selectToView')}</p>
@@ -169,7 +169,7 @@ function TaskListItem({
       className={`p-4 cursor-pointer transition-all ${
         selected
           ? 'bg-blue-500/10 border-l-4 border-l-blue-500'
-          : 'hover:bg-slate-700/30 border-l-4 border-l-transparent'
+          : 'hover:bg-elevated/30 border-l-4 border-l-transparent'
       }`}
     >
       <div className="flex items-center justify-between">
@@ -178,7 +178,7 @@ function TaskListItem({
             <span className={config.text}>{config.icon}</span>
           </div>
           <div>
-            <p className="font-medium text-white">{task.flow_name || task.flow_id}</p>
+            <p className="font-medium text-primary">{task.flow_name || task.flow_id}</p>
             <p className="text-xs text-slate-500">{task.agent_name || task.agent_id}</p>
           </div>
         </div>
@@ -191,7 +191,7 @@ function TaskListItem({
       </div>
       {task.progress && (
         <div className="mt-3 ml-13">
-          <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
+          <div className="w-full h-1.5 bg-elevated rounded-full overflow-hidden">
             <div
               className={`h-full rounded-full transition-all ${
                 task.status === 'completed' ? 'bg-emerald-500' :
@@ -242,10 +242,10 @@ function TaskDetail({
   return (
     <div>
       {/* Header */}
-      <div className="px-6 py-4 border-b border-slate-700/50 bg-slate-800/30">
+      <div className="px-6 py-4 border-b border-primary/50 bg-surface/30">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-white">{task.flow_name || task.flow_id}</h2>
+            <h2 className="text-xl font-semibold text-primary">{task.flow_name || task.flow_id}</h2>
             <p className="text-sm text-slate-500 font-mono mt-1">{task.id}</p>
           </div>
           <span className={`px-4 py-2 rounded-xl text-sm font-medium ${config.bg} ${config.text}`}>
@@ -260,7 +260,7 @@ function TaskDetail({
           {canPause && (
             <button
               onClick={onPause}
-              className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl transition-colors shadow-lg shadow-amber-500/20"
+              className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-primary rounded-xl transition-colors shadow-lg shadow-amber-500/20"
             >
               <Pause size={16} />
               {t('task.pause')}
@@ -269,7 +269,7 @@ function TaskDetail({
           {canResume && (
             <button
               onClick={onResume}
-              className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl transition-colors shadow-lg shadow-emerald-500/20"
+              className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-primary rounded-xl transition-colors shadow-lg shadow-emerald-500/20"
             >
               <Play size={16} />
               {t('task.resume')}
@@ -278,7 +278,7 @@ function TaskDetail({
           {canCancel && (
             <button
               onClick={onCancel}
-              className="flex items-center gap-2 px-4 py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-xl transition-colors shadow-lg shadow-red-500/20"
+              className="flex items-center gap-2 px-4 py-2.5 bg-red-500 hover:bg-red-600 text-primary rounded-xl transition-colors shadow-lg shadow-red-500/20"
             >
               <Square size={16} />
               {t('task.cancel')}
@@ -288,33 +288,33 @@ function TaskDetail({
 
         {/* Info Cards */}
         <div className="grid grid-cols-2 gap-4">
-          <div className="bg-slate-700/30 rounded-xl p-4">
+          <div className="bg-elevated/30 rounded-xl p-4">
             <div className="flex items-center gap-2 mb-2">
               <Bot className="w-4 h-4 text-cyan-400" />
               <p className="text-sm text-slate-400">{t('robot.title')}</p>
             </div>
-            <p className="text-white font-medium">{task.agent_name || task.agent_id}</p>
+            <p className="text-primary font-medium">{task.agent_name || task.agent_id}</p>
           </div>
-          <div className="bg-slate-700/30 rounded-xl p-4">
+          <div className="bg-elevated/30 rounded-xl p-4">
             <div className="flex items-center gap-2 mb-2">
               <Workflow className="w-4 h-4 text-purple-400" />
               <p className="text-sm text-slate-400">Behavior Tree</p>
             </div>
-            <p className="text-white font-medium">{task.flow_name || task.flow_id}</p>
+            <p className="text-primary font-medium">{task.flow_name || task.flow_id}</p>
           </div>
         </div>
 
         {/* Progress */}
         {task.progress && (
-          <div className="bg-slate-700/30 rounded-xl p-5">
+          <div className="bg-elevated/30 rounded-xl p-5">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="font-medium text-white">{t('task.progress')}</h3>
+              <h3 className="font-medium text-primary">{t('task.progress')}</h3>
               <span className="text-sm text-slate-400">
                 {task.progress.current}/{task.progress.total} steps
               </span>
             </div>
             <div className="relative mb-4">
-              <div className="w-full h-3 bg-slate-800/50 rounded-full overflow-hidden">
+              <div className="w-full h-3 bg-surface/50 rounded-full overflow-hidden">
                 <div
                   className={`h-full ${config.bar} rounded-full transition-all duration-500`}
                   style={{ width: `${progressPercent}%` }}
@@ -327,7 +327,7 @@ function TaskDetail({
             {task.current_step_id && (
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-slate-500">{t('task.currentStep')}:</span>
-                <span className="text-white font-mono bg-slate-800/50 px-2 py-1 rounded">
+                <span className="text-primary font-mono bg-surface/50 px-2 py-1 rounded">
                   {task.current_step_id}
                 </span>
               </div>
@@ -347,7 +347,7 @@ function TaskDetail({
         )}
 
         {/* Timestamps */}
-        <div className="bg-slate-700/30 rounded-xl p-4">
+        <div className="bg-elevated/30 rounded-xl p-4">
           <div className="flex items-center gap-2 mb-3">
             <Calendar className="w-4 h-4 text-slate-400" />
             <h3 className="text-sm font-medium text-slate-400">Timeline</h3>
@@ -380,9 +380,9 @@ function TaskDetail({
 
         {/* Step Results */}
         {task.step_results && Object.keys(task.step_results).length > 0 && (
-          <div className="bg-slate-700/30 rounded-xl p-4">
-            <h3 className="font-medium text-white mb-3">{t('task.stepResults')}</h3>
-            <div className="bg-slate-800/50 rounded-lg p-4 font-mono text-xs text-slate-300 overflow-x-auto">
+          <div className="bg-elevated/30 rounded-xl p-4">
+            <h3 className="font-medium text-primary mb-3">{t('task.stepResults')}</h3>
+            <div className="bg-surface/50 rounded-lg p-4 font-mono text-xs text-slate-300 overflow-x-auto">
               <pre>{JSON.stringify(task.step_results, null, 2)}</pre>
             </div>
           </div>

@@ -14,8 +14,8 @@ const TelemetryPreview = memo(({ type, liveValue, savedValue, compact = false }:
   if (!liveValue) {
     return (
       <div className="flex items-center gap-2 px-2 py-1.5 bg-gray-800/50 rounded border border-gray-700/50">
-        <Radio className="w-3 h-3 text-gray-500" />
-        <span className="text-[9px] text-gray-500">Telemetry 없음</span>
+        <Radio className="w-3 h-3 text-muted" />
+        <span className="text-[9px] text-muted">Telemetry 없음</span>
       </div>
     )
   }
@@ -42,9 +42,9 @@ const TelemetryPreview = memo(({ type, liveValue, savedValue, compact = false }:
           <span className="text-[9px] text-purple-400 font-medium">LIVE</span>
         </div>
         <div className="flex gap-3 text-[10px] font-mono">
-          <span className="text-gray-400">R: <span className="text-white">{formatNumber(euler.roll, 1)}°</span></span>
-          <span className="text-gray-400">P: <span className="text-white">{formatNumber(euler.pitch, 1)}°</span></span>
-          <span className="text-gray-400">Y: <span className="text-white">{formatNumber(euler.yaw, 1)}°</span></span>
+          <span className="text-secondary">R: <span className="text-primary">{formatNumber(euler.roll, 1)}°</span></span>
+          <span className="text-secondary">P: <span className="text-primary">{formatNumber(euler.pitch, 1)}°</span></span>
+          <span className="text-secondary">Y: <span className="text-primary">{formatNumber(euler.yaw, 1)}°</span></span>
         </div>
       </div>
     )
@@ -93,7 +93,7 @@ const PosePreview = memo(({ liveValue, savedValue, compact, isPoint }: {
     return (
       <div className="flex items-center gap-2 px-2 py-1 bg-purple-500/10 rounded border border-purple-500/30">
         <Radio className="w-3 h-3 text-purple-400 animate-pulse" />
-        <span className="text-[9px] text-gray-400 font-mono">
+        <span className="text-[9px] text-secondary font-mono">
           x={formatNumber(pos.x)} y={formatNumber(pos.y)}
           {!isPoint && ` θ=${formatNumber(liveYaw, 1)}°`}
         </span>
@@ -106,14 +106,14 @@ const PosePreview = memo(({ liveValue, savedValue, compact, isPoint }: {
       <div className="flex items-center gap-2 mb-1.5">
         <Radio className="w-3 h-3 text-purple-400 animate-pulse" />
         <span className="text-[9px] text-purple-400 font-medium">LIVE</span>
-        {savedValue && <span className="text-[8px] text-gray-500 ml-auto">차이 표시됨</span>}
+        {savedValue && <span className="text-[8px] text-muted ml-auto">차이 표시됨</span>}
       </div>
 
       <div className="grid grid-cols-4 gap-2 text-[10px] font-mono">
         {/* X */}
         <div>
-          <div className="text-gray-500 text-[8px]">X</div>
-          <div className="text-white">{formatNumber(pos.x)}</div>
+          <div className="text-muted text-[8px]">X</div>
+          <div className="text-primary">{formatNumber(pos.x)}</div>
           {xDiff && xDiff.direction !== 'same' && (
             <DiffIndicator diff={xDiff} />
           )}
@@ -121,8 +121,8 @@ const PosePreview = memo(({ liveValue, savedValue, compact, isPoint }: {
 
         {/* Y */}
         <div>
-          <div className="text-gray-500 text-[8px]">Y</div>
-          <div className="text-white">{formatNumber(pos.y)}</div>
+          <div className="text-muted text-[8px]">Y</div>
+          <div className="text-primary">{formatNumber(pos.y)}</div>
           {yDiff && yDiff.direction !== 'same' && (
             <DiffIndicator diff={yDiff} />
           )}
@@ -130,8 +130,8 @@ const PosePreview = memo(({ liveValue, savedValue, compact, isPoint }: {
 
         {/* Z */}
         <div>
-          <div className="text-gray-500 text-[8px]">Z</div>
-          <div className="text-white">{formatNumber(pos.z)}</div>
+          <div className="text-muted text-[8px]">Z</div>
+          <div className="text-primary">{formatNumber(pos.z)}</div>
           {zDiff && zDiff.direction !== 'same' && (
             <DiffIndicator diff={zDiff} />
           )}
@@ -140,8 +140,8 @@ const PosePreview = memo(({ liveValue, savedValue, compact, isPoint }: {
         {/* Yaw (for pose) */}
         {!isPoint && (
           <div>
-            <div className="text-gray-500 text-[8px]">Yaw</div>
-            <div className="text-white">{formatNumber(liveYaw, 1)}°</div>
+            <div className="text-muted text-[8px]">Yaw</div>
+            <div className="text-primary">{formatNumber(liveYaw, 1)}°</div>
             {yawDiff && yawDiff.direction !== 'same' && (
               <DiffIndicator diff={yawDiff} isAngle />
             )}
@@ -161,7 +161,7 @@ const TwistPreview = memo(({ liveValue, compact }: {
     return (
       <div className="flex items-center gap-2 px-2 py-1 bg-purple-500/10 rounded border border-purple-500/30">
         <Radio className="w-3 h-3 text-purple-400 animate-pulse" />
-        <span className="text-[9px] text-gray-400 font-mono">
+        <span className="text-[9px] text-secondary font-mono">
           lin={formatNumber(liveValue.linear.x)} ang={formatNumber(liveValue.angular.z)}
         </span>
       </div>
@@ -177,16 +177,16 @@ const TwistPreview = memo(({ liveValue, compact }: {
 
       <div className="space-y-1 text-[10px] font-mono">
         <div className="flex gap-3">
-          <span className="text-gray-500 w-12">Linear</span>
-          <span className="text-gray-400">x: <span className="text-white">{formatNumber(liveValue.linear.x)}</span></span>
-          <span className="text-gray-400">y: <span className="text-white">{formatNumber(liveValue.linear.y)}</span></span>
-          <span className="text-gray-400">z: <span className="text-white">{formatNumber(liveValue.linear.z)}</span></span>
+          <span className="text-muted w-12">Linear</span>
+          <span className="text-secondary">x: <span className="text-primary">{formatNumber(liveValue.linear.x)}</span></span>
+          <span className="text-secondary">y: <span className="text-primary">{formatNumber(liveValue.linear.y)}</span></span>
+          <span className="text-secondary">z: <span className="text-primary">{formatNumber(liveValue.linear.z)}</span></span>
         </div>
         <div className="flex gap-3">
-          <span className="text-gray-500 w-12">Angular</span>
-          <span className="text-gray-400">x: <span className="text-white">{formatNumber(liveValue.angular.x)}</span></span>
-          <span className="text-gray-400">y: <span className="text-white">{formatNumber(liveValue.angular.y)}</span></span>
-          <span className="text-gray-400">z: <span className="text-white">{formatNumber(liveValue.angular.z)}</span></span>
+          <span className="text-muted w-12">Angular</span>
+          <span className="text-secondary">x: <span className="text-primary">{formatNumber(liveValue.angular.x)}</span></span>
+          <span className="text-secondary">y: <span className="text-primary">{formatNumber(liveValue.angular.y)}</span></span>
+          <span className="text-secondary">z: <span className="text-primary">{formatNumber(liveValue.angular.z)}</span></span>
         </div>
       </div>
     </div>
@@ -203,7 +203,7 @@ const JointArrayPreview = memo(({ liveValue, savedValue, compact }: {
     return (
       <div className="flex items-center gap-2 px-2 py-1 bg-purple-500/10 rounded border border-purple-500/30">
         <Radio className="w-3 h-3 text-purple-400 animate-pulse" />
-        <span className="text-[9px] text-gray-400 font-mono">
+        <span className="text-[9px] text-secondary font-mono">
           [{liveValue.slice(0, 3).map(v => formatNumber(v, 2)).join(', ')}{liveValue.length > 3 ? '...' : ''}]
         </span>
       </div>
@@ -222,7 +222,7 @@ const JointArrayPreview = memo(({ liveValue, savedValue, compact }: {
       <div className="flex items-center gap-2 mb-1.5">
         <Radio className="w-3 h-3 text-purple-400 animate-pulse" />
         <span className="text-[9px] text-purple-400 font-medium">LIVE</span>
-        <span className="text-[8px] text-gray-500 ml-auto">{liveValue.length} joints</span>
+        <span className="text-[8px] text-muted ml-auto">{liveValue.length} joints</span>
       </div>
 
       <div className="space-y-1 max-h-32 overflow-y-auto">
@@ -234,7 +234,7 @@ const JointArrayPreview = memo(({ liveValue, savedValue, compact }: {
 
           return (
             <div key={idx} className="flex items-center gap-2">
-              <span className="text-[8px] text-gray-500 w-4 text-right">{idx + 1}</span>
+              <span className="text-[8px] text-muted w-4 text-right">{idx + 1}</span>
 
               {/* Bar visualization */}
               <div className="flex-1 h-3 bg-gray-800 rounded-sm overflow-hidden relative">
@@ -245,7 +245,7 @@ const JointArrayPreview = memo(({ liveValue, savedValue, compact }: {
                 />
               </div>
 
-              <span className="text-[9px] text-white font-mono w-16 text-right">
+              <span className="text-[9px] text-primary font-mono w-16 text-right">
                 {formatNumber(degrees, 1)}°
               </span>
 

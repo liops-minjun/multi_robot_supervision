@@ -19,8 +19,8 @@ echo -e "${YELLOW}Fleet Agent Reset Script${NC}"
 echo "========================="
 
 # Default paths (development mode uses /tmp)
-DEV_BASE="/tmp/fleet_agent"
-PROD_BASE="/var/lib/fleet_agent"
+DEV_BASE="/tmp/robot_agent"
+PROD_BASE="/var/lib/robot_agent"
 
 # Check which base to use
 if [ -d "$DEV_BASE" ]; then
@@ -36,7 +36,7 @@ fi
 
 # Stop the agent if running
 echo -e "\n${YELLOW}Step 1: Stopping fleet agent...${NC}"
-if pkill -f fleet_agent_node 2>/dev/null; then
+if pkill -f robot_agent_node 2>/dev/null; then
     echo -e "${GREEN}Agent stopped${NC}"
     sleep 1
 else
@@ -78,4 +78,4 @@ echo "To restart the agent:"
 echo "  cd ros2_ws"
 echo "  source /opt/ros/humble/setup.bash"
 echo "  source install/setup.bash"
-echo "  ros2 run fleet_agent_cpp fleet_agent_node"
+echo "  ros2 run ros2_robot_agent robot_agent_node"

@@ -169,7 +169,7 @@ func (h *RawQUICHandler) SetTaskCompleteCallback(cb TaskCompleteCallback) {
 func (h *RawQUICHandler) Start(addr string, tlsConfig *tls.Config) error {
 	// Configure TLS for raw QUIC (different ALPN from gRPC)
 	rawTLSConfig := tlsConfig.Clone()
-	rawTLSConfig.NextProtos = []string{"fleet-agent-raw", "h3"}
+	rawTLSConfig.NextProtos = []string{"robot-agent-raw", "h3"}
 
 	// QUIC configuration
 	quicConfig := &quic.Config{
@@ -186,7 +186,7 @@ func (h *RawQUICHandler) Start(addr string, tlsConfig *tls.Config) error {
 	}
 	h.listener = listener
 
-	log.Printf("[RawQUIC] Listening on %s (ALPN: fleet-agent-raw)", addr)
+	log.Printf("[RawQUIC] Listening on %s (ALPN: robot-agent-raw)", addr)
 
 	// Start accepting connections
 	go h.acceptLoop()

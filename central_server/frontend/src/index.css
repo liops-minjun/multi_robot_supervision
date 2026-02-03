@@ -32,6 +32,26 @@
   --color-accent-purple: #8b5cf6;
   --color-accent-cyan: #06b6d4;
   --color-accent-orange: #f97316;
+
+  /* Button colors for light theme - higher contrast */
+  --color-btn-blue-bg: #dbeafe;
+  --color-btn-blue-text: #1d4ed8;
+  --color-btn-blue-border: #93c5fd;
+  --color-btn-green-bg: #dcfce7;
+  --color-btn-green-text: #15803d;
+  --color-btn-green-border: #86efac;
+  --color-btn-red-bg: #fee2e2;
+  --color-btn-red-text: #b91c1c;
+  --color-btn-red-border: #fca5a5;
+  --color-btn-yellow-bg: #fef3c7;
+  --color-btn-yellow-text: #b45309;
+  --color-btn-yellow-border: #fcd34d;
+  --color-btn-purple-bg: #ede9fe;
+  --color-btn-purple-text: #6d28d9;
+  --color-btn-purple-border: #c4b5fd;
+  --color-btn-cyan-bg: #cffafe;
+  --color-btn-cyan-text: #0e7490;
+  --color-btn-cyan-border: #67e8f9;
 }
 
 [data-theme="dark"] {
@@ -46,6 +66,26 @@
   --color-text-primary: #ffffff;
   --color-text-secondary: #a1a1aa;
   --color-text-muted: #71717a;
+
+  /* Button colors for dark theme - subtle backgrounds */
+  --color-btn-blue-bg: rgba(59, 130, 246, 0.15);
+  --color-btn-blue-text: #60a5fa;
+  --color-btn-blue-border: rgba(59, 130, 246, 0.3);
+  --color-btn-green-bg: rgba(34, 197, 94, 0.15);
+  --color-btn-green-text: #4ade80;
+  --color-btn-green-border: rgba(34, 197, 94, 0.3);
+  --color-btn-red-bg: rgba(239, 68, 68, 0.15);
+  --color-btn-red-text: #f87171;
+  --color-btn-red-border: rgba(239, 68, 68, 0.3);
+  --color-btn-yellow-bg: rgba(245, 158, 11, 0.15);
+  --color-btn-yellow-text: #fbbf24;
+  --color-btn-yellow-border: rgba(245, 158, 11, 0.3);
+  --color-btn-purple-bg: rgba(139, 92, 246, 0.15);
+  --color-btn-purple-text: #a78bfa;
+  --color-btn-purple-border: rgba(139, 92, 246, 0.3);
+  --color-btn-cyan-bg: rgba(6, 182, 212, 0.15);
+  --color-btn-cyan-text: #22d3ee;
+  --color-btn-cyan-border: rgba(6, 182, 212, 0.3);
 }
 
 body {

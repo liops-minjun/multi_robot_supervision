@@ -107,7 +107,7 @@ const GoalParametersSection = memo(({
           {isLoadingFields ? (
             <Loader2 className="w-3 h-3 text-amber-500 animate-spin" />
           ) : goalFields.length > 0 ? (
-            <span className="text-[9px] text-gray-600">({goalFields.length})</span>
+            <span className="text-[9px] text-muted">({goalFields.length})</span>
           ) : Object.keys(fieldSources).length > 0 ? (
             <span className="text-[9px] text-purple-500">({Object.keys(fieldSources).length}개 바인딩)</span>
           ) : Object.keys(params).length > 0 ? (
@@ -117,9 +117,9 @@ const GoalParametersSection = memo(({
           ) : null}
         </div>
         {isExpanded ? (
-          <ChevronUp className="w-3 h-3 text-gray-500" />
+          <ChevronUp className="w-3 h-3 text-muted" />
         ) : (
-          <ChevronDown className="w-3 h-3 text-gray-500" />
+          <ChevronDown className="w-3 h-3 text-muted" />
         )}
       </button>
 
@@ -127,7 +127,7 @@ const GoalParametersSection = memo(({
         <div className="px-3 pb-2 space-y-2">
           {/* Robot Selector + Telemetry Status */}
           <div className={`flex items-center gap-2 p-2 rounded border ${hasTelemetry ? 'bg-green-500/10 border-green-500/30' : 'bg-purple-500/10 border-purple-500/30'}`}>
-            <Radio className={`w-3 h-3 ${hasTelemetry ? 'text-green-400 animate-pulse' : 'text-gray-500'}`} />
+            <Radio className={`w-3 h-3 ${hasTelemetry ? 'text-green-400 animate-pulse' : 'text-muted'}`} />
             <select
               value={selectedRobotId || ''}
               onChange={(e) => {
@@ -137,7 +137,7 @@ const GoalParametersSection = memo(({
                 }
               }}
               onClick={(e) => e.stopPropagation()}
-              className="flex-1 px-2 py-1 bg-elevated border border-gray-700 rounded text-[10px] text-white focus:outline-none focus:border-purple-500 cursor-pointer"
+              className="flex-1 px-2 py-1 bg-elevated border border-primary rounded text-[10px] text-primary focus:outline-none focus:border-purple-500 cursor-pointer"
             >
               <option value="">로봇 선택...</option>
               {robots.map((robot) => (
@@ -160,22 +160,22 @@ const GoalParametersSection = memo(({
           {isLoadingFields ? (
             <div className="flex items-center gap-2 py-2">
               <Loader2 className="w-3 h-3 text-amber-500 animate-spin" />
-              <span className="text-[9px] text-gray-500">액션 인터페이스 로딩 중...</span>
+              <span className="text-[9px] text-muted">액션 인터페이스 로딩 중...</span>
             </div>
           ) : goalFields.length === 0 ? (
-            <div className="p-2 bg-elevated rounded border border-gray-700">
-              <p className="text-[9px] text-gray-500">
+            <div className="p-2 bg-elevated rounded border border-primary">
+              <p className="text-[9px] text-muted">
                 스키마 없음. Action Type을 선택하면 파라미터가 자동으로 표시됩니다.
               </p>
             </div>
           ) : (
             <div className="space-y-2">
               {goalFields.map((field) => (
-                <div key={field.name} className="p-2 bg-surface rounded border border-gray-700/50">
+                <div key={field.name} className="p-2 bg-surface rounded border border-primary/50">
                   {/* Field header */}
                   <div className="flex items-center gap-2 pb-1 mb-2 border-b border-gray-700/30">
-                    <span className="text-[11px] text-white font-medium">{field.name}</span>
-                    <span className="text-[9px] text-gray-500 font-mono px-1.5 py-0.5 bg-gray-800 rounded">
+                    <span className="text-[11px] text-primary font-medium">{field.name}</span>
+                    <span className="text-[9px] text-muted font-mono px-1.5 py-0.5 bg-gray-800 rounded">
                       {field.type}{field.is_array ? '[]' : ''}
                     </span>
                   </div>

@@ -238,7 +238,7 @@ func loadTLSConfig(cfg *config.Config) (*tls.Config, error) {
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{serverCert},
 		MinVersion:   tls.VersionTLS13,
-		NextProtos:   []string{"fleet-agent-raw", "h3"},
+		NextProtos:   []string{"robot-agent-raw", "h3"},
 	}
 
 	// Load CA certificate for client verification (mTLS)

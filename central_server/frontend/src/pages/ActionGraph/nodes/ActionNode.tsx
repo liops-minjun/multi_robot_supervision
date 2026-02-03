@@ -125,7 +125,7 @@ const ActionNode = memo(({ data, selected }: NodeProps<ActionNodeData>) => {
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <span className="text-white font-semibold text-sm truncate">{data.label}</span>
+              <span className="text-primary font-semibold text-sm truncate">{data.label}</span>
               {config.indicator && (
                 <span className="relative flex h-2 w-2">
                   {status === 'running' && (

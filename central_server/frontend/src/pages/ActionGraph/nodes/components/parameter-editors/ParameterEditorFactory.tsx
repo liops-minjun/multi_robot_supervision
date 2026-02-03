@@ -234,8 +234,8 @@ const NumericArrayEditor = memo(({
   return (
     <div className="space-y-1">
       {arrayValue.length === 0 ? (
-        <div className="p-2 bg-[#1a1a2e] rounded border border-gray-700 text-center">
-          <p className="text-[10px] text-gray-500 mb-2">배열이 비어있습니다</p>
+        <div className="p-2 bg-elevated rounded border border-primary text-center">
+          <p className="text-[10px] text-muted mb-2">배열이 비어있습니다</p>
           <button
             onClick={(e) => { e.stopPropagation(); addElement() }}
             className="px-3 py-1.5 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 rounded text-[10px]"
@@ -248,18 +248,18 @@ const NumericArrayEditor = memo(({
           <div className="space-y-1 max-h-40 overflow-y-auto">
             {arrayValue.map((v, i) => (
               <div key={i} className="flex items-center gap-1 group">
-                <span className="text-[9px] text-gray-500 w-6">[{i}]</span>
+                <span className="text-[9px] text-muted w-6">[{i}]</span>
                 <input
                   type="number"
                   value={v}
                   onChange={(e) => { e.stopPropagation(); updateElement(i, parseFloat(e.target.value) || 0) }}
                   onClick={(e) => e.stopPropagation()}
-                  className="flex-1 px-2 py-1 bg-[#1a1a2e] border border-gray-700 rounded text-[10px] text-white font-mono focus:outline-none focus:border-amber-500"
+                  className="flex-1 px-2 py-1 bg-elevated border border-primary rounded text-[10px] text-primary font-mono focus:outline-none focus:border-amber-500"
                   step="0.001"
                 />
                 <button
                   onClick={(e) => { e.stopPropagation(); removeElement(i) }}
-                  className="p-1 text-gray-600 hover:text-red-400 hover:bg-red-500/10 rounded opacity-0 group-hover:opacity-100 transition-all"
+                  className="p-1 text-muted hover:text-red-400 hover:bg-red-500/10 rounded opacity-0 group-hover:opacity-100 transition-all"
                 >
                   ×
                 </button>
@@ -268,7 +268,7 @@ const NumericArrayEditor = memo(({
           </div>
           <button
             onClick={(e) => { e.stopPropagation(); addElement() }}
-            className="w-full py-1 bg-[#1a1a2e] hover:bg-[#2a2a4a] border border-dashed border-gray-700 rounded text-[10px] text-gray-500 hover:text-gray-400"
+            className="w-full py-1 bg-elevated hover:bg-surface border border-dashed border-gray-700 rounded text-[10px] text-muted hover:text-secondary"
           >
             + 추가
           </button>
@@ -305,8 +305,8 @@ const StringArrayEditor = memo(({
   return (
     <div className="space-y-1">
       {arrayValue.length === 0 ? (
-        <div className="p-2 bg-[#1a1a2e] rounded border border-gray-700 text-center">
-          <p className="text-[10px] text-gray-500 mb-2">배열이 비어있습니다</p>
+        <div className="p-2 bg-elevated rounded border border-primary text-center">
+          <p className="text-[10px] text-muted mb-2">배열이 비어있습니다</p>
           <button
             onClick={(e) => { e.stopPropagation(); addElement() }}
             className="px-3 py-1.5 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 rounded text-[10px]"
@@ -319,17 +319,17 @@ const StringArrayEditor = memo(({
           <div className="space-y-1 max-h-40 overflow-y-auto">
             {arrayValue.map((v, i) => (
               <div key={i} className="flex items-center gap-1 group">
-                <span className="text-[9px] text-gray-500 w-6">[{i}]</span>
+                <span className="text-[9px] text-muted w-6">[{i}]</span>
                 <input
                   type="text"
                   value={v}
                   onChange={(e) => { e.stopPropagation(); updateElement(i, e.target.value) }}
                   onClick={(e) => e.stopPropagation()}
-                  className="flex-1 px-2 py-1 bg-[#1a1a2e] border border-gray-700 rounded text-[10px] text-white focus:outline-none focus:border-amber-500"
+                  className="flex-1 px-2 py-1 bg-elevated border border-primary rounded text-[10px] text-primary focus:outline-none focus:border-amber-500"
                 />
                 <button
                   onClick={(e) => { e.stopPropagation(); removeElement(i) }}
-                  className="p-1 text-gray-600 hover:text-red-400 hover:bg-red-500/10 rounded opacity-0 group-hover:opacity-100 transition-all"
+                  className="p-1 text-muted hover:text-red-400 hover:bg-red-500/10 rounded opacity-0 group-hover:opacity-100 transition-all"
                 >
                   ×
                 </button>
@@ -338,7 +338,7 @@ const StringArrayEditor = memo(({
           </div>
           <button
             onClick={(e) => { e.stopPropagation(); addElement() }}
-            className="w-full py-1 bg-[#1a1a2e] hover:bg-[#2a2a4a] border border-dashed border-gray-700 rounded text-[10px] text-gray-500 hover:text-gray-400"
+            className="w-full py-1 bg-elevated hover:bg-surface border border-dashed border-gray-700 rounded text-[10px] text-muted hover:text-secondary"
           >
             + 추가
           </button>
@@ -421,12 +421,12 @@ const ArrayEditorWithBinding = memo(({
           className={`w-full py-1.5 border rounded text-[10px] flex items-center justify-center gap-1 transition-all ${
             hasBindableSteps
               ? 'bg-purple-500/10 hover:bg-purple-500/20 border-purple-500/30 text-purple-400 cursor-pointer'
-              : 'bg-gray-800/30 border-gray-700 text-gray-600 cursor-not-allowed'
+              : 'bg-gray-800/30 border-gray-700 text-muted cursor-not-allowed'
           }`}
         >
           <Code size={10} />
           이전 Step 결과 사용
-          {!hasBindableSteps && <span className="text-[9px] text-gray-600 ml-1">(사용 가능한 Step 없음)</span>}
+          {!hasBindableSteps && <span className="text-[9px] text-muted ml-1">(사용 가능한 Step 없음)</span>}
         </button>
       )}
     </div>
@@ -503,12 +503,12 @@ const JointArrayEditorWithBinding = memo(({
           className={`w-full py-1.5 border rounded text-[10px] flex items-center justify-center gap-1 transition-all ${
             hasBindableSteps
               ? 'bg-purple-500/10 hover:bg-purple-500/20 border-purple-500/30 text-purple-400 cursor-pointer'
-              : 'bg-gray-800/30 border-gray-700 text-gray-600 cursor-not-allowed'
+              : 'bg-gray-800/30 border-gray-700 text-muted cursor-not-allowed'
           }`}
         >
           <Code size={10} />
           이전 Step 결과 사용
-          {!hasBindableSteps && <span className="text-[9px] text-gray-600 ml-1">(사용 가능한 Step 없음)</span>}
+          {!hasBindableSteps && <span className="text-[9px] text-muted ml-1">(사용 가능한 Step 없음)</span>}
         </button>
       )}
     </div>
@@ -558,7 +558,7 @@ const TwistEditor = memo(({
 
       <div className="space-y-2">
         <div>
-          <div className="text-[9px] text-gray-500 mb-1">Linear</div>
+          <div className="text-[9px] text-muted mb-1">Linear</div>
           <div className="grid grid-cols-3 gap-1">
             {(['x', 'y', 'z'] as const).map((axis) => (
               <input
@@ -568,14 +568,14 @@ const TwistEditor = memo(({
                 onChange={(e) => { e.stopPropagation(); updateField('linear', axis, parseFloat(e.target.value) || 0) }}
                 onClick={(e) => e.stopPropagation()}
                 placeholder={axis}
-                className="px-2 py-1 bg-[#16162a] border border-gray-700 rounded text-[10px] text-white font-mono"
+                className="px-2 py-1 bg-sunken border border-primary rounded text-[10px] text-primary font-mono"
                 step="0.01"
               />
             ))}
           </div>
         </div>
         <div>
-          <div className="text-[9px] text-gray-500 mb-1">Angular</div>
+          <div className="text-[9px] text-muted mb-1">Angular</div>
           <div className="grid grid-cols-3 gap-1">
             {(['x', 'y', 'z'] as const).map((axis) => (
               <input
@@ -585,7 +585,7 @@ const TwistEditor = memo(({
                 onChange={(e) => { e.stopPropagation(); updateField('angular', axis, parseFloat(e.target.value) || 0) }}
                 onClick={(e) => e.stopPropagation()}
                 placeholder={axis}
-                className="px-2 py-1 bg-[#16162a] border border-gray-700 rounded text-[10px] text-white font-mono"
+                className="px-2 py-1 bg-sunken border border-primary rounded text-[10px] text-primary font-mono"
                 step="0.01"
               />
             ))}
@@ -622,7 +622,7 @@ const JsonEditor = memo(({
 
   return (
     <div className="space-y-1">
-      <div className="flex items-center gap-1 text-[9px] text-gray-500">
+      <div className="flex items-center gap-1 text-[9px] text-muted">
         <Code size={10} />
         <span>JSON ({fieldType})</span>
       </div>
@@ -630,7 +630,7 @@ const JsonEditor = memo(({
         value={jsonString}
         onChange={(e) => { e.stopPropagation(); handleChange(e.target.value) }}
         onClick={(e) => e.stopPropagation()}
-        className="w-full px-2 py-1.5 bg-[#16162a] border border-gray-700 rounded text-[9px] text-gray-300 font-mono focus:outline-none focus:border-amber-500 resize-none"
+        className="w-full px-2 py-1.5 bg-sunken border border-primary rounded text-[9px] text-secondary font-mono focus:outline-none focus:border-amber-500 resize-none"
         rows={5}
       />
     </div>

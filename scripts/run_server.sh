@@ -108,7 +108,7 @@ if [ -n "$DETACH_FLAG" ]; then
     echo -e "  ${GREEN}●${NC} Neo4j Browser:   http://localhost:7474"
     echo ""
     echo -e "${CYAN}Connect Fleet Agent:${NC}"
-    echo -e "  cd fleet_agent_cpp && colcon build"
+    echo -e "  cd ros2_robot_agent && colcon build"
     echo ""
     echo -e "${YELLOW}Commands:${NC}"
     echo -e "  View logs:       docker-compose logs -f [service]"

@@ -169,7 +169,7 @@ server:
 EOF
 
     # Run agent in background
-    python3 -m fleet_agent --config "${config_file}" &
+    python3 -m robot_agent --config "${config_file}" &
     local pid=$!
     ROBOT_AGENT_PIDS="${ROBOT_AGENT_PIDS} ${pid}"
 

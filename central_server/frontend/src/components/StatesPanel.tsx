@@ -138,13 +138,13 @@ export default function StatesPanel({
             onChange={(e) => onAutoGenerateChange(e.target.checked)}
             className="w-4 h-4 rounded border-gray-500 bg-elevated text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
           />
-          <span className={`${headerClasses} text-gray-400 group-hover:text-gray-300`}>
+          <span className={`${headerClasses} text-secondary group-hover:text-primary`}>
             Auto-generate states from steps
           </span>
-          <Settings2 className="w-3 h-3 text-gray-600 group-hover:text-gray-500" />
+          <Settings2 className="w-3 h-3 text-muted group-hover:text-muted" />
         </label>
         {autoGenerateStates && (
-          <p className="text-[9px] text-gray-600 mt-1 ml-6">
+          <p className="text-[9px] text-muted mt-1 ml-6">
             Creates {stepIds.length * 3} states ({stepIds.length} steps × 3 phases)
           </p>
         )}
@@ -210,7 +210,7 @@ export default function StatesPanel({
         ) : (
           <button
             onClick={() => setShowAddCustom(true)}
-            className="w-full flex items-center justify-center gap-1.5 py-1.5 text-xs text-blue-400 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 rounded transition-colors"
+            className="w-full flex items-center justify-center gap-1.5 py-1.5 text-xs text-btn-blue bg-btn-blue hover:opacity-80 border border-btn-blue rounded transition-colors"
           >
             <Plus className="w-3 h-3" />
             Add Custom State
@@ -260,12 +260,12 @@ function StateSection({
     <div>
       <button
         onClick={onToggle}
-        className={`w-full ${headerClasses} flex items-center justify-between text-[10px] font-semibold text-gray-400 uppercase tracking-wider hover:bg-elevated transition-colors`}
+        className={`w-full ${headerClasses} flex items-center justify-between text-[10px] font-semibold text-secondary uppercase tracking-wider hover:bg-elevated transition-colors`}
       >
         <div className="flex items-center gap-1.5">
           {icon}
           <span>{title}</span>
-          <span className="text-gray-600 normal-case font-normal">({states.length})</span>
+          <span className="text-muted normal-case font-normal">({states.length})</span>
           {badge && (
             <span className="px-1.5 py-0.5 text-[8px] bg-blue-500/20 text-blue-400 rounded font-normal normal-case">
               {badge}
@@ -282,7 +282,7 @@ function StateSection({
       {expanded && (
         <div className={compact ? 'px-1 pb-1' : 'px-2 pb-2'}>
           {states.length === 0 ? (
-            <div className="px-2 py-2 text-[10px] text-gray-600 text-center">
+            <div className="px-2 py-2 text-[10px] text-muted text-center">
               No custom states defined
             </div>
           ) : (
@@ -342,14 +342,14 @@ function StateItem({
           type="text"
           value={editForm.name}
           onChange={(e) => setEditForm(prev => ({ ...prev, name: e.target.value }))}
-          className="w-full px-2 py-1 bg-base border border-primary rounded text-xs text-white focus:outline-none focus:border-blue-500"
+          className="w-full px-2 py-1 bg-base border border-primary rounded text-xs text-primary focus:outline-none focus:border-blue-500"
           placeholder="State name"
         />
         <input
           type="text"
           value={editForm.description}
           onChange={(e) => setEditForm(prev => ({ ...prev, description: e.target.value }))}
-          className="w-full px-2 py-1 bg-base border border-primary rounded text-xs text-gray-400 focus:outline-none focus:border-blue-500"
+          className="w-full px-2 py-1 bg-base border border-primary rounded text-xs text-secondary focus:outline-none focus:border-blue-500"
           placeholder="Description"
         />
         <input
@@ -362,7 +362,7 @@ function StateItem({
         <div className="flex justify-end gap-1">
           <button
             onClick={onCancel}
-            className="p-1 text-gray-500 hover:text-gray-400 rounded"
+            className="p-1 text-muted hover:text-secondary rounded"
           >
             <X className="w-3 h-3" />
           </button>
@@ -394,16 +394,16 @@ function StateItem({
       {/* State info */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
-          <span className={`${compact ? 'text-[10px]' : 'text-xs'} text-gray-300 truncate`}>
+          <span className={`${compact ? 'text-[10px]' : 'text-xs'} text-primary truncate`}>
             {state.name}
           </span>
           {state.phase && (
-            <span className="text-[8px] px-1 py-0.5 rounded bg-gray-700/50 text-gray-500">
+            <span className="text-[8px] px-1 py-0.5 rounded bg-gray-700/50 text-muted">
               {state.phase}
             </span>
           )}
         </div>
-        <div className="text-[9px] text-gray-600 truncate">{state.code}</div>
+        <div className="text-[9px] text-muted truncate">{state.code}</div>
         {state.semantic_tags && state.semantic_tags.length > 0 && (
           <div className="flex flex-wrap gap-0.5 mt-0.5">
             {state.semantic_tags.slice(0, 3).map(tag => (
@@ -412,7 +412,7 @@ function StateItem({
               </span>
             ))}
             {state.semantic_tags.length > 3 && (
-              <span className="text-[8px] text-gray-600">+{state.semantic_tags.length - 3}</span>
+              <span className="text-[8px] text-muted">+{state.semantic_tags.length - 3}</span>
             )}
           </div>
         )}
@@ -424,7 +424,7 @@ function StateItem({
           {onEdit && (
             <button
               onClick={onEdit}
-              className="p-1 text-gray-500 hover:text-blue-400 rounded"
+              className="p-1 text-muted hover:text-blue-400 rounded"
             >
               <Edit2 className="w-3 h-3" />
             </button>
@@ -432,7 +432,7 @@ function StateItem({
           {onDelete && (
             <button
               onClick={onDelete}
-              className="p-1 text-gray-500 hover:text-red-400 rounded"
+              className="p-1 text-muted hover:text-red-400 rounded"
             >
               <Trash2 className="w-3 h-3" />
             </button>
@@ -487,7 +487,7 @@ function AddStateForm({ onAdd, onCancel, existingCodes }: AddStateFormProps) {
 
   return (
     <div className="p-2 bg-elevated rounded-lg border border-primary space-y-2">
-      <div className="text-xs font-medium text-gray-400 mb-2">New Custom State</div>
+      <div className="text-xs font-medium text-secondary mb-2">New Custom State</div>
 
       <div className="flex gap-2">
         <input
@@ -497,7 +497,7 @@ function AddStateForm({ onAdd, onCancel, existingCodes }: AddStateFormProps) {
             setForm(prev => ({ ...prev, code: e.target.value }))
             setError(null)
           }}
-          className="flex-1 px-2 py-1 bg-base border border-primary rounded text-xs text-white focus:outline-none focus:border-blue-500"
+          className="flex-1 px-2 py-1 bg-base border border-primary rounded text-xs text-primary focus:outline-none focus:border-blue-500"
           placeholder="State code (e.g., waiting)"
         />
         <input
@@ -515,7 +515,7 @@ function AddStateForm({ onAdd, onCancel, existingCodes }: AddStateFormProps) {
           setForm(prev => ({ ...prev, name: e.target.value }))
           setError(null)
         }}
-        className="w-full px-2 py-1 bg-base border border-primary rounded text-xs text-white focus:outline-none focus:border-blue-500"
+        className="w-full px-2 py-1 bg-base border border-primary rounded text-xs text-primary focus:outline-none focus:border-blue-500"
         placeholder="Display name"
       />
 
@@ -523,7 +523,7 @@ function AddStateForm({ onAdd, onCancel, existingCodes }: AddStateFormProps) {
         type="text"
         value={form.description}
         onChange={(e) => setForm(prev => ({ ...prev, description: e.target.value }))}
-        className="w-full px-2 py-1 bg-base border border-primary rounded text-xs text-gray-400 focus:outline-none focus:border-blue-500"
+        className="w-full px-2 py-1 bg-base border border-primary rounded text-xs text-secondary focus:outline-none focus:border-blue-500"
         placeholder="Description (optional)"
       />
 
@@ -542,7 +542,7 @@ function AddStateForm({ onAdd, onCancel, existingCodes }: AddStateFormProps) {
       <div className="flex justify-end gap-2 pt-1">
         <button
           onClick={onCancel}
-          className="px-2 py-1 text-xs text-gray-500 hover:text-gray-400"
+          className="px-2 py-1 text-xs text-muted hover:text-secondary"
         >
           Cancel
         </button>

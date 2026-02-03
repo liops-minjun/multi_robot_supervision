@@ -31,12 +31,12 @@ const StartNode = memo(({ data, selected }: NodeProps<StartNodeData>) => {
         <div className="flex items-center gap-3">
           {/* Start icon - play triangle */}
           <div className="w-8 h-8 bg-white/10 rounded flex items-center justify-center backdrop-blur-sm">
-            <svg className="w-4 h-4 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 text-primary ml-0.5" fill="currentColor" viewBox="0 0 24 24">
               <path d="M8 5v14l11-7z" />
             </svg>
           </div>
           <div>
-            <span className="text-white font-bold tracking-wide">{data.label}</span>
+            <span className="text-primary font-bold tracking-wide">{data.label}</span>
             <p className="text-emerald-200/60 text-[10px] font-medium uppercase tracking-wider">Entry Point</p>
           </div>
         </div>

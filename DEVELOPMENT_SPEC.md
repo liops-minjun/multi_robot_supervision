@@ -204,7 +204,7 @@ fleet_system/
 │       └── Dockerfile
 │
 ├── robot_agent/
-│   ├── fleet_agent/
+│   ├── robot_agent/
 │   │   ├── __init__.py
 │   │   ├── agent.py                        # 메인 Agent 노드
 │   │   ├── config_loader.py                # config.yaml 로딩
@@ -476,7 +476,7 @@ cp /opt/ros/humble/share/nav2_msgs/action/NavigateToPose.action \
 ### 6.1 설정 파일
 
 ```yaml
-# /etc/fleet_agent/config.yaml (각 로봇에 배포)
+# /etc/robot_agent/config.yaml (각 로봇에 배포)
 
 robot_id: "forklift_001"
 server_url: "http://192.168.0.200:8080"

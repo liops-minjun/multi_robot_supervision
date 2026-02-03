@@ -155,7 +155,7 @@ communication:
 
 paths:
   definitions: "${PROJECT_DIR}/definitions"
-  action_graphs: "/tmp/fleet_agent/action_graphs"
+  action_graphs: "/tmp/robot_agent/action_graphs"
 
 timeouts:
   action_default_sec: 120.0
@@ -175,4 +175,4 @@ echo ""
 
 # Run the agent
 cd "${PROJECT_DIR}/robot_agent"
-python3 -m fleet_agent --config "$CONFIG_FILE"
+python3 -m robot_agent --config "$CONFIG_FILE"

@@ -112,7 +112,7 @@ const JointArrayEditor = memo(({
       {/* Array Elements - Always Visible */}
       <div className="space-y-1">
         {arrayValue.length === 0 ? (
-          <div className="p-3 bg-[#1a1a2e] rounded border border-gray-700">
+          <div className="p-3 bg-elevated rounded border border-primary">
             {liveJoints ? (
               // 텔레메트리 있을 때: 큰 초기화 버튼
               <div className="space-y-2">
@@ -123,7 +123,7 @@ const JointArrayEditor = memo(({
                   <Crosshair size={16} className="animate-pulse" />
                   현재 로봇 자세로 초기화 ({liveJoints.length}개 관절)
                 </button>
-                <p className="text-[9px] text-gray-500 text-center">
+                <p className="text-[9px] text-muted text-center">
                   또는 <button
                     onClick={(e) => { e.stopPropagation(); addElement() }}
                     className="text-blue-400 hover:underline"
@@ -133,7 +133,7 @@ const JointArrayEditor = memo(({
             ) : (
               // 텔레메트리 없을 때: 수동 추가만
               <div className="text-center">
-                <p className="text-[10px] text-gray-500 mb-2">배열이 비어있습니다</p>
+                <p className="text-[10px] text-muted mb-2">배열이 비어있습니다</p>
                 <button
                   onClick={(e) => { e.stopPropagation(); addElement() }}
                   className="px-3 py-1.5 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 rounded text-[10px] flex items-center gap-1 mx-auto"
@@ -156,7 +156,7 @@ const JointArrayEditor = memo(({
                 return (
                   <div key={idx} className="flex items-center gap-2 group">
                     {/* Index/Name */}
-                    <span className="text-[9px] text-gray-500 w-20 truncate" title={name}>
+                    <span className="text-[9px] text-muted w-20 truncate" title={name}>
                       {name}
                     </span>
 
@@ -166,12 +166,12 @@ const JointArrayEditor = memo(({
                       value={val}
                       onChange={(e) => { e.stopPropagation(); updateElement(idx, parseFloat(e.target.value) || 0) }}
                       onClick={(e) => e.stopPropagation()}
-                      className="flex-1 px-2 py-1 bg-[#1a1a2e] border border-gray-700 rounded text-[10px] text-white font-mono focus:outline-none focus:border-amber-500"
+                      className="flex-1 px-2 py-1 bg-elevated border border-primary rounded text-[10px] text-primary font-mono focus:outline-none focus:border-amber-500"
                       step="0.001"
                     />
 
                     {/* Degree conversion */}
-                    <span className="text-[8px] text-gray-600 w-12 text-right">
+                    <span className="text-[8px] text-muted w-12 text-right">
                       {formatNumber(val * 180 / Math.PI, 1)}°
                     </span>
 
@@ -185,7 +185,7 @@ const JointArrayEditor = memo(({
                     {/* Delete button */}
                     <button
                       onClick={(e) => { e.stopPropagation(); removeElement(idx) }}
-                      className="p-1 text-gray-600 hover:text-red-400 hover:bg-red-500/10 rounded opacity-0 group-hover:opacity-100 transition-all"
+                      className="p-1 text-muted hover:text-red-400 hover:bg-red-500/10 rounded opacity-0 group-hover:opacity-100 transition-all"
                     >
                       <Trash2 size={12} />
                     </button>
@@ -197,7 +197,7 @@ const JointArrayEditor = memo(({
             {/* Add button */}
             <button
               onClick={(e) => { e.stopPropagation(); addElement() }}
-              className="w-full py-1.5 bg-[#1a1a2e] hover:bg-[#2a2a4a] border border-dashed border-gray-700 hover:border-gray-600 rounded text-[10px] text-gray-500 hover:text-gray-400 flex items-center justify-center gap-1 transition-colors"
+              className="w-full py-1.5 bg-elevated hover:bg-surface border border-dashed border-primary hover:border-secondary rounded text-[10px] text-muted hover:text-secondary flex items-center justify-center gap-1 transition-colors"
             >
               <Plus size={12} />
               요소 추가

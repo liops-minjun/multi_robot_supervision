@@ -21,7 +21,7 @@ const StateEventNode = memo(({ data, selected }: NodeProps<StateEventNodeData>) 
     <div
       className={`
         relative min-w-[140px] rounded-lg overflow-visible
-        bg-[#1e1e2e] border-2
+        bg-surface border-2
         shadow-lg
         ${selected ? 'border-white/60 shadow-xl' : 'border-primary'}
         transition-all duration-150
@@ -34,22 +34,22 @@ const StateEventNode = memo(({ data, selected }: NodeProps<StateEventNodeData>) 
         style={{ backgroundColor: bgColor }}
       >
         {isStart && (
-          <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
         )}
         {isEnd && (
-          <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
         )}
         {isError && (
-          <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
         )}
-        <span className="text-xs font-bold text-white tracking-wider">{label}</span>
+        <span className="text-xs font-bold text-primary tracking-wider">{label}</span>
       </div>
 
       {/* State Section */}
@@ -57,7 +57,7 @@ const StateEventNode = memo(({ data, selected }: NodeProps<StateEventNodeData>) 
         {isStart ? (
           <div className="flex items-center justify-end">
             <div className="mr-3 flex-1 text-right">
-              <div className="text-[9px] text-gray-500 uppercase tracking-wider">Initial State</div>
+              <div className="text-[9px] text-muted uppercase tracking-wider">Initial State</div>
               <div className="text-xs text-green-400 font-medium">
                 {data.initialState || 'idle'}
               </div>
@@ -84,7 +84,7 @@ const StateEventNode = memo(({ data, selected }: NodeProps<StateEventNodeData>) 
               style={{ position: 'absolute', left: -8, zIndex: 50, pointerEvents: 'all' }}
             />
             <div className="ml-3 flex-1">
-              <div className="text-[9px] text-gray-500 uppercase tracking-wider">Final State</div>
+              <div className="text-[9px] text-muted uppercase tracking-wider">Final State</div>
               <div className={`text-xs font-medium ${isError ? 'text-red-400' : 'text-blue-400'}`}>
                 {data.finalState || (isError ? 'error' : 'idle')}
               </div>

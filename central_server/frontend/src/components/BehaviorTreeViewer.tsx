@@ -58,7 +58,7 @@ const ViewerActionNode = memo(({ data, selected }: NodeProps<any>) => {
     <div
       className={`
         min-w-[140px] rounded-lg overflow-hidden
-        bg-[#1e1e2e] border-2
+        bg-surface border-2
         transition-all duration-300
         ${glowClass}
       `}
@@ -73,7 +73,7 @@ const ViewerActionNode = memo(({ data, selected }: NodeProps<any>) => {
           className="w-2 h-2 rounded-sm flex-shrink-0"
           style={{ backgroundColor: color }}
         />
-        <span className="text-[10px] font-semibold text-white truncate flex-1">
+        <span className="text-[10px] font-semibold text-primary truncate flex-1">
           {data.label}
         </span>
         {isActive && (
@@ -95,11 +95,11 @@ const ViewerActionNode = memo(({ data, selected }: NodeProps<any>) => {
       <div className="px-2 py-1.5 space-y-0.5">
         {data.duringState && (
           <div className="flex items-center gap-1">
-            <span className="text-[9px] text-gray-500">state:</span>
+            <span className="text-[9px] text-muted">state:</span>
             <span className="text-[9px] text-yellow-400 font-mono">{data.duringState}</span>
           </div>
         )}
-        <div className="text-[9px] text-gray-600 font-mono truncate">
+        <div className="text-[9px] text-muted font-mono truncate">
           {data.server || data.subtype}
         </div>
       </div>
@@ -157,7 +157,7 @@ const ViewerEventNode = memo(({ data, selected }: NodeProps<any>) => {
     <div
       className={`
         min-w-[80px] rounded-lg overflow-hidden
-        bg-[#1e1e2e] border-2
+        bg-surface border-2
         transition-all duration-300
         ${isActive ? 'shadow-[0_0_15px_3px_rgba(34,211,238,0.6)]' : ''}
       `}
@@ -170,11 +170,11 @@ const ViewerEventNode = memo(({ data, selected }: NodeProps<any>) => {
         {isActive && (
           <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
         )}
-        <span className="text-[10px] font-bold text-white tracking-wider">
+        <span className="text-[10px] font-bold text-primary tracking-wider">
           {isStart ? 'START' : isError ? 'ERROR' : 'END'}
         </span>
         {isCompleted && (
-          <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+          <svg className="w-3 h-3 text-primary" fill="currentColor" viewBox="0 0 20 20">
             <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
           </svg>
         )}
@@ -377,7 +377,7 @@ function BehaviorTreeViewerInner({
 
   if (!behaviorTree) {
     return (
-      <div className={`flex items-center justify-center bg-base text-gray-500 ${className}`}>
+      <div className={`flex items-center justify-center bg-base text-muted ${className}`}>
         <p className="text-sm">No behavior tree selected</p>
       </div>
     )
@@ -407,7 +407,7 @@ function BehaviorTreeViewerInner({
         />
         {showControls && !compact && (
           <Controls
-            className="!bg-surface !border-primary !rounded-lg [&>button]:!bg-surface [&>button]:!border-primary [&>button]:!text-white [&>button:hover]:!bg-[#2a2a4a]"
+            className="!bg-surface !border-primary !rounded-lg [&>button]:!bg-surface [&>button]:!border-primary [&>button]:!text-primary [&>button:hover]:!bg-elevated"
           />
         )}
         {showMiniMap && !compact && (
@@ -458,7 +458,7 @@ export function BehaviorTreeMini({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between text-xs">
-        <span className="text-gray-400">{behaviorTree.name}</span>
+        <span className="text-secondary">{behaviorTree.name}</span>
         <span className="text-blue-400">
           {currentIndex + 1} / {totalSteps}
         </span>
@@ -482,7 +482,7 @@ export function BehaviorTreeMini({
         })}
       </div>
       {currentStepId && (
-        <p className="text-[10px] text-gray-500 truncate">
+        <p className="text-[10px] text-muted truncate">
           Current: {behaviorTree.steps.find(s => s.id === currentStepId)?.job_name || behaviorTree.steps.find(s => s.id === currentStepId)?.name || currentStepId}
         </p>
       )}

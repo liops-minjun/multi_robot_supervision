@@ -178,24 +178,24 @@ const PoseEditor = memo(({
 
           {/* Saved value display */}
           {poseValue && (
-            <div className="p-2 bg-gray-800/50 rounded border border-gray-700/50">
-              <div className="text-[8px] text-gray-500 mb-1">저장된 값</div>
+            <div className="p-2 bg-gray-800/50 rounded border border-primary/50">
+              <div className="text-[8px] text-muted mb-1">저장된 값</div>
               <div className="grid grid-cols-4 gap-2 text-[10px] font-mono">
                 <div>
-                  <span className="text-gray-500">x: </span>
+                  <span className="text-muted">x: </span>
                   <span className="text-amber-400">{formatNumber(poseValue.position.x)}</span>
                 </div>
                 <div>
-                  <span className="text-gray-500">y: </span>
+                  <span className="text-muted">y: </span>
                   <span className="text-amber-400">{formatNumber(poseValue.position.y)}</span>
                 </div>
                 <div>
-                  <span className="text-gray-500">z: </span>
+                  <span className="text-muted">z: </span>
                   <span className="text-amber-400">{formatNumber(poseValue.position.z)}</span>
                 </div>
                 {!isPoint && (
                   <div>
-                    <span className="text-gray-500">yaw: </span>
+                    <span className="text-muted">yaw: </span>
                     <span className="text-amber-400">{formatNumber(currentEuler.yaw, 1)}°</span>
                   </div>
                 )}
@@ -211,13 +211,13 @@ const PoseEditor = memo(({
           {/* Frame ID for stamped types */}
           {isStamped && (
             <div className="flex items-center gap-2">
-              <span className="text-[9px] text-gray-500 w-16">frame_id</span>
+              <span className="text-[9px] text-muted w-16">frame_id</span>
               <input
                 type="text"
                 value={frameId || ''}
                 onChange={(e) => { e.stopPropagation(); updateFrameId(e.target.value) }}
                 onClick={(e) => e.stopPropagation()}
-                className="flex-1 px-2 py-1 bg-[#16162a] border border-gray-700 rounded text-[10px] text-white focus:outline-none focus:border-amber-500"
+                className="flex-1 px-2 py-1 bg-sunken border border-primary rounded text-[10px] text-primary focus:outline-none focus:border-amber-500"
                 placeholder="map"
               />
             </div>
@@ -225,17 +225,17 @@ const PoseEditor = memo(({
 
           {/* Position inputs */}
           <div>
-            <div className="text-[9px] text-gray-500 mb-1">Position</div>
+            <div className="text-[9px] text-muted mb-1">Position</div>
             <div className="grid grid-cols-3 gap-2">
               {(['x', 'y', 'z'] as const).map((axis) => (
                 <div key={axis}>
-                  <label className="text-[8px] text-gray-500 uppercase">{axis}</label>
+                  <label className="text-[8px] text-muted uppercase">{axis}</label>
                   <input
                     type="number"
                     value={poseValue?.position[axis] ?? 0}
                     onChange={(e) => { e.stopPropagation(); updatePosition(axis, parseFloat(e.target.value) || 0) }}
                     onClick={(e) => e.stopPropagation()}
-                    className="w-full px-2 py-1 bg-[#16162a] border border-gray-700 rounded text-[10px] text-white focus:outline-none focus:border-amber-500 font-mono"
+                    className="w-full px-2 py-1 bg-sunken border border-primary rounded text-[10px] text-primary focus:outline-none focus:border-amber-500 font-mono"
                     step="0.01"
                   />
                 </div>
@@ -246,17 +246,17 @@ const PoseEditor = memo(({
           {/* Orientation inputs (not for point types) */}
           {!isPoint && (
             <div>
-              <div className="text-[9px] text-gray-500 mb-1">Orientation (degrees)</div>
+              <div className="text-[9px] text-muted mb-1">Orientation (degrees)</div>
               <div className="grid grid-cols-3 gap-2">
                 {(['roll', 'pitch', 'yaw'] as const).map((axis) => (
                   <div key={axis}>
-                    <label className="text-[8px] text-gray-500 uppercase">{axis}</label>
+                    <label className="text-[8px] text-muted uppercase">{axis}</label>
                     <input
                       type="number"
                       value={formatNumber(currentEuler[axis], 1)}
                       onChange={(e) => { e.stopPropagation(); updateOrientation(axis, parseFloat(e.target.value) || 0) }}
                       onClick={(e) => e.stopPropagation()}
-                      className="w-full px-2 py-1 bg-[#16162a] border border-gray-700 rounded text-[10px] text-white focus:outline-none focus:border-amber-500 font-mono"
+                      className="w-full px-2 py-1 bg-sunken border border-primary rounded text-[10px] text-primary focus:outline-none focus:border-amber-500 font-mono"
                       step="1"
                     />
                   </div>
@@ -277,7 +277,7 @@ const PoseEditor = memo(({
             ), null, 2)}
             onChange={(e) => { e.stopPropagation(); handleJsonChange(e.target.value) }}
             onClick={(e) => e.stopPropagation()}
-            className="w-full px-2 py-1.5 bg-[#16162a] border border-gray-700 rounded text-[9px] text-gray-300 font-mono focus:outline-none focus:border-amber-500 resize-none"
+            className="w-full px-2 py-1.5 bg-sunken border border-primary rounded text-[9px] text-secondary font-mono focus:outline-none focus:border-amber-500 resize-none"
             rows={isStamped ? 10 : 7}
           />
         </div>
@@ -299,7 +299,7 @@ const ModeButton = memo(({ icon: Icon, label, mode, currentMode, onClick }: {
     className={`flex-1 py-1 px-2 rounded text-[9px] flex items-center justify-center gap-1 transition-colors ${
       currentMode === mode
         ? 'bg-purple-500/30 text-purple-400'
-        : 'text-gray-500 hover:text-gray-300 hover:bg-gray-700/50'
+        : 'text-muted hover:text-secondary hover:bg-gray-700/50'
     }`}
   >
     <Icon size={10} />

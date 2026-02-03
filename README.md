@@ -134,7 +134,7 @@ sudo apt update && sudo apt install -y libmsquic
 ### 2. 빌드
 
 ```bash
-cd fleet_agent_cpp
+cd ros2_robot_agent
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install
 source install/setup.bash
@@ -144,10 +144,10 @@ source install/setup.bash
 
 ```bash
 # 서버 IP 지정하여 실행 (Agent ID는 서버가 자동 할당)
-ros2 launch fleet_agent_cpp fleet_agent.launch.py server_ip:=<서버_IP>
+ros2 launch ros2_robot_agent robot_agent.launch.py server_ip:=<서버_IP>
 
 # 예시: 서버가 192.168.0.100인 경우
-ros2 launch fleet_agent_cpp fleet_agent.launch.py server_ip:=192.168.0.100
+ros2 launch ros2_robot_agent robot_agent.launch.py server_ip:=192.168.0.100
 ```
 
 ## Launch 파라미터
@@ -164,10 +164,10 @@ ros2 launch fleet_agent_cpp fleet_agent.launch.py server_ip:=192.168.0.100
 
 ```bash
 # 설정 파일 복사
-cp install/fleet_agent_cpp/share/fleet_agent_cpp/config/agent.yaml ~/my_config.yaml
+cp install/ros2_robot_agent/share/ros2_robot_agent/config/agent.yaml ~/my_config.yaml
 
 # 수정 후 실행
-ros2 launch fleet_agent_cpp fleet_agent.launch.py \
+ros2 launch ros2_robot_agent robot_agent.launch.py \
   config:=~/my_config.yaml \
   server_ip:=192.168.0.100
 ```
@@ -192,8 +192,8 @@ communication:
   heartbeat_interval_ms: 100       # 하트비트 주기
 
 storage:
-  behavior_trees_path: "/tmp/fleet_agent/graphs"
-  agent_id_path: "/tmp/fleet_agent/agent_id"  # 서버 할당 ID 저장 경로
+  behavior_trees_path: "/tmp/robot_agent/graphs"
+  agent_id_path: "/tmp/robot_agent/agent_id"  # 서버 할당 ID 저장 경로
 ```
 
 ## 연결 확인
@@ -421,8 +421,8 @@ multi-robot-supervision/
 │   ├── package.json
 │   └── Dockerfile
 │
-├── fleet_agent_cpp/                # C++ Agent (ROS2)
-│   ├── include/fleet_agent/
+├── ros2_robot_agent/                # C++ Agent (ROS2)
+│   ├── include/robot_agent/
 │   │   ├── interfaces/             # 인터페이스 (추상 클래스)
 │   │   │   ├── transport.hpp       # ITransport
 │   │   │   ├── capability_scanner.hpp
@@ -454,7 +454,7 @@ multi-robot-supervision/
 sudo ufw allow 9444/udp
 
 # 2. Agent 로그 확인
-ros2 launch fleet_agent_cpp fleet_agent.launch.py server_ip:=... log_level:=debug
+ros2 launch ros2_robot_agent robot_agent.launch.py server_ip:=... log_level:=debug
 
 # 3. 네트워크 연결 확인
 ping <서버_IP>
@@ -487,7 +487,7 @@ agent:
   use_server_assigned_id: true    # 서버 할당 ID 사용
 
 storage:
-  agent_id_path: "/tmp/fleet_agent/agent_id"  # 할당받은 ID 저장 경로
+  agent_id_path: "/tmp/robot_agent/agent_id"  # 할당받은 ID 저장 경로
 ```
 
 ## Docker 권한 오류

@@ -54,7 +54,7 @@ const ManualNode = memo(({ data, selected }: NodeProps<ManualNodeData>) => {
               </svg>
             </div>
             <div className="flex-1">
-              <span className="text-white font-semibold text-sm">{data.label}</span>
+              <span className="text-primary font-semibold text-sm">{data.label}</span>
             </div>
             {status === 'waiting' && (
               <span className="relative flex h-2 w-2">

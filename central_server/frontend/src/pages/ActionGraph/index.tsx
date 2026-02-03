@@ -299,7 +299,7 @@ function DeploymentBadge({ status }: { status: string }) {
     outdated: { color: 'bg-orange-500/20 text-orange-400 border-orange-500/30', icon: AlertCircle },
     failed: { color: 'bg-red-500/20 text-red-400 border-red-500/30', icon: AlertCircle },
     deploying: { color: 'bg-blue-500/20 text-blue-400 border-blue-500/30', icon: Clock },
-  }[status] || { color: 'bg-gray-500/20 text-gray-400 border-gray-500/30', icon: Clock }
+  }[status] || { color: 'bg-gray-500/20 text-secondary border-gray-500/30', icon: Clock }
 
   const Icon = config.icon
   return (
@@ -1277,7 +1277,7 @@ function ActionGraphEditor() {
         <div className="flex-1 overflow-y-auto">
           <div className="py-2">
             <div className="px-3 py-2 flex items-center justify-between">
-              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+              <span className="text-xs font-semibold text-secondary uppercase tracking-wider">
                 템플릿
               </span>
               <button
@@ -1290,9 +1290,9 @@ function ActionGraphEditor() {
             </div>
 
             {templatesLoading ? (
-              <div className="px-3 py-4 text-center text-gray-500 text-sm">로딩 중...</div>
+              <div className="px-3 py-4 text-center text-muted text-sm">로딩 중...</div>
             ) : allTemplates.length === 0 ? (
-              <div className="px-3 py-4 text-center text-gray-500 text-sm">
+              <div className="px-3 py-4 text-center text-muted text-sm">
                 템플릿이 없습니다. 새로 생성하세요.
               </div>
             ) : (
@@ -1304,7 +1304,7 @@ function ActionGraphEditor() {
                     className={`w-full px-3 py-2 flex items-center gap-2 text-left transition-colors cursor-pointer group ${
                       selectedTemplateId === template.id
                         ? 'bg-blue-600/20 text-blue-400 border-l-2 border-blue-500'
-                        : 'text-gray-400 hover:bg-elevated hover:text-white'
+                        : 'text-secondary hover:bg-elevated hover:text-primary'
                     }`}
                   >
                     <FileCode size={14} className="flex-shrink-0" />
@@ -1321,7 +1321,7 @@ function ActionGraphEditor() {
                           deleteTemplate.mutate(template.id)
                         }
                       }}
-                      className="p-1 text-gray-600 hover:text-red-400 hover:bg-red-500/20 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="p-1 text-muted hover:text-red-400 hover:bg-red-500/20 rounded opacity-0 group-hover:opacity-100 transition-opacity"
                       title="템플릿 삭제"
                     >
                       <Trash2 size={12} />
@@ -1337,7 +1337,7 @@ function ActionGraphEditor() {
         {selectedTemplate && (
           <div className="border-t border-primary p-3 bg-elevated/50">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-semibold text-gray-400 uppercase">선택된 템플릿</span>
+              <span className="text-xs font-semibold text-secondary uppercase">선택된 템플릿</span>
               <button
                 onClick={() => setShowAssignModal(true)}
                 className="text-xs px-2 py-1 bg-blue-600/20 text-blue-400 rounded hover:bg-blue-600/30 flex items-center gap-1"
@@ -1346,13 +1346,13 @@ function ActionGraphEditor() {
                 Assign
               </button>
             </div>
-            <div className="text-sm text-white font-medium truncate">{selectedTemplate.name}</div>
-            <div className="text-xs text-gray-500 mt-1">
+            <div className="text-sm text-primary font-medium truncate">{selectedTemplate.name}</div>
+            <div className="text-xs text-muted mt-1">
               v{selectedTemplate.version}
             </div>
             {templateAssignments.length > 0 && (
               <div className="mt-2 pt-2 border-t border-primary/50">
-                <div className="text-xs text-gray-500 mb-1">
+                <div className="text-xs text-muted mb-1">
                   Assigned to {templateAssignments.length} agent(s)
                 </div>
                 <div className="flex flex-wrap gap-1">
@@ -1362,7 +1362,7 @@ function ActionGraphEditor() {
                     </span>
                   ))}
                   {templateAssignments.length > 3 && (
-                    <span className="text-[10px] px-1.5 py-0.5 bg-gray-500/20 text-gray-400 rounded">
+                    <span className="text-[10px] px-1.5 py-0.5 bg-gray-500/20 text-secondary rounded">
                       +{templateAssignments.length - 3} more
                     </span>
                   )}
@@ -1421,14 +1421,14 @@ function ActionGraphEditor() {
                     </span>
                   ))}
                   {availableStates.length > 5 && (
-                    <span className="px-2 py-0.5 rounded text-[10px] text-gray-500">
+                    <span className="px-2 py-0.5 rounded text-[10px] text-muted">
                       +{availableStates.length - 5}
                     </span>
                   )}
                 </div>
               </>
             ) : (
-              <div className="text-[10px] text-gray-500 italic">
+              <div className="text-[10px] text-muted italic">
                 상태 정의 없음
               </div>
             )}
@@ -1437,13 +1437,13 @@ function ActionGraphEditor() {
           {/* Agent Filter */}
           <div className="px-3 py-2 border-b border-primary">
             <div className="flex items-center gap-2 mb-1.5">
-              <Cpu size={12} className="text-gray-400" />
-              <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Agent</span>
+              <Cpu size={12} className="text-secondary" />
+              <span className="text-[10px] font-semibold text-secondary uppercase tracking-wider">Agent</span>
             </div>
             <select
               value={selectedAgentFilter || ''}
               onChange={(e) => setSelectedAgentFilter(e.target.value || null)}
-              className="w-full px-2 py-1.5 bg-elevated border border-primary rounded-lg text-xs text-white focus:outline-none focus:border-blue-500 cursor-pointer"
+              className="w-full px-2 py-1.5 bg-elevated border border-primary rounded-lg text-xs text-primary focus:outline-none focus:border-blue-500 cursor-pointer"
             >
               <option value="">All Agents</option>
               {agents?.map((agent) => (
@@ -1491,7 +1491,7 @@ function ActionGraphEditor() {
                           className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium ${
                             agent.status === 'online'
                               ? 'bg-green-500/20 text-green-300 border border-green-500/40'
-                              : 'bg-gray-600/20 text-gray-400 border border-gray-500/30'
+                              : 'bg-gray-600/20 text-secondary border border-gray-500/30'
                           }`}
                         >
                           <div className={`w-1.5 h-1.5 rounded-full ${
@@ -1522,7 +1522,7 @@ function ActionGraphEditor() {
                   </div>
                 )}
                 {compatibleAgentsData.agents?.filter(a => !a.has_all_capabilities).length > 0 && (
-                  <div className="text-[9px] text-gray-500 mt-1.5">
+                  <div className="text-[9px] text-muted mt-1.5">
                     +{compatibleAgentsData.agents.filter(a => !a.has_all_capabilities).length}개 부분 호환
                   </div>
                 )}
@@ -1533,13 +1533,13 @@ function ActionGraphEditor() {
           {/* Node Palette */}
           <div className="flex-1 overflow-y-auto">
             {nodePalette.length === 0 ? (
-              <div className="p-4 text-center text-gray-500 text-xs">No nodes found</div>
+              <div className="p-4 text-center text-muted text-xs">No nodes found</div>
             ) : (
               nodePalette.map(category => (
                 <div key={category.category}>
                   <button
                     onClick={() => toggleCategory(category.category)}
-                    className="w-full px-3 py-2 flex items-center justify-between text-[10px] font-semibold text-gray-400 uppercase tracking-wider hover:bg-elevated"
+                    className="w-full px-3 py-2 flex items-center justify-between text-[10px] font-semibold text-secondary uppercase tracking-wider hover:bg-elevated"
                   >
                     <div className="flex items-center gap-1.5">
                       {category.icon}
@@ -1570,7 +1570,7 @@ function ActionGraphEditor() {
                             style={{ backgroundColor: item.color }}
                           />
                           <div className="flex-1 min-w-0">
-                            <span className="text-xs text-gray-300 block truncate">{item.label}</span>
+                            <span className="text-xs text-primary block truncate">{item.label}</span>
                             {item.duringState && (
                               <span className="text-[9px] text-yellow-500">{item.duringState}</span>
                             )}
@@ -1605,13 +1605,13 @@ function ActionGraphEditor() {
         <div className="h-12 bg-surface border-b border-primary flex items-center justify-between px-4">
           <div className="flex items-center gap-2">
             <Zap className="w-5 h-5 text-blue-400" />
-            <span className="font-semibold text-white">Behavior Tree Templates</span>
+            <span className="font-semibold text-primary">Behavior Tree Templates</span>
             {selectedTemplate && (
               <>
-                <span className="text-gray-500">/</span>
+                <span className="text-muted">/</span>
                 <FileCode className="w-4 h-4 text-blue-400" />
                 <span className="text-blue-400 text-sm">{selectedTemplate.name}</span>
-                <span className="text-gray-500 text-xs ml-2">v{selectedTemplate.version}</span>
+                <span className="text-muted text-xs ml-2">v{selectedTemplate.version}</span>
               </>
             )}
           </div>
@@ -1625,11 +1625,11 @@ function ActionGraphEditor() {
                 </div>
               )}
               {/* Auto-save status indicator */}
-              <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm ${
-                saveStatus === 'saving' ? 'bg-blue-600/20 text-blue-400' :
-                saveStatus === 'saved' ? 'bg-green-600/20 text-green-400' :
-                saveStatus === 'error' ? 'bg-red-600/20 text-red-400' :
-                'bg-zinc-700/50 text-zinc-400'
+              <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border ${
+                saveStatus === 'saving' ? 'bg-btn-blue text-btn-blue border-btn-blue' :
+                saveStatus === 'saved' ? 'bg-btn-green text-btn-green border-btn-green' :
+                saveStatus === 'error' ? 'bg-btn-red text-btn-red border-btn-red' :
+                'bg-elevated text-secondary border-primary'
               }`}>
                 {saveStatus === 'saving' ? (
                   <>
@@ -1657,7 +1657,7 @@ function ActionGraphEditor() {
               <button
                 onClick={handleSave}
                 disabled={saveTemplate.isPending || saveStatus === 'saving'}
-                className="p-1.5 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/50 rounded-md transition-colors disabled:opacity-50"
+                className="p-1.5 text-secondary hover:text-primary hover:bg-elevated border border-transparent hover:border-primary rounded-md transition-colors disabled:opacity-50"
                 title="수동 저장"
               >
                 <Save size={16} />
@@ -1706,10 +1706,10 @@ function ActionGraphEditor() {
                 connectionLineType={ConnectionLineType.SmoothStep}
               >
                 <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="#2a2a4a" />
-                <Controls className="!bg-surface !border-primary !rounded-lg [&>button]:!bg-surface [&>button]:!border-primary [&>button]:!text-white [&>button:hover]:!bg-[#2a2a4a]" />
+                <Controls className="!bg-surface !border-primary !rounded-lg [&>button]:!bg-surface [&>button]:!border-primary [&>button]:!text-primary [&>button:hover]:!bg-elevated" />
                 {!bottomPanelTab && (
                   <Panel position="bottom-center" className="mb-4">
-                    <div className="bg-surface/90 backdrop-blur-sm px-4 py-2 rounded-lg border border-primary text-xs text-gray-400">
+                    <div className="bg-surface/90 backdrop-blur-sm px-4 py-2 rounded-lg border border-primary text-xs text-secondary">
                       Drag action servers to canvas to build workflow
                     </div>
                   </Panel>
@@ -1718,15 +1718,15 @@ function ActionGraphEditor() {
             ) : (
               <div className="h-full flex items-center justify-center">
                 <div className="text-center">
-                  <Layout className="w-16 h-16 mx-auto mb-4 text-gray-700" />
-                  <h2 className="text-xl font-semibold text-gray-400 mb-2">템플릿을 선택하세요</h2>
-                  <p className="text-gray-600 text-sm max-w-md">
+                  <Layout className="w-16 h-16 mx-auto mb-4 text-muted" />
+                  <h2 className="text-xl font-semibold text-secondary mb-2">템플릿을 선택하세요</h2>
+                  <p className="text-muted text-sm max-w-md">
                     왼쪽 패널에서 템플릿을 선택하여 워크플로우를 확인하고 편집하거나,
                     새 템플릿을 생성하세요.
                   </p>
                   <button
                     onClick={() => setShowCreateModal(true)}
-                    className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 inline-flex items-center gap-2"
+                    className="mt-4 px-4 py-2 bg-blue-600 text-primary rounded-lg hover:bg-blue-700 inline-flex items-center gap-2"
                   >
                     <Plus size={16} />
                     Create New Template
@@ -1747,7 +1747,7 @@ function ActionGraphEditor() {
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
                       bottomPanelTab === 'telemetry'
                         ? 'bg-green-500/20 text-green-400'
-                        : 'text-gray-400 hover:text-green-400 hover:bg-green-500/10'
+                        : 'text-secondary hover:text-green-400 hover:bg-green-500/10'
                     }`}
                   >
                     <Radio size={12} className={bottomPanelTab === 'telemetry' ? 'animate-pulse' : ''} />
@@ -1758,7 +1758,7 @@ function ActionGraphEditor() {
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
                       bottomPanelTab === 'assignments'
                         ? 'bg-blue-500/20 text-blue-400'
-                        : 'text-gray-400 hover:text-blue-400 hover:bg-blue-500/10'
+                        : 'text-secondary hover:text-blue-400 hover:bg-blue-500/10'
                     }`}
                   >
                     <Link2 size={12} />
@@ -1773,7 +1773,7 @@ function ActionGraphEditor() {
                 {bottomPanelTab && (
                   <button
                     onClick={() => setBottomPanelTab(null)}
-                    className="p-1 text-gray-500 hover:text-white hover:bg-elevated rounded transition-colors"
+                    className="p-1 text-muted hover:text-primary hover:bg-elevated rounded transition-colors"
                   >
                     <ChevronDown size={14} />
                   </button>
@@ -1795,7 +1795,7 @@ function ActionGraphEditor() {
                       {/* Assigned Agents */}
                       <div className="flex-shrink-0 w-72">
                         <div className="flex items-center justify-between mb-2">
-                          <h3 className="text-xs font-semibold text-gray-400 uppercase">할당된 에이전트</h3>
+                          <h3 className="text-xs font-semibold text-secondary uppercase">할당된 에이전트</h3>
                           <button
                             onClick={() => setShowAssignModal(true)}
                             className="p-1 text-blue-400 hover:bg-blue-500/20 rounded"
@@ -1805,7 +1805,7 @@ function ActionGraphEditor() {
                           </button>
                         </div>
                         {templateAssignments.length === 0 ? (
-                          <div className="text-xs text-gray-500 p-3 bg-elevated rounded-lg">
+                          <div className="text-xs text-muted p-3 bg-elevated rounded-lg">
                             할당된 에이전트 없음
                           </div>
                         ) : (
@@ -1814,7 +1814,7 @@ function ActionGraphEditor() {
                               <div key={a.id} className="flex items-center justify-between p-2 bg-elevated rounded-lg">
                                 <div className="flex items-center gap-2">
                                   <Cpu size={12} className="text-green-400" />
-                                  <span className="text-xs text-white">{a.agent_name}</span>
+                                  <span className="text-xs text-primary">{a.agent_name}</span>
                                 </div>
                                 <button
                                   onClick={() => unassignTemplate.mutate({ templateId: selectedTemplate.id, agentId: a.agent_id })}
@@ -1832,7 +1832,7 @@ function ActionGraphEditor() {
                       {/* Compatible Agents */}
                       {compatibleAgentsData && (
                         <div className="flex-shrink-0 w-72">
-                          <h3 className="text-xs font-semibold text-gray-400 uppercase mb-2">호환 에이전트</h3>
+                          <h3 className="text-xs font-semibold text-secondary uppercase mb-2">호환 에이전트</h3>
                           <div className="space-y-1.5 max-h-32 overflow-y-auto">
                             {(compatibleAgentsData.agents || [])
                               .filter(a => a.has_all_capabilities && !templateAssignments.some(ta => ta.agent_id === a.agent_id))
@@ -1840,7 +1840,7 @@ function ActionGraphEditor() {
                                 <div key={a.agent_id} className="flex items-center justify-between p-2 bg-elevated rounded-lg">
                                   <div className="flex items-center gap-2">
                                     <Cpu size={12} className="text-purple-400" />
-                                    <span className="text-xs text-white">{a.agent_name}</span>
+                                    <span className="text-xs text-primary">{a.agent_name}</span>
                                   </div>
                                   <button
                                     onClick={() => assignTemplate.mutate({ templateId: selectedTemplate.id, agentId: a.agent_id })}
@@ -1851,7 +1851,7 @@ function ActionGraphEditor() {
                                 </div>
                               ))}
                             {(compatibleAgentsData.agents || []).filter(a => a.has_all_capabilities && !templateAssignments.some(ta => ta.agent_id === a.agent_id)).length === 0 && (
-                              <div className="text-xs text-gray-500 p-3 bg-elevated rounded-lg">
+                              <div className="text-xs text-muted p-3 bg-elevated rounded-lg">
                                 추가 호환 에이전트 없음
                               </div>
                             )}
@@ -1894,10 +1894,10 @@ function ActionGraphEditor() {
           // Debug: Modal was triggered but no template selected
           <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
             <div className="bg-surface rounded-xl shadow-2xl p-6 border border-primary">
-              <p className="text-white mb-4">Error: No template selected</p>
+              <p className="text-primary mb-4">Error: No template selected</p>
               <button
                 onClick={() => setShowAssignModal(false)}
-                className="px-4 py-2 bg-blue-600 text-white rounded"
+                className="px-4 py-2 bg-blue-600 text-primary rounded"
               >
                 Close
               </button>
@@ -2170,8 +2170,8 @@ function CreateTemplateModal({
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
       <div className="bg-surface rounded-xl shadow-2xl w-full max-w-md border border-primary">
         <div className="px-6 py-4 border-b border-primary flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-white">Create New Template</h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-white">
+          <h2 className="text-lg font-semibold text-primary">Create New Template</h2>
+          <button onClick={onClose} className="text-muted hover:text-primary">
             <X size={20} />
           </button>
         </div>
@@ -2193,48 +2193,48 @@ function CreateTemplateModal({
           )}
 
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">템플릿 ID</label>
+            <label className="block text-sm font-medium text-primary mb-1">템플릿 ID</label>
             <input
               type="text"
               value={formData.id}
               onChange={e => setFormData(prev => ({ ...prev, id: e.target.value }))}
               placeholder="예: pick_and_place"
-              className="w-full px-3 py-2 bg-elevated border border-primary rounded-lg text-white placeholder-gray-600"
+              className="w-full px-3 py-2 bg-elevated border border-primary rounded-lg text-primary placeholder-gray-600"
               required
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">이름</label>
+            <label className="block text-sm font-medium text-primary mb-1">이름</label>
             <input
               type="text"
               value={formData.name}
               onChange={e => setFormData(prev => ({ ...prev, name: e.target.value }))}
               placeholder="예: Pick and Place"
-              className="w-full px-3 py-2 bg-elevated border border-primary rounded-lg text-white placeholder-gray-600"
+              className="w-full px-3 py-2 bg-elevated border border-primary rounded-lg text-primary placeholder-gray-600"
               required
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">설명</label>
+            <label className="block text-sm font-medium text-primary mb-1">설명</label>
             <textarea
               value={formData.description}
               onChange={e => setFormData(prev => ({ ...prev, description: e.target.value }))}
               placeholder="선택사항..."
-              className="w-full px-3 py-2 bg-elevated border border-primary rounded-lg text-white resize-none placeholder-gray-600"
+              className="w-full px-3 py-2 bg-elevated border border-primary rounded-lg text-primary resize-none placeholder-gray-600"
               rows={2}
             />
           </div>
 
           <div className="flex justify-end gap-3 pt-4">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-secondary hover:text-primary">
               취소
             </button>
             <button
               type="submit"
               disabled={createTemplate.isPending}
-              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              className="px-6 py-2 bg-blue-600 text-primary rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
               {createTemplate.isPending ? '생성 중...' : '템플릿 생성'}
             </button>
@@ -2322,10 +2322,10 @@ function AssignTemplateModal({
       <div className="bg-surface rounded-xl shadow-2xl w-full max-w-lg border border-primary">
         <div className="px-6 py-4 border-b border-primary flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-white">Assign Template</h2>
-            <p className="text-sm text-gray-500 mt-0.5">{template.name}</p>
+            <h2 className="text-lg font-semibold text-primary">Assign Template</h2>
+            <p className="text-sm text-muted mt-0.5">{template.name}</p>
           </div>
-          <button onClick={onClose} className="text-gray-500 hover:text-white">
+          <button onClick={onClose} className="text-muted hover:text-primary">
             <X size={20} />
           </button>
         </div>
@@ -2333,7 +2333,7 @@ function AssignTemplateModal({
         <div className="p-6">
           {/* Show required action types with checkmarks */}
           <div className="mb-5 p-4 bg-elevated rounded-lg border border-primary">
-            <div className="text-xs text-gray-400 mb-3 font-medium uppercase tracking-wider">
+            <div className="text-xs text-secondary mb-3 font-medium uppercase tracking-wider">
               Required Action Types ({requiredActionTypes.length})
             </div>
             {requiredActionTypes.length > 0 ? (
@@ -2341,12 +2341,12 @@ function AssignTemplateModal({
                 {requiredActionTypes.map(at => (
                   <div key={at} className="flex items-center gap-2 text-sm">
                     <Check size={14} className="text-purple-400" />
-                    <span className="text-gray-300 font-mono text-xs">{at}</span>
+                    <span className="text-primary font-mono text-xs">{at}</span>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="flex items-center gap-2 text-sm text-gray-500">
+              <div className="flex items-center gap-2 text-sm text-muted">
                 <AlertCircle size={14} />
                 <span className="italic">No actions in this template. Add actions to enable assignment.</span>
               </div>
@@ -2354,15 +2354,15 @@ function AssignTemplateModal({
           </div>
 
           {/* Agent list */}
-          <div className="text-xs text-gray-400 mb-2 font-medium uppercase tracking-wider">
+          <div className="text-xs text-secondary mb-2 font-medium uppercase tracking-wider">
             Agents ({sortedAgents.filter(a => a.has_all_capabilities).length} compatible)
           </div>
 
           <div className="space-y-2 max-h-72 overflow-y-auto">
             {compatibleLoading ? (
-              <div className="text-center py-8 text-gray-500">Loading agents...</div>
+              <div className="text-center py-8 text-muted">Loading agents...</div>
             ) : sortedAgents.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
+              <div className="text-center py-8 text-muted">
                 {requiredActionTypes.length === 0
                   ? 'Add actions to template first'
                   : 'No agents registered yet'}
@@ -2392,7 +2392,7 @@ function AssignTemplateModal({
                         }`} />
                         <div>
                           <div className="flex items-center gap-2">
-                            <span className="text-sm text-white font-medium">{agent.agent_name}</span>
+                            <span className="text-sm text-primary font-medium">{agent.agent_name}</span>
                             {isCompatible ? (
                               <span className="text-[9px] px-1.5 py-0.5 bg-green-500/20 text-green-400 rounded flex items-center gap-1">
                                 <Check size={10} />
@@ -2415,7 +2415,7 @@ function AssignTemplateModal({
                             ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
                             : isCompatible
                               ? 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30'
-                              : 'bg-gray-500/10 text-gray-600 cursor-not-allowed'
+                              : 'bg-gray-500/10 text-muted cursor-not-allowed'
                         }`}
                       >
                         {isAssigned ? (
@@ -2458,7 +2458,7 @@ function AssignTemplateModal({
                           return assignment && (
                             <div className="flex items-center gap-2 text-xs">
                               <DeploymentBadge status={assignment.deployment_status} />
-                              <span className="text-gray-500">
+                              <span className="text-muted">
                                 v{assignment.server_version}
                                 {assignment.deployed_version && ` (deployed: v${assignment.deployed_version})`}
                               </span>
@@ -2476,7 +2476,7 @@ function AssignTemplateModal({
           <div className="mt-4 pt-4 border-t border-primary flex justify-end">
             <button
               onClick={onClose}
-              className="px-4 py-2 bg-[#2a2a4a] text-white rounded-lg hover:bg-[#3a3a5a]"
+              className="px-4 py-2 bg-surface text-primary rounded-lg hover:bg-elevated"
             >
               Done
             </button>
@@ -2577,15 +2577,15 @@ function AddStateModal({
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
       <div className="bg-surface rounded-xl shadow-2xl w-full max-w-lg border border-primary">
         <div className="px-6 py-4 border-b border-primary flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-white">Manage States</h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-white">
+          <h2 className="text-lg font-semibold text-primary">Manage States</h2>
+          <button onClick={onClose} className="text-muted hover:text-primary">
             <X size={20} />
           </button>
         </div>
 
         <div className="p-6 space-y-5">
           <div className="space-y-3">
-            <label className="block text-xs text-gray-400 uppercase tracking-wider">Add New State</label>
+            <label className="block text-xs text-secondary uppercase tracking-wider">Add New State</label>
             <form onSubmit={handleAddState} className="space-y-2">
               <div className="flex gap-2">
                 <input
@@ -2596,18 +2596,18 @@ function AddStateModal({
                     setError('')
                   }}
                   placeholder="State name"
-                  className="flex-1 px-3 py-2 bg-elevated border border-primary rounded-lg text-white text-sm"
+                  className="flex-1 px-3 py-2 bg-elevated border border-primary rounded-lg text-primary text-sm"
                   autoFocus
                 />
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm"
+                  className="px-4 py-2 bg-green-600 text-primary rounded-lg hover:bg-green-700 text-sm"
                 >
                   Add
                 </button>
               </div>
               <div className="flex items-center gap-3">
-                <span className="text-xs text-gray-500">Color:</span>
+                <span className="text-xs text-muted">Color:</span>
                 <div className="flex gap-2">
                   {(Object.keys(STATE_COLOR_OPTIONS) as StateColorType[]).map(colorType => (
                     <button
@@ -2635,7 +2635,7 @@ function AddStateModal({
           {error && <p className="text-red-400 text-sm">{error}</p>}
 
           <div>
-            <label className="block text-xs text-gray-400 uppercase tracking-wider mb-3">
+            <label className="block text-xs text-secondary uppercase tracking-wider mb-3">
               States ({localStates.length})
             </label>
             <div className="space-y-2 max-h-48 overflow-y-auto">
@@ -2659,7 +2659,7 @@ function AddStateModal({
                         />
                       ))}
                     </div>
-                    <span className="text-sm text-white">{state}</span>
+                    <span className="text-sm text-primary">{state}</span>
                     {state === stateDef.default_state && (
                       <span className="text-[9px] px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded">default</span>
                     )}
@@ -2668,8 +2668,8 @@ function AddStateModal({
                     onClick={() => handleRemoveState(state)}
                     className={`p-1 rounded ${
                       state === stateDef.default_state
-                        ? 'text-gray-700 cursor-not-allowed'
-                        : 'text-gray-500 hover:text-red-400 hover:bg-red-500/20'
+                        ? 'text-muted cursor-not-allowed'
+                        : 'text-muted hover:text-red-400 hover:bg-red-500/20'
                     }`}
                     disabled={state === stateDef.default_state}
                   >
@@ -2681,17 +2681,17 @@ function AddStateModal({
           </div>
 
           <div className="flex justify-between items-center pt-4 border-t border-primary">
-            <span className={`text-sm ${hasChanges ? 'text-yellow-400' : 'text-gray-600'}`}>
+            <span className={`text-sm ${hasChanges ? 'text-yellow-400' : 'text-muted'}`}>
               {hasChanges ? 'Unsaved changes' : 'No changes'}
             </span>
             <div className="flex gap-3">
-              <button onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white text-sm">
+              <button onClick={onClose} className="px-4 py-2 text-secondary hover:text-primary text-sm">
                 Cancel
               </button>
               <button
                 onClick={handleSave}
                 disabled={updateStateDef.isPending || !hasChanges}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm"
+                className="px-4 py-2 bg-blue-600 text-primary rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm"
               >
                 {updateStateDef.isPending ? 'Saving...' : 'Save'}
               </button>

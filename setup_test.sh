@@ -15,11 +15,11 @@ mkdir -p "${WS_DIR}/src"
 # Create symbolic links
 cd "${WS_DIR}/src"
 
-if [ ! -L "fleet_agent_cpp" ]; then
-    ln -s "${SCRIPT_DIR}/fleet_agent_cpp" fleet_agent_cpp
-    echo "Created symlink: fleet_agent_cpp"
+if [ ! -L "ros2_robot_agent" ]; then
+    ln -s "${SCRIPT_DIR}/ros2_robot_agent" ros2_robot_agent
+    echo "Created symlink: ros2_robot_agent"
 else
-    echo "Symlink already exists: fleet_agent_cpp"
+    echo "Symlink already exists: ros2_robot_agent"
 fi
 
 if [ ! -L "test_action_server" ]; then

@@ -123,7 +123,7 @@ export default function ConditionBuilder({
               {condition.type === 'agent_state' && <Users className="w-3.5 h-3.5 text-green-400" />}
               {condition.type === 'semantic_tag' && <Tag className="w-3.5 h-3.5 text-purple-400" />}
               {condition.type === 'any_agent_state' && <Search className="w-3.5 h-3.5 text-cyan-400" />}
-              {condition.type === 'group' && <ChevronDown className="w-3.5 h-3.5 text-gray-400" />}
+              {condition.type === 'group' && <ChevronDown className="w-3.5 h-3.5 text-secondary" />}
             </div>
 
             {/* Condition Content */}
@@ -170,7 +170,7 @@ export default function ConditionBuilder({
             {/* Remove Button */}
             <button
               onClick={() => removeCondition(condition.id)}
-              className="p-1 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+              className="p-1 text-muted hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
@@ -188,7 +188,7 @@ export default function ConditionBuilder({
           {conditions.map((condition, index) => renderCondition(condition, index))}
         </div>
       ) : (
-        <div className={`text-center py-4 text-gray-500 text-xs border border-dashed border-primary rounded-lg`}>
+        <div className={`text-center py-4 text-muted text-xs border border-dashed border-primary rounded-lg`}>
           No conditions set (always execute)
         </div>
       )}
@@ -197,28 +197,28 @@ export default function ConditionBuilder({
       <div className={`flex flex-wrap gap-2 ${compact ? 'pt-1' : 'pt-2'}`}>
         <button
           onClick={() => addCondition('self_state')}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 bg-blue-500/10 text-blue-400 rounded-lg text-xs hover:bg-blue-500/20 transition-colors border border-blue-500/20"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 bg-btn-blue text-btn-blue rounded-lg text-xs hover:opacity-80 transition-colors border border-btn-blue"
         >
           <Activity className="w-3 h-3" />
           My State
         </button>
         <button
           onClick={() => addCondition('agent_state')}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 bg-green-500/10 text-green-400 rounded-lg text-xs hover:bg-green-500/20 transition-colors border border-green-500/20"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 bg-btn-green text-btn-green rounded-lg text-xs hover:opacity-80 transition-colors border border-btn-green"
         >
           <Users className="w-3 h-3" />
           Specific Agent
         </button>
         <button
           onClick={() => addCondition('semantic_tag')}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 bg-purple-500/10 text-purple-400 rounded-lg text-xs hover:bg-purple-500/20 transition-colors border border-purple-500/20"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 bg-btn-purple text-btn-purple rounded-lg text-xs hover:opacity-80 transition-colors border border-btn-purple"
         >
           <Tag className="w-3 h-3" />
           By Tag
         </button>
         <button
           onClick={() => addCondition('any_agent_state')}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 bg-cyan-500/10 text-cyan-400 rounded-lg text-xs hover:bg-cyan-500/20 transition-colors border border-cyan-500/20"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 bg-btn-cyan text-btn-cyan rounded-lg text-xs hover:opacity-80 transition-colors border border-btn-cyan"
         >
           <Search className="w-3 h-3" />
           Any Agent
@@ -242,11 +242,11 @@ function SelfStateCondition({
 }) {
   return (
     <div className={`flex items-center gap-2 ${compact ? 'flex-wrap' : ''}`}>
-      <span className="text-xs text-gray-400">My state</span>
+      <span className="text-xs text-secondary">My state</span>
       <select
         value={condition.stateOperator || '=='}
         onChange={(e) => onChange({ stateOperator: e.target.value as '==' | '!=' })}
-        className="px-2 py-1 bg-elevated border border-primary rounded text-xs text-white focus:outline-none focus:border-blue-500"
+        className="px-2 py-1 bg-elevated border border-primary rounded text-xs text-primary focus:outline-none focus:border-blue-500"
       >
         <option value="==">is</option>
         <option value="!=">is not</option>
@@ -304,7 +304,7 @@ function AgentStateCondition({
         <select
           value={condition.agentQuantifier || 'all'}
           onChange={(e) => onChange({ agentQuantifier: e.target.value as 'all' | 'any' | 'specific' })}
-          className="px-2 py-1 bg-elevated border border-primary rounded text-xs text-white focus:outline-none focus:border-green-500"
+          className="px-2 py-1 bg-elevated border border-primary rounded text-xs text-primary focus:outline-none focus:border-green-500"
         >
           <option value="all">All</option>
           <option value="any">Any</option>
@@ -325,10 +325,10 @@ function AgentStateCondition({
             ))}
           </datalist>
         </div>
-        <span className="text-xs text-gray-400">agents</span>
+        <span className="text-xs text-secondary">agents</span>
       </div>
       <div className="flex items-center gap-2">
-        <span className="text-xs text-gray-400">are in state</span>
+        <span className="text-xs text-secondary">are in state</span>
         <select
           value={condition.agentState || ''}
           onChange={(e) => onChange({ agentState: e.target.value })}
@@ -341,13 +341,13 @@ function AgentStateCondition({
       </div>
       {condition.agentQuantifier === 'specific' && (
         <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-400">Agent ID:</span>
+          <span className="text-xs text-secondary">Agent ID:</span>
           <input
             type="text"
             value={condition.agentId || ''}
             onChange={(e) => onChange({ agentId: e.target.value })}
             placeholder="robot_001"
-            className="flex-1 px-2 py-1 bg-elevated border border-primary rounded text-xs text-white focus:outline-none focus:border-green-500"
+            className="flex-1 px-2 py-1 bg-elevated border border-primary rounded text-xs text-primary focus:outline-none focus:border-green-500"
           />
         </div>
       )}
@@ -375,13 +375,13 @@ function SemanticTagCondition({
         <select
           value={condition.tagQuantifier || 'any'}
           onChange={(e) => onChange({ tagQuantifier: e.target.value as 'any' | 'all' | 'none' })}
-          className="px-2 py-1 bg-elevated border border-primary rounded text-xs text-white focus:outline-none focus:border-purple-500"
+          className="px-2 py-1 bg-elevated border border-primary rounded text-xs text-primary focus:outline-none focus:border-purple-500"
         >
           <option value="any">Any agent</option>
           <option value="all">All agents</option>
           <option value="none">No agents</option>
         </select>
-        <span className="text-xs text-gray-400">with tag</span>
+        <span className="text-xs text-secondary">with tag</span>
         <div className="flex-1">
           <input
             type="text"
@@ -399,7 +399,7 @@ function SemanticTagCondition({
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <span className="text-xs text-gray-400">should be in state</span>
+        <span className="text-xs text-secondary">should be in state</span>
         <select
           value={condition.tagState || ''}
           onChange={(e) => onChange({ tagState: e.target.value })}
@@ -429,7 +429,7 @@ function AnyAgentStateCondition({
   return (
     <div className="space-y-2">
       <div className={`flex items-center gap-2 ${compact ? 'flex-wrap' : ''}`}>
-        <span className="text-xs text-gray-400">Any agent in state</span>
+        <span className="text-xs text-secondary">Any agent in state</span>
         <select
           value={condition.agentState || ''}
           onChange={(e) => onChange({ agentState: e.target.value })}
@@ -448,7 +448,7 @@ function AnyAgentStateCondition({
             onChange={(e) => onChange({ filterOnline: e.target.checked })}
             className="w-3.5 h-3.5 rounded border-gray-500 bg-elevated text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0"
           />
-          <span className="text-gray-400">Online only</span>
+          <span className="text-secondary">Online only</span>
         </label>
         <label className="flex items-center gap-1.5 cursor-pointer">
           <input
@@ -457,17 +457,17 @@ function AnyAgentStateCondition({
             onChange={(e) => onChange({ filterExecuting: e.target.checked })}
             className="w-3.5 h-3.5 rounded border-gray-500 bg-elevated text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0"
           />
-          <span className="text-gray-400">Executing only</span>
+          <span className="text-secondary">Executing only</span>
         </label>
       </div>
       <div className="flex items-center gap-2">
-        <span className="text-xs text-gray-400">Graph filter:</span>
+        <span className="text-xs text-secondary">Graph filter:</span>
         <input
           type="text"
           value={condition.filterGraphId || ''}
           onChange={(e) => onChange({ filterGraphId: e.target.value })}
           placeholder="(optional) graph_id"
-          className="flex-1 px-2 py-1 bg-elevated border border-primary rounded text-xs text-gray-400 focus:outline-none focus:border-cyan-500"
+          className="flex-1 px-2 py-1 bg-elevated border border-primary rounded text-xs text-secondary focus:outline-none focus:border-cyan-500"
         />
       </div>
     </div>
@@ -513,7 +513,7 @@ export function conditionsToExpression(conditions: Condition[]): string {
 // Compact inline preview
 export function ConditionPreview({ conditions }: { conditions: Condition[] }) {
   if (conditions.length === 0) {
-    return <span className="text-gray-500 text-[10px]">No conditions</span>
+    return <span className="text-muted text-[10px]">No conditions</span>
   }
 
   return (
@@ -528,7 +528,7 @@ export function ConditionPreview({ conditions }: { conditions: Condition[] }) {
             c.type === 'agent_state' ? 'bg-green-500/20 text-green-400' :
             c.type === 'semantic_tag' ? 'bg-purple-500/20 text-purple-400' :
             c.type === 'any_agent_state' ? 'bg-cyan-500/20 text-cyan-400' :
-            'bg-gray-500/20 text-gray-400'
+            'bg-gray-500/20 text-secondary'
           }`}>
             {c.type === 'self_state' && `state ${c.stateOperator} ${c.state}`}
             {c.type === 'agent_state' && `${c.agentQuantifier} ${c.agentId || 'agents'} = ${c.agentState}`}

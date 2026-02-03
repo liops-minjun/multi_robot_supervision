@@ -70,7 +70,7 @@ const ArrayEditor = memo(({ value, onChange, fieldType, capturedTelemetry, isNum
       {/* Header with size info and add button */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="text-[9px] text-gray-500">요소: {arrayValue.length}개</span>
+          <span className="text-[9px] text-muted">요소: {arrayValue.length}개</span>
           {telemetrySize > 0 && (
             <span className={`text-[9px] px-1.5 py-0.5 rounded ${
               sizesMatch ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'
@@ -108,13 +108,13 @@ const ArrayEditor = memo(({ value, onChange, fieldType, capturedTelemetry, isNum
       {/* Array elements */}
       <div className="max-h-40 overflow-y-auto space-y-1 pr-1">
         {arrayValue.length === 0 ? (
-          <div className="text-[9px] text-gray-500 italic py-3 text-center bg-gray-800/30 rounded">
+          <div className="text-[9px] text-muted italic py-3 text-center bg-gray-800/30 rounded">
             빈 배열 - "추가" 버튼으로 요소 추가
           </div>
         ) : (
           arrayValue.map((element, idx) => (
             <div key={idx} className="flex items-center gap-1.5 group">
-              <span className="text-[8px] text-gray-600 w-6 text-right font-mono">[{idx}]</span>
+              <span className="text-[8px] text-muted w-6 text-right font-mono">[{idx}]</span>
               {isNumeric ? (
                 <input
                   type="number"
@@ -124,7 +124,7 @@ const ArrayEditor = memo(({ value, onChange, fieldType, capturedTelemetry, isNum
                     updateElement(idx, parseFloat(e.target.value) || 0)
                   }}
                   onClick={(e) => e.stopPropagation()}
-                  className="flex-1 px-2 py-1 bg-surface border border-gray-700 rounded text-[10px] text-white focus:outline-none focus:border-amber-500 font-mono"
+                  className="flex-1 px-2 py-1 bg-surface border border-primary rounded text-[10px] text-primary focus:outline-none focus:border-amber-500 font-mono"
                   step="0.0001"
                 />
               ) : (
@@ -136,7 +136,7 @@ const ArrayEditor = memo(({ value, onChange, fieldType, capturedTelemetry, isNum
                     updateElement(idx, e.target.value)
                   }}
                   onClick={(e) => e.stopPropagation()}
-                  className="flex-1 px-2 py-1 bg-surface border border-gray-700 rounded text-[10px] text-white focus:outline-none focus:border-amber-500"
+                  className="flex-1 px-2 py-1 bg-surface border border-primary rounded text-[10px] text-primary focus:outline-none focus:border-amber-500"
                 />
               )}
               <button
@@ -152,9 +152,9 @@ const ArrayEditor = memo(({ value, onChange, fieldType, capturedTelemetry, isNum
 
       {/* Telemetry preview */}
       {telemetryArray && telemetryArray.length > 0 && (
-        <div className="p-2 bg-gray-800/50 rounded border border-gray-700/50">
-          <div className="text-[8px] text-gray-500 mb-1">Telemetry 미리보기:</div>
-          <div className="text-[9px] text-gray-400 font-mono truncate">
+        <div className="p-2 bg-gray-800/50 rounded border border-primary/50">
+          <div className="text-[8px] text-muted mb-1">Telemetry 미리보기:</div>
+          <div className="text-[9px] text-secondary font-mono truncate">
             [{telemetryArray.slice(0, 4).map(v =>
               typeof v === 'number' ? v.toFixed(3) : `"${v}"`
             ).join(', ')}{telemetryArray.length > 4 ? `, ... +${telemetryArray.length - 4}` : ''}]

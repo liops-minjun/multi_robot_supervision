@@ -100,7 +100,7 @@ Fleet Agent가 이 Action Server들을 자동으로 발견하려면:
 2. Fleet Agent 설정에 로봇을 추가합니다:
 
 ```yaml
-# fleet_agent_cpp/config/agent.yaml
+# ros2_robot_agent/config/agent.yaml
 robots:
   - id: "test_robot"
     namespace: ""  # 또는 "/robot_001"

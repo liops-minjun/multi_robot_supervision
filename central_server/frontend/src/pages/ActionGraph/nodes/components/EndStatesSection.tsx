@@ -25,13 +25,13 @@ const EndStatesSection = memo(({
       <div className="flex items-center justify-between mb-1.5">
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-sm bg-gradient-to-r from-green-500 to-red-500" />
-          <span className="text-[10px] text-gray-300 uppercase tracking-wider font-medium">종료 상태</span>
+          <span className="text-[10px] text-primary uppercase tracking-wider font-medium">종료 상태</span>
         </div>
         <button
           onClick={(e) => { e.stopPropagation(); onAddEndState() }}
           className="p-0.5 hover:bg-gray-500/20 rounded transition-colors"
         >
-          <Plus className="w-2.5 h-2.5 text-gray-400" />
+          <Plus className="w-2.5 h-2.5 text-secondary" />
         </button>
       </div>
 
@@ -59,7 +59,7 @@ const EndStatesSection = memo(({
                   onUpdateEndState(endState.id, 'outcome', e.target.value)
                 }}
                 onClick={(e) => e.stopPropagation()}
-                className="w-16 px-1 py-0.5 bg-surface border border-gray-700 rounded text-[9px] text-gray-300 focus:outline-none cursor-pointer"
+                className="w-16 px-1 py-0.5 bg-surface border border-primary rounded text-[9px] text-primary focus:outline-none cursor-pointer"
               >
                 {OUTCOME_OPTIONS.map(option => (
                   <option key={option.value} value={option.value} className="bg-surface">
@@ -78,10 +78,10 @@ const EndStatesSection = memo(({
                 }}
                 onClick={(e) => e.stopPropagation()}
                 placeholder="Label"
-                className="w-14 px-1 py-0.5 bg-transparent border-b border-gray-700 text-[9px] text-gray-300 focus:outline-none focus:border-gray-500"
+                className="w-14 px-1 py-0.5 bg-transparent border-b border-gray-700 text-[9px] text-primary focus:outline-none focus:border-gray-500"
               />
 
-              <span className="text-[9px] text-gray-600">→</span>
+              <span className="text-[9px] text-muted">→</span>
 
               {/* State selector */}
               <select
@@ -91,7 +91,7 @@ const EndStatesSection = memo(({
                   onUpdateEndState(endState.id, 'state', e.target.value)
                 }}
                 onClick={(e) => e.stopPropagation()}
-                className="flex-1 px-1 py-0.5 bg-surface border border-gray-700 rounded text-[9px] focus:outline-none cursor-pointer"
+                className="flex-1 px-1 py-0.5 bg-surface border border-primary rounded text-[9px] focus:outline-none cursor-pointer"
                 style={{ color }}
               >
                 {states.map(s => <option key={s} value={s} className="bg-surface">{s}</option>)}
@@ -101,7 +101,7 @@ const EndStatesSection = memo(({
               {endStates.length > 1 && (
                 <button
                   onClick={(e) => { e.stopPropagation(); onRemoveEndState(endState.id) }}
-                  className="absolute right-0 text-gray-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                  className="absolute right-0 text-muted hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
                 >
                   <X className="w-3 h-3" />
                 </button>
@@ -151,7 +151,7 @@ const EndStatesSection = memo(({
 
         {/* Cancelled Handle */}
         <div className="relative flex items-center justify-end h-4" title="취소됨: 드래그하여 연결">
-          <span className="text-[7px] text-gray-400 mr-1.5 opacity-60">C</span>
+          <span className="text-[7px] text-secondary mr-1.5 opacity-60">C</span>
           <Handle
             type="source"
             position={Position.Right}

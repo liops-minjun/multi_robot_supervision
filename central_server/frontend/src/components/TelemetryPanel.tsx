@@ -108,7 +108,7 @@ function JointStateView({
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold text-cyan-400">JointState</span>
-          <span className="text-[10px] text-gray-500">({jointState.name.length} joints)</span>
+          <span className="text-[10px] text-muted">({jointState.name.length} joints)</span>
         </div>
         <div className="flex items-center gap-1">
           {onCapture && (
@@ -123,7 +123,7 @@ function JointStateView({
           )}
           <button
             onClick={handleCopy}
-            className="p-1 text-gray-500 hover:text-white rounded hover:bg-[#2a2a4a] transition-colors"
+            className="p-1 text-muted hover:text-primary rounded hover:bg-surface transition-colors"
             title="JSON 복사"
           >
             {copied ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
@@ -132,13 +132,13 @@ function JointStateView({
       </div>
       {jointState.topic_name && (
         <div className="flex items-center gap-2 px-2 py-1 bg-sunken rounded mb-2">
-          <span className="text-[10px] text-gray-500">TOPIC</span>
+          <span className="text-[10px] text-muted">TOPIC</span>
           <span className="text-xs text-cyan-400 font-mono">{jointState.topic_name}</span>
         </div>
       )}
       <div className="overflow-x-auto">
         {/* Column headers with capture buttons */}
-        <div className="grid grid-cols-4 gap-2 text-[9px] text-gray-500 font-semibold uppercase mb-1 px-1">
+        <div className="grid grid-cols-4 gap-2 text-[9px] text-muted font-semibold uppercase mb-1 px-1">
           <div className="flex items-center gap-1">
             <span>Joint</span>
             {onCaptureName && (
@@ -180,7 +180,7 @@ function JointStateView({
         <div className="space-y-0.5 max-h-48 overflow-y-auto">
           {jointState.name.map((name, idx) => (
             <div key={name} className="grid grid-cols-4 gap-2 text-xs font-mono px-1 py-0.5 hover:bg-elevated rounded">
-              <span className="text-gray-300 truncate" title={name}>{name}</span>
+              <span className="text-primary truncate" title={name}>{name}</span>
               <span className="text-cyan-400">{formatNumber(jointState.position?.[idx] ?? 0)}</span>
               <span className="text-yellow-400">{formatNumber(jointState.velocity?.[idx] ?? 0)}</span>
               <span className="text-purple-400">{formatNumber(jointState.effort?.[idx] ?? 0)}</span>
@@ -215,11 +215,11 @@ function OdometryView({
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold text-green-400">Odometry</span>
-          <span className="text-[10px] text-gray-500">{odometry.frame_id}</span>
+          <span className="text-[10px] text-muted">{odometry.frame_id}</span>
         </div>
         <button
           onClick={handleCopy}
-          className="p-1 text-gray-500 hover:text-white rounded hover:bg-[#2a2a4a] transition-colors"
+          className="p-1 text-muted hover:text-primary rounded hover:bg-surface transition-colors"
           title="JSON 복사"
         >
           {copied ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
@@ -227,7 +227,7 @@ function OdometryView({
       </div>
       {odometry.topic_name && (
         <div className="flex items-center gap-2 px-2 py-1 bg-sunken rounded mb-2">
-          <span className="text-[10px] text-gray-500">TOPIC</span>
+          <span className="text-[10px] text-muted">TOPIC</span>
           <span className="text-xs text-green-400 font-mono">{odometry.topic_name}</span>
         </div>
       )}
@@ -235,7 +235,7 @@ function OdometryView({
         {/* Pose */}
         <div>
           <div className="flex items-center justify-between mb-1">
-            <span className="text-[10px] text-gray-400 uppercase font-semibold">Pose</span>
+            <span className="text-[10px] text-secondary uppercase font-semibold">Pose</span>
             {onCapturePose && (
               <button
                 onClick={onCapturePose}
@@ -248,33 +248,33 @@ function OdometryView({
           </div>
           <div className="grid grid-cols-3 gap-2 text-xs font-mono bg-sunken rounded p-2">
             <div>
-              <span className="text-[9px] text-gray-500">X</span>
+              <span className="text-[9px] text-muted">X</span>
               <div className="text-cyan-400">{formatNumber(odometry.pose?.position?.x ?? 0)}</div>
             </div>
             <div>
-              <span className="text-[9px] text-gray-500">Y</span>
+              <span className="text-[9px] text-muted">Y</span>
               <div className="text-cyan-400">{formatNumber(odometry.pose?.position?.y ?? 0)}</div>
             </div>
             <div>
-              <span className="text-[9px] text-gray-500">Z</span>
+              <span className="text-[9px] text-muted">Z</span>
               <div className="text-cyan-400">{formatNumber(odometry.pose?.position?.z ?? 0)}</div>
             </div>
           </div>
           <div className="grid grid-cols-4 gap-2 text-xs font-mono bg-sunken rounded p-2 mt-1">
             <div>
-              <span className="text-[9px] text-gray-500">QX</span>
+              <span className="text-[9px] text-muted">QX</span>
               <div className="text-yellow-400">{formatNumber(odometry.pose?.orientation?.x ?? 0)}</div>
             </div>
             <div>
-              <span className="text-[9px] text-gray-500">QY</span>
+              <span className="text-[9px] text-muted">QY</span>
               <div className="text-yellow-400">{formatNumber(odometry.pose?.orientation?.y ?? 0)}</div>
             </div>
             <div>
-              <span className="text-[9px] text-gray-500">QZ</span>
+              <span className="text-[9px] text-muted">QZ</span>
               <div className="text-yellow-400">{formatNumber(odometry.pose?.orientation?.z ?? 0)}</div>
             </div>
             <div>
-              <span className="text-[9px] text-gray-500">QW</span>
+              <span className="text-[9px] text-muted">QW</span>
               <div className="text-yellow-400">{formatNumber(odometry.pose?.orientation?.w ?? 0)}</div>
             </div>
           </div>
@@ -282,7 +282,7 @@ function OdometryView({
         {/* Twist */}
         <div>
           <div className="flex items-center justify-between mb-1">
-            <span className="text-[10px] text-gray-400 uppercase font-semibold">Twist</span>
+            <span className="text-[10px] text-secondary uppercase font-semibold">Twist</span>
             {onCaptureTwist && (
               <button
                 onClick={onCaptureTwist}
@@ -295,13 +295,13 @@ function OdometryView({
           </div>
           <div className="grid grid-cols-2 gap-2 text-xs font-mono bg-sunken rounded p-2">
             <div>
-              <span className="text-[9px] text-gray-500">Linear</span>
+              <span className="text-[9px] text-muted">Linear</span>
               <div className="text-green-400">
                 {formatNumber(odometry.twist?.linear?.x ?? 0)}, {formatNumber(odometry.twist?.linear?.y ?? 0)}, {formatNumber(odometry.twist?.linear?.z ?? 0)}
               </div>
             </div>
             <div>
-              <span className="text-[9px] text-gray-500">Angular</span>
+              <span className="text-[9px] text-muted">Angular</span>
               <div className="text-purple-400">
                 {formatNumber(odometry.twist?.angular?.x ?? 0)}, {formatNumber(odometry.twist?.angular?.y ?? 0)}, {formatNumber(odometry.twist?.angular?.z ?? 0)}
               </div>
@@ -445,11 +445,11 @@ export function TelemetryPanel({
       <div className="flex h-full">
         {/* Robot Selector - Left */}
         <div className="w-40 flex-shrink-0 border-r border-primary p-2">
-          <div className="text-[10px] text-gray-500 uppercase mb-1.5">로봇</div>
+          <div className="text-[10px] text-muted uppercase mb-1.5">로봇</div>
           <select
             value={selectedRobotId || ''}
             onChange={(e) => setSelectedRobotId(e.target.value || null)}
-            className="w-full px-2 py-1 bg-elevated border border-primary rounded text-xs text-white focus:outline-none focus:border-green-500 cursor-pointer"
+            className="w-full px-2 py-1 bg-elevated border border-primary rounded text-xs text-primary focus:outline-none focus:border-green-500 cursor-pointer"
           >
             <option value="">선택...</option>
             {robots.map((robot) => (
@@ -467,7 +467,7 @@ export function TelemetryPanel({
               </div>
               <button
                 onClick={() => setCapturedValue(null)}
-                className="text-[8px] text-gray-500 hover:text-gray-300 mt-0.5"
+                className="text-[8px] text-muted hover:text-primary mt-0.5"
               >
                 취소
               </button>
@@ -478,16 +478,16 @@ export function TelemetryPanel({
         {/* Telemetry Content - Center (scrollable horizontally) */}
         <div className="flex-1 flex gap-3 p-2 overflow-x-auto">
           {!selectedRobotId ? (
-            <div className="flex items-center justify-center w-full text-gray-500 text-xs">
+            <div className="flex items-center justify-center w-full text-muted text-xs">
               <Radio size={16} className="mr-2" />
               로봇을 선택하세요
             </div>
           ) : isLoading ? (
             <div className="flex items-center justify-center w-full">
-              <RefreshCw size={16} className="text-gray-500 animate-spin" />
+              <RefreshCw size={16} className="text-muted animate-spin" />
             </div>
           ) : !hasData ? (
-            <div className="flex items-center justify-center w-full text-gray-500 text-xs">
+            <div className="flex items-center justify-center w-full text-muted text-xs">
               <Radio size={16} className="mr-2" />
               텔레메트리 없음
             </div>
@@ -509,7 +509,7 @@ export function TelemetryPanel({
                     </div>
                   </div>
                   <div className="max-h-28 overflow-y-auto">
-                    <div className="grid grid-cols-4 gap-1 text-[8px] text-gray-500 font-semibold px-1 mb-0.5">
+                    <div className="grid grid-cols-4 gap-1 text-[8px] text-muted font-semibold px-1 mb-0.5">
                       <span>Joint</span>
                       <span>Pos</span>
                       <span>Vel</span>
@@ -517,14 +517,14 @@ export function TelemetryPanel({
                     </div>
                     {telemetry.joint_state.name.slice(0, 6).map((name, idx) => (
                       <div key={name} className="grid grid-cols-4 gap-1 text-[9px] font-mono px-1 py-0.5 hover:bg-sunken rounded">
-                        <span className="text-gray-300 truncate" title={name}>{name}</span>
+                        <span className="text-primary truncate" title={name}>{name}</span>
                         <span className="text-cyan-400">{formatNumber(telemetry.joint_state!.position?.[idx] ?? 0)}</span>
                         <span className="text-yellow-400">{formatNumber(telemetry.joint_state!.velocity?.[idx] ?? 0)}</span>
                         <span className="text-purple-400">{formatNumber(telemetry.joint_state!.effort?.[idx] ?? 0)}</span>
                       </div>
                     ))}
                     {telemetry.joint_state.name.length > 6 && (
-                      <div className="text-[8px] text-gray-500 px-1">+{telemetry.joint_state.name.length - 6} more</div>
+                      <div className="text-[8px] text-muted px-1">+{telemetry.joint_state.name.length - 6} more</div>
                     )}
                   </div>
                 </div>
@@ -545,24 +545,24 @@ export function TelemetryPanel({
                   </div>
                   <div className="space-y-1.5">
                     <div>
-                      <div className="text-[8px] text-gray-500 mb-0.5">Position</div>
+                      <div className="text-[8px] text-muted mb-0.5">Position</div>
                       <div className="grid grid-cols-3 gap-1 text-[9px] font-mono bg-sunken rounded p-1">
                         <div>
-                          <span className="text-[7px] text-gray-500">X</span>
+                          <span className="text-[7px] text-muted">X</span>
                           <div className="text-cyan-400">{formatNumber(telemetry.odometry.pose?.position?.x ?? 0)}</div>
                         </div>
                         <div>
-                          <span className="text-[7px] text-gray-500">Y</span>
+                          <span className="text-[7px] text-muted">Y</span>
                           <div className="text-cyan-400">{formatNumber(telemetry.odometry.pose?.position?.y ?? 0)}</div>
                         </div>
                         <div>
-                          <span className="text-[7px] text-gray-500">Z</span>
+                          <span className="text-[7px] text-muted">Z</span>
                           <div className="text-cyan-400">{formatNumber(telemetry.odometry.pose?.position?.z ?? 0)}</div>
                         </div>
                       </div>
                     </div>
                     <div>
-                      <div className="text-[8px] text-gray-500 mb-0.5">Orientation</div>
+                      <div className="text-[8px] text-muted mb-0.5">Orientation</div>
                       <div className="grid grid-cols-4 gap-0.5 text-[8px] font-mono bg-sunken rounded p-1">
                         <div className="text-yellow-400">{formatNumber(telemetry.odometry.pose?.orientation?.x ?? 0)}</div>
                         <div className="text-yellow-400">{formatNumber(telemetry.odometry.pose?.orientation?.y ?? 0)}</div>
@@ -579,18 +579,18 @@ export function TelemetryPanel({
                 <div className="flex-shrink-0 w-48 bg-elevated rounded border border-primary p-2">
                   <div className="flex items-center gap-1 mb-1.5">
                     <span className="text-[10px] font-semibold text-orange-400">TF</span>
-                    <span className="text-[8px] text-gray-500">({telemetry.transforms.length})</span>
+                    <span className="text-[8px] text-muted">({telemetry.transforms.length})</span>
                   </div>
                   <div className="max-h-28 overflow-y-auto space-y-0.5">
                     {telemetry.transforms.slice(0, 4).map((tf, idx) => (
                       <div key={idx} className="text-[8px] font-mono p-1 bg-sunken rounded truncate">
                         <span className="text-orange-400">{tf.frame_id}</span>
-                        <span className="text-gray-500"> → </span>
+                        <span className="text-muted"> → </span>
                         <span className="text-yellow-400">{tf.child_frame_id}</span>
                       </div>
                     ))}
                     {telemetry.transforms.length > 4 && (
-                      <div className="text-[8px] text-gray-500 px-1">+{telemetry.transforms.length - 4} more</div>
+                      <div className="text-[8px] text-muted px-1">+{telemetry.transforms.length - 4} more</div>
                     )}
                   </div>
                 </div>
@@ -603,13 +603,13 @@ export function TelemetryPanel({
         <div className="w-32 flex-shrink-0 border-l border-primary p-2 flex flex-col justify-between">
           {hasData && telemetry && (
             <div className="text-[9px]">
-              <div className="text-gray-500 mb-0.5">업데이트</div>
+              <div className="text-muted mb-0.5">업데이트</div>
               <div className={telemetry.is_stale ? 'text-yellow-500' : 'text-green-400'}>
                 {new Date(telemetry.updated_at).toLocaleTimeString()}
               </div>
             </div>
           )}
-          <div className="text-[8px] text-gray-600">
+          <div className="text-[8px] text-muted">
             <Crosshair size={10} className="inline mr-1 text-purple-400" />
             캡처 후 파라미터 적용
           </div>
@@ -626,7 +626,7 @@ export function TelemetryPanel({
         <select
           value={selectedRobotId || ''}
           onChange={(e) => setSelectedRobotId(e.target.value || null)}
-          className="w-full px-2 py-1.5 bg-elevated border border-primary rounded-lg text-xs text-white focus:outline-none focus:border-green-500 cursor-pointer"
+          className="w-full px-2 py-1.5 bg-elevated border border-primary rounded-lg text-xs text-primary focus:outline-none focus:border-green-500 cursor-pointer"
         >
           <option value="">로봇 선택...</option>
           {robots.map((robot) => (
@@ -641,24 +641,24 @@ export function TelemetryPanel({
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         {!selectedRobotId ? (
           <div className="text-center py-8">
-            <Radio size={32} className="mx-auto text-gray-600 mb-3" />
-            <p className="text-xs text-gray-500">모니터링할 로봇을 선택하세요</p>
+            <Radio size={32} className="mx-auto text-muted mb-3" />
+            <p className="text-xs text-muted">모니터링할 로봇을 선택하세요</p>
           </div>
         ) : isLoading ? (
           <div className="text-center py-8">
-            <RefreshCw size={24} className="mx-auto text-gray-500 animate-spin mb-3" />
-            <p className="text-xs text-gray-500">데이터 로딩 중...</p>
+            <RefreshCw size={24} className="mx-auto text-muted animate-spin mb-3" />
+            <p className="text-xs text-muted">데이터 로딩 중...</p>
           </div>
         ) : !hasData ? (
           <div className="text-center py-8">
-            <Radio size={32} className="mx-auto text-gray-600 mb-3" />
-            <p className="text-xs text-gray-500">수신된 텔레메트리 없음</p>
-            <p className="text-[10px] text-gray-600 mt-1">로봇이 데이터를 전송하는지 확인하세요</p>
+            <Radio size={32} className="mx-auto text-muted mb-3" />
+            <p className="text-xs text-muted">수신된 텔레메트리 없음</p>
+            <p className="text-[10px] text-muted mt-1">로봇이 데이터를 전송하는지 확인하세요</p>
           </div>
         ) : (
           <>
             {/* Updated timestamp */}
-            <div className="flex items-center justify-between text-[10px] text-gray-500">
+            <div className="flex items-center justify-between text-[10px] text-muted">
               <span>최근 업데이트</span>
               <span className={telemetry.is_stale ? 'text-yellow-500' : 'text-green-400'}>
                 {new Date(telemetry.updated_at).toLocaleTimeString()}
@@ -691,13 +691,13 @@ export function TelemetryPanel({
               <div className="bg-surface rounded-lg p-3 border border-primary">
                 <div className="flex items-center gap-2 mb-2">
                   <span className="text-xs font-semibold text-orange-400">Transforms</span>
-                  <span className="text-[10px] text-gray-500">({telemetry.transforms.length})</span>
+                  <span className="text-[10px] text-muted">({telemetry.transforms.length})</span>
                 </div>
                 <div className="space-y-1 max-h-32 overflow-y-auto">
                   {telemetry.transforms.map((tf, idx) => (
                     <div key={idx} className="text-[10px] font-mono p-1.5 bg-sunken rounded">
                       <span className="text-orange-400">{tf.frame_id}</span>
-                      <span className="text-gray-500"> → </span>
+                      <span className="text-muted"> → </span>
                       <span className="text-yellow-400">{tf.child_frame_id}</span>
                     </div>
                   ))}
@@ -716,14 +716,14 @@ export function TelemetryPanel({
               <Check size={12} />
               <span>
                 {capturedValue.type} 캡처됨 -
-                <span className="text-gray-400 ml-1">
+                <span className="text-secondary ml-1">
                   {capturedValue.capturedAt.toLocaleTimeString()}
                 </span>
               </span>
             </div>
             <button
               onClick={() => setCapturedValue(null)}
-              className="text-[9px] text-gray-500 hover:text-gray-300"
+              className="text-[9px] text-muted hover:text-primary"
             >
               취소
             </button>
@@ -738,8 +738,8 @@ export function TelemetryPanel({
 
       {/* Type Compatibility Info */}
       <div className="px-3 py-2 border-t border-primary bg-sunken">
-        <div className="text-[9px] text-gray-500 space-y-0.5">
-          <div className="font-semibold text-gray-400 mb-1">호환 타입:</div>
+        <div className="text-[9px] text-muted space-y-0.5">
+          <div className="font-semibold text-secondary mb-1">호환 타입:</div>
           <div>• <span className="text-cyan-400">Position</span> → array, float64[]</div>
           <div>• <span className="text-yellow-400">Velocity</span> → array, float64[]</div>
           <div>• <span className="text-purple-400">JointState</span> → JointState, JointTrajectoryPoint</div>
@@ -761,19 +761,19 @@ export function TelemetryPanel({
       <div className="px-3 py-2 border-b border-primary flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Radio size={14} className="text-green-400 animate-pulse" />
-          <span className="text-xs font-semibold text-white">Telemetry Monitor</span>
+          <span className="text-xs font-semibold text-primary">Telemetry Monitor</span>
         </div>
         <div className="flex items-center gap-1">
           <button
             onClick={() => refetch()}
-            className="p-1 text-gray-500 hover:text-white rounded hover:bg-[#2a2a4a] transition-colors"
+            className="p-1 text-muted hover:text-primary rounded hover:bg-surface transition-colors"
             title="새로고침"
           >
             <RefreshCw size={12} />
           </button>
           <button
             onClick={onClose}
-            className="p-1 text-gray-500 hover:text-white rounded hover:bg-[#2a2a4a] transition-colors"
+            className="p-1 text-muted hover:text-primary rounded hover:bg-surface transition-colors"
           >
             <X size={14} />
           </button>

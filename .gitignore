@@ -43,9 +43,9 @@ Thumbs.db
 test_ros2_ws/build/
 test_ros2_ws/install/
 test_ros2_ws/log/
-fleet_agent_cpp/build/
-fleet_agent_cpp/install/
-fleet_agent_cpp/log/
+ros2_robot_agent/build/
+ros2_robot_agent/install/
+ros2_robot_agent/log/
 go1.22.0.linux-amd64.tar.gz
 
 # ROS2 workspaces

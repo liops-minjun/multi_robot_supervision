@@ -30,7 +30,7 @@ npm run build                     # Production build
 tsc                               # Type check
 ```
 
-### Fleet Agent C++ (fleet_agent_cpp/)
+### Robot Agent C++ (ros2_robot_agent/)
 ```bash
 # Setup ROS2 workspace (one-time)
 ./setup_test.sh
@@ -42,7 +42,7 @@ colcon build --symlink-install
 source install/setup.bash
 
 # Run
-ros2 launch fleet_agent_cpp fleet_agent.launch.py server_ip:=192.168.0.100
+ros2 launch ros2_robot_agent robot_agent.launch.py server_ip:=192.168.0.100
 ```
 
 ### Development Scripts
@@ -78,8 +78,8 @@ This is a multi-robot fleet management system with:
 ## Architecture
 
 ```
-Central Server Go (Single Backend)        Fleet Agent C++ (ROS2)
-├── internal/api/*.go (REST+WS)           ├── include/fleet_agent/
+Central Server Go (Single Backend)        Robot Agent C++ (ROS2)
+├── internal/api/*.go (REST+WS)           ├── include/robot_agent/
 ├── internal/db/models.go                 │   ├── core/ (types, config, logger)
 ├── internal/state/manager.go             │   ├── transport/ (quic)
 ├── internal/executor/scheduler.go        │   ├── capability/ (scanner, store)
@@ -92,7 +92,7 @@ Central Server Go (Single Backend)        Fleet Agent C++ (ROS2)
 
 ## Performance Characteristics
 
-| Metric | Go Server | Fleet Agent C++ |
+| Metric | Go Server | Robot Agent C++ |
 |--------|-----------|-----------------|
 | Memory Usage | ~20-50MB (idle) | ~15-30MB (idle) |
 | Request Throughput | ~50,000 req/s | - |
@@ -152,7 +152,7 @@ The system supports **automatic capability discovery** without manual configurat
 ### Configuration (Minimal)
 
 ```yaml
-# fleet_agent_cpp/config/agent.yaml
+# ros2_robot_agent/config/agent.yaml
 agent:
   id: "agent_01"
   name: "Factory Agent"
@@ -167,7 +167,7 @@ server:
   quic:
     server_address: "192.168.0.200"
     server_port: 9443
-    ca_cert: "/etc/fleet_agent/certs/ca.crt"
+    ca_cert: "/etc/robot_agent/certs/ca.crt"
     enable_0rtt: true
     enable_datagrams: true
 ```
@@ -275,10 +275,10 @@ Both Central Server and Fleet Agent maintain in-memory caches for deployed Behav
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                     Fleet Agent (C++)                            │
+│                     Robot Agent (C++)                            │
 ├─────────────────────────────────────────────────────────────────┤
 │  GraphStorage (graph/storage.hpp)                                │
-│  ├── storage_path_   /var/lib/fleet_agent/graphs/               │
+│  ├── storage_path_   /var/lib/robot_agent/graphs/               │
 │  └── cache_          tbb::concurrent_hash_map<id, Graph>        │
 ├─────────────────────────────────────────────────────────────────┤
 │  Cache Flow:                                                     │
@@ -330,11 +330,11 @@ central_server_go/
 └── Dockerfile                  # Multi-stage build (~30MB)
 ```
 
-### Fleet Agent (C++)
+### Robot Agent (C++)
 ```
-fleet_agent_cpp/
+ros2_robot_agent/
 ├── CMakeLists.txt              # Build configuration (MsQuic required)
-├── include/fleet_agent/
+├── include/robot_agent/
 │   ├── core/
 │   │   ├── types.hpp           # TBB containers, data structures
 │   │   ├── config.hpp          # Configuration types
@@ -402,8 +402,8 @@ Queue Architecture:
 
 1. [ ] Update `internal/db/models.go` - BehaviorTree.Steps JSON structure
 2. [ ] Update `internal/graph/schema.go` - Canonical graph types
-3. [ ] Update `fleet_agent_cpp/include/fleet_agent/graph/storage.hpp`
-4. [ ] Update `fleet_agent_cpp/src/graph/executor.cpp`
+3. [ ] Update `ros2_robot_agent/include/robot_agent/graph/storage.hpp`
+4. [ ] Update `ros2_robot_agent/src/graph/executor.cpp`
 5. [ ] Update frontend Behavior Tree Editor (if UI needed)
 
 ### When Modifying gRPC Messages
@@ -411,14 +411,14 @@ Queue Architecture:
 1. [ ] Update `proto/fleet/v1/*.proto` - Protobuf definitions
 2. [ ] Run `protoc` to regenerate Go and C++ code
 3. [ ] Update `internal/grpc/server.go` - Server handlers
-4. [ ] Update `fleet_agent_cpp/src/transport/quic_transport.cpp` - Client handlers
+4. [ ] Update `ros2_robot_agent/src/transport/quic_transport.cpp` - Client handlers
 
 ### When Adding New Agent Config Options
 
-1. [ ] Update `fleet_agent_cpp/include/fleet_agent/core/config.hpp`
-2. [ ] Update `fleet_agent_cpp/src/core/config_loader.cpp`
-3. [ ] Update `fleet_agent_cpp/config/agent.example.yaml`
-4. [ ] Update `fleet_agent_cpp/src/agent.cpp` - Usage
+1. [ ] Update `ros2_robot_agent/include/robot_agent/core/config.hpp`
+2. [ ] Update `ros2_robot_agent/src/core/config_loader.cpp`
+3. [ ] Update `ros2_robot_agent/config/agent.example.yaml`
+4. [ ] Update `ros2_robot_agent/src/agent.cpp` - Usage
 
 ### When Changing DB Schema
 
@@ -458,7 +458,7 @@ curl http://localhost:8081/api/fleet/state
 open http://localhost:3000
 
 # 6. Build Fleet Agent (on robot)
-cd fleet_agent_cpp
+cd ros2_robot_agent
 mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
@@ -487,17 +487,17 @@ server:
   quic:
     server_address: "192.168.0.200"
     server_port: 9443
-    ca_cert: "/etc/fleet_agent/certs/ca.crt"
-    client_cert: "/etc/fleet_agent/certs/agent.crt"
-    client_key: "/etc/fleet_agent/certs/agent.key"
+    ca_cert: "/etc/robot_agent/certs/ca.crt"
+    client_cert: "/etc/robot_agent/certs/agent.crt"
+    client_key: "/etc/robot_agent/certs/agent.key"
     idle_timeout_ms: 30000
     keepalive_interval_ms: 10000
     enable_0rtt: true
     enable_datagrams: true
 
 paths:
-  behavior_trees: "/opt/fleet_agent/behavior_trees"
-  resumption_ticket: "/var/lib/fleet_agent/quic_ticket"
+  behavior_trees: "/opt/robot_agent/behavior_trees"
+  resumption_ticket: "/var/lib/robot_agent/quic_ticket"
 
 telemetry:
   interval_ms: 100
@@ -669,9 +669,9 @@ interfaces::CapabilityInfo CapabilityScannerAdapter::convert(const ActionCapabil
 }
 
 // LifecycleState enum 변환
-interfaces::LifecycleState convert_lifecycle_state(fleet_agent::LifecycleState state) {
+interfaces::LifecycleState convert_lifecycle_state(robot_agent::LifecycleState state) {
     switch (state) {
-        case fleet_agent::LifecycleState::ACTIVE:
+        case robot_agent::LifecycleState::ACTIVE:
             return interfaces::LifecycleState::ACTIVE;
         // ...
     }
@@ -681,8 +681,8 @@ interfaces::LifecycleState convert_lifecycle_state(fleet_agent::LifecycleState s
 ### 7. File Organization (파일 구성)
 
 ```
-fleet_agent_cpp/
-├── include/fleet_agent/
+ros2_robot_agent/
+├── include/robot_agent/
 │   ├── interfaces/              # 인터페이스 정의 (순수 가상 클래스)
 │   │   ├── transport.hpp        # ITransport
 │   │   ├── capability_scanner.hpp # ICapabilityScanner

@@ -32,15 +32,15 @@ const StateTransitionNode = memo(({ id, data, selected }: NodeProps<StateTransit
     <div
       className={`
         min-w-[180px] rounded-lg overflow-hidden
-        bg-[#1e1e2e] border-2
+        bg-surface border-2
         shadow-lg
         ${selected ? 'border-white/60 shadow-xl' : 'border-primary'}
         transition-all duration-150
       `}
     >
       {/* Header */}
-      <div className="px-3 py-2 bg-gradient-to-r from-[#2a2a4a] to-[#1e1e2e] flex items-center justify-between">
-        <span className="text-xs font-semibold text-white">{data.label}</span>
+      <div className="px-3 py-2 bg-gradient-to-r from-surface to-elevated flex items-center justify-between">
+        <span className="text-xs font-semibold text-primary">{data.label}</span>
         {preconditions.length > 0 && (
           <div className="flex items-center gap-1 px-1.5 py-0.5 bg-purple-500/20 rounded">
             <Filter className="w-2.5 h-2.5 text-purple-400" />
@@ -61,7 +61,7 @@ const StateTransitionNode = memo(({ id, data, selected }: NodeProps<StateTransit
         <div className="flex items-center gap-2">
           {/* From State */}
           <div className="flex-1">
-            <div className="text-[9px] text-gray-500 uppercase tracking-wider mb-1">From</div>
+            <div className="text-[9px] text-muted uppercase tracking-wider mb-1">From</div>
             <select
               value={data.fromState || states[0]}
               onChange={(e) => updateData('fromState', e.target.value)}
@@ -80,14 +80,14 @@ const StateTransitionNode = memo(({ id, data, selected }: NodeProps<StateTransit
 
           {/* Arrow */}
           <div className="flex items-center justify-center w-8 pt-4">
-            <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
             </svg>
           </div>
 
           {/* To State */}
           <div className="flex-1">
-            <div className="text-[9px] text-gray-500 uppercase tracking-wider mb-1">To</div>
+            <div className="text-[9px] text-muted uppercase tracking-wider mb-1">To</div>
             <select
               value={data.toState || states[0]}
               onChange={(e) => updateData('toState', e.target.value)}
@@ -108,7 +108,7 @@ const StateTransitionNode = memo(({ id, data, selected }: NodeProps<StateTransit
 
       {/* Footer */}
       <div className="px-3 py-1 border-t border-primary bg-surface">
-        <span className="text-[9px] text-gray-600 uppercase tracking-wider">State Transition</span>
+        <span className="text-[9px] text-muted uppercase tracking-wider">State Transition</span>
       </div>
 
       {/* Handles */}
