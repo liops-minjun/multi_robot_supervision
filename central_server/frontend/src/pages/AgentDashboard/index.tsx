@@ -771,9 +771,19 @@ export default function AgentDashboard() {
 
   // Deploy action graph mutation
   const deployGraphMutation = useMutation({
-    mutationFn: ({ graphId, agentId }: { graphId: string; agentId: string }) =>
-      agentApi.deployActionGraph(graphId, agentId),
+    mutationFn: async ({ graphId, agentId }: { graphId: string; agentId: string }) => {
+      const result = await agentApi.deployActionGraph(graphId, agentId)
+      // Check logical success (API returns 200 even on logical failure)
+      if (!result.success) {
+        throw new Error(result.error || 'Deployment failed')
+      }
+      return result
+    },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agent-assigned-graphs', selectedAgentId] })
+    },
+    onError: () => {
+      // Also refresh on error to show failed status
       queryClient.invalidateQueries({ queryKey: ['agent-assigned-graphs', selectedAgentId] })
     },
   })

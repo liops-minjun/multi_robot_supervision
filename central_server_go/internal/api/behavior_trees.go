@@ -912,14 +912,7 @@ func (s *Server) DeployBehaviorTreeToAgent(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Deploy via QUIC
-	result, err := s.quicHandler.DeployCanonicalGraph(r.Context(), agentID, graphJSON)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Deployment failed: "+err.Error())
-		return
-	}
-
-	// Update AgentBehaviorTree record
+	// Get or create AgentBehaviorTree record first
 	abt, _ := s.repo.GetAgentBehaviorTree(agentID, graphID)
 	if abt == nil {
 		// Create new assignment
@@ -936,6 +929,40 @@ func (s *Server) DeployBehaviorTreeToAgent(w http.ResponseWriter, r *http.Reques
 			UpdatedAt:        time.Now(),
 		}
 		s.repo.CreateAgentBehaviorTree(abt)
+	}
+
+	// Deploy via QUIC
+	result, err := s.quicHandler.DeployCanonicalGraph(r.Context(), agentID, graphJSON)
+	if err != nil {
+		// Update database to reflect failed status
+		abt.DeploymentStatus = "failed"
+		abt.DeploymentError = sql.NullString{String: err.Error(), Valid: true}
+		abt.UpdatedAt = time.Now()
+		s.repo.UpdateAgentBehaviorTree(abt)
+
+		// Create deployment log for the failure
+		deployLog := &db.BehaviorTreeDeploymentLog{
+			ID:                  uuid.New().String(),
+			AgentBehaviorTreeID: abt.ID,
+			Action:              "deploy",
+			Version:             dbGraph.Version,
+			Status:              "failed",
+			ErrorMessage:        sql.NullString{String: err.Error(), Valid: true},
+			InitiatedAt:         time.Now(),
+			CompletedAt:         sql.NullTime{Time: time.Now(), Valid: true},
+		}
+		s.repo.CreateDeploymentLog(deployLog)
+
+		// Return 200 with success=false so frontend can handle it properly
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success":           false,
+			"behavior_tree_id":  graphID,
+			"agent_id":          agentID,
+			"version":           dbGraph.Version,
+			"error":             err.Error(),
+			"deployment_status": "failed",
+		})
+		return
 	}
 
 	if result.Success {
