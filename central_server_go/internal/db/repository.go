@@ -806,6 +806,9 @@ func (r *Repository) GetBehaviorTree(id string) (*BehaviorTree, error) {
 					AutoGenerateStates: getBool(props, "auto_generate_states"),
 					CreatedAt:          time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
 					UpdatedAt:          time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
+					// Lock fields
+					LockedBy:      toNullString(getString(props, "locked_by")),
+					LockSessionID: toNullString(getString(props, "lock_session_id")),
 				}
 				if entryPoint != "" {
 					bt.EntryPoint = toNullString(entryPoint)
@@ -818,6 +821,13 @@ func (r *Repository) GetBehaviorTree(id string) (*BehaviorTree, error) {
 				}
 				if statesJSON != "" {
 					bt.States = datatypes.JSON([]byte(statesJSON))
+				}
+				// Parse lock timestamps
+				if lockedAtMs := getInt64(props, "locked_at_ms"); lockedAtMs > 0 {
+					bt.LockedAt = sql.NullTime{Time: time.UnixMilli(lockedAtMs).UTC(), Valid: true}
+				}
+				if lockExpiresAtMs := getInt64(props, "lock_expires_at_ms"); lockExpiresAtMs > 0 {
+					bt.LockExpiresAt = sql.NullTime{Time: time.UnixMilli(lockExpiresAtMs).UTC(), Valid: true}
 				}
 				return &bt, nil
 			}
@@ -835,6 +845,53 @@ func (r *Repository) GetBehaviorTree(id string) (*BehaviorTree, error) {
 
 func (r *Repository) GetBehaviorTreesByAgent(agentID string) ([]BehaviorTree, error) {
 	return r.GetBehaviorTrees(agentID, true)
+}
+
+// GetBehaviorTreesWithExpiredLocks returns all behavior trees with expired locks
+func (r *Repository) GetBehaviorTreesWithExpiredLocks() ([]BehaviorTree, error) {
+	ctx := context.Background()
+	nowMs := time.Now().UTC().UnixMilli()
+
+	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
+		// Find all graphs with lock_expires_at_ms set and expired
+		res, err := tx.Run(ctx, `
+			MATCH (g:ActionGraph)
+			WHERE g.lock_expires_at_ms > 0 AND g.lock_expires_at_ms < $now_ms
+			RETURN g
+		`, map[string]any{"now_ms": nowMs})
+		if err != nil {
+			return nil, err
+		}
+
+		var graphs []BehaviorTree
+		for res.Next(ctx) {
+			node, _ := res.Record().Get("g")
+			if gNode, ok := node.(neo4j.Node); ok {
+				props := gNode.Props
+				bt := BehaviorTree{
+					ID:            getString(props, "id"),
+					Name:          getString(props, "name"),
+					LockedBy:      toNullString(getString(props, "locked_by")),
+					LockSessionID: toNullString(getString(props, "lock_session_id")),
+				}
+				if lockedAtMs := getInt64(props, "locked_at_ms"); lockedAtMs > 0 {
+					bt.LockedAt = sql.NullTime{Time: time.UnixMilli(lockedAtMs).UTC(), Valid: true}
+				}
+				if lockExpiresAtMs := getInt64(props, "lock_expires_at_ms"); lockExpiresAtMs > 0 {
+					bt.LockExpiresAt = sql.NullTime{Time: time.UnixMilli(lockExpiresAtMs).UTC(), Valid: true}
+				}
+				graphs = append(graphs, bt)
+			}
+		}
+		return graphs, res.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return []BehaviorTree{}, nil
+	}
+	return result.([]BehaviorTree), nil
 }
 
 func (r *Repository) GetBehaviorTrees(agentID string, includeTemplates bool) ([]BehaviorTree, error) {
@@ -1020,6 +1077,16 @@ func (r *Repository) UpdateBehaviorTree(graph *BehaviorTree) error {
 	}
 
 	ctx := context.Background()
+
+	// Handle lock fields - convert to milliseconds for Neo4j storage
+	var lockedAtMs, lockExpiresAtMs int64
+	if graph.LockedAt.Valid {
+		lockedAtMs = graph.LockedAt.Time.UTC().UnixMilli()
+	}
+	if graph.LockExpiresAt.Valid {
+		lockExpiresAtMs = graph.LockExpiresAt.Time.UTC().UnixMilli()
+	}
+
 	props := map[string]any{
 		"id":                    graph.ID,
 		"name":                  graph.Name,
@@ -1038,6 +1105,11 @@ func (r *Repository) UpdateBehaviorTree(graph *BehaviorTree) error {
 		"states_json":           statesJSON,
 		"auto_generate_states":  graph.AutoGenerateStates,
 		"updated_at_ms":         time.Now().UTC().UnixMilli(),
+		// Lock fields
+		"locked_by":        graph.LockedBy.String,
+		"locked_at_ms":     lockedAtMs,
+		"lock_expires_at_ms": lockExpiresAtMs,
+		"lock_session_id":  graph.LockSessionID.String,
 	}
 	_, err = r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
 		_, err := tx.Run(ctx, `
@@ -1057,7 +1129,11 @@ func (r *Repository) UpdateBehaviorTree(graph *BehaviorTree) error {
 			    g.schema_version = $schema_version,
 			    g.states_json = $states_json,
 			    g.auto_generate_states = $auto_generate_states,
-			    g.updated_at_ms = $updated_at_ms
+			    g.updated_at_ms = $updated_at_ms,
+			    g.locked_by = $locked_by,
+			    g.locked_at_ms = $locked_at_ms,
+			    g.lock_expires_at_ms = $lock_expires_at_ms,
+			    g.lock_session_id = $lock_session_id
 		`, props)
 		if err != nil {
 			return nil, err
@@ -2468,11 +2544,17 @@ func (r *Repository) CountTemplateAssignments(templateID string) int {
 func (r *Repository) MarkTemplateAssignmentsOutdated(templateID string, newVersion int) {
 	ctx := context.Background()
 	_, _ = r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		// Update server_version for all assignments
+		// Only mark as "outdated" if it was previously "deployed" (deployed_version > 0)
+		// Keep "pending" status for assignments that were never deployed
 		_, err := tx.Run(ctx, `
 			MATCH (aag:AgentActionGraph {behavior_tree_id:$id})
-			SET aag.deployed_version = 0,
-			    aag.deployment_status = "outdated"
-		`, map[string]any{"id": templateID})
+			SET aag.server_version = $newVersion,
+			    aag.deployment_status = CASE
+			        WHEN aag.deployed_version > 0 THEN "outdated"
+			        ELSE aag.deployment_status
+			    END
+		`, map[string]any{"id": templateID, "newVersion": newVersion})
 		return nil, err
 	})
 }

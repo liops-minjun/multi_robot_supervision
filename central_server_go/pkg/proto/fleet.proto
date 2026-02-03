@@ -122,6 +122,8 @@ message ServerMessage {
     FleetStateUpdate fleet_state_update = 14; // Broadcast fleet state changes
     DeployGraphCommand deploy_graph = 15;     // Deploy action graph with states
     StartTaskCommand start_task = 16;         // Agent-driven task execution
+    DeleteGraphCommand delete_graph = 17;     // Delete graph from agent storage
+    GraphUpdateNotification graph_update = 18; // Real-time graph sync notification
   }
 }
 
@@ -151,6 +153,31 @@ message DeployGraphCommand {
   bytes graph_json = 5;            // Complete canonical graph JSON
   repeated GraphState states = 6;   // Graph states for state management
   string checksum = 7;
+}
+
+// Delete graph command (unassign from agent)
+message DeleteGraphCommand {
+  string command_id = 1;
+  string agent_id = 2;
+  string action_graph_id = 3;
+  string reason = 4;               // "unassigned", "deleted", "modified" (for auto-redeploy)
+}
+
+// Graph update notification (for real-time sync)
+message GraphUpdateNotification {
+  string command_id = 1;
+  string agent_id = 2;
+  string action_graph_id = 3;
+  GraphUpdateAction action = 4;
+  int32 new_version = 5;
+  bytes graph_json = 6;            // For MODIFIED action: new canonical graph JSON
+
+  enum GraphUpdateAction {
+    UPDATE_UNKNOWN = 0;
+    MODIFIED = 1;                  // Graph was modified → auto-redeploy
+    DELETED = 2;                   // Graph was deleted
+    UNASSIGNED = 3;                // Graph was unassigned from agent → delete local copy
+  }
 }
 
 // Graph state definition

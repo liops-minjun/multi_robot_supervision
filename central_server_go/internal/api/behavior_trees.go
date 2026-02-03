@@ -180,6 +180,7 @@ func (s *Server) GetBehaviorTree(w http.ResponseWriter, r *http.Request) {
 // UpdateBehaviorTree updates a behavior tree
 func (s *Server) UpdateBehaviorTree(w http.ResponseWriter, r *http.Request) {
 	graphID := chi.URLParam(r, "graphID")
+	sessionID := r.Header.Get("X-Session-ID")
 
 	graph, err := s.repo.GetBehaviorTree(graphID)
 	if err != nil {
@@ -189,6 +190,23 @@ func (s *Server) UpdateBehaviorTree(w http.ResponseWriter, r *http.Request) {
 	if graph == nil {
 		writeError(w, http.StatusNotFound, "Behavior Tree not found")
 		return
+	}
+
+	// Validate lock ownership if session ID is provided
+	if sessionID != "" {
+		isOwner, lockedBy, err := s.ValidateLockOwnership(graphID, sessionID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !isOwner {
+			writeJSON(w, http.StatusConflict, map[string]interface{}{
+				"error":     "locked",
+				"message":   "Behavior Tree is locked by another user",
+				"locked_by": lockedBy,
+			})
+			return
+		}
 	}
 
 	var req BehaviorTreeUpdateRequest
@@ -281,12 +299,31 @@ func (s *Server) UpdateBehaviorTree(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Log affected agents for visibility
-	if len(affectedAgents) > 0 {
-		// These agents need to be notified about the graph update
-		// TODO: Send version mismatch notification via QUIC
-		_ = affectedAgents
+	// Notify affected agents about the graph update via QUIC
+	if len(affectedAgents) > 0 && s.quicHandler != nil {
+		// Send graph update notification to each affected agent
+		for _, agentID := range affectedAgents {
+			// Convert to canonical format with agent-specific server substitution
+			agent, _ := s.repo.GetAgent(agentID)
+			if agent != nil && canonicalGraph != nil {
+				agentGraph := *canonicalGraph
+				agentGraph.SubstituteServerPatterns(agent.Namespace)
+				graphJSON, _ := json.Marshal(agentGraph)
+
+				// Send async notification (don't block the response)
+				go s.quicHandler.SendGraphUpdateNotification(
+					agentID,
+					graph.ID,
+					graph.Version,
+					"MODIFIED",
+					graphJSON,
+				)
+			}
+		}
 	}
+
+	// Broadcast graph sync event via WebSocket
+	s.wsHub.BroadcastGraphSync(graph.ID, "", "updated", graph.Version)
 
 	writeJSON(w, http.StatusOK, behaviorTreeToResponse(graph, s.repo))
 }

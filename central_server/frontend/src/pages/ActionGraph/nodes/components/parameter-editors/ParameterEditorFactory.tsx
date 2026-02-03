@@ -1,5 +1,5 @@
 import { memo, useCallback } from 'react'
-import { Code } from 'lucide-react'
+import { Code, Radio, Crosshair } from 'lucide-react'
 import PoseEditor from './PoseEditor'
 import JointArrayEditor from './JointArrayEditor'
 import TelemetryPreview from './TelemetryPreview'
@@ -155,6 +155,22 @@ const ParameterEditorFactory = memo(({
         value={value}
         onChange={onChange}
         robotTelemetry={robotTelemetry}
+      />
+    )
+  }
+
+  // JointState type (sensor_msgs/msg/JointState)
+  if (editorType === 'joint_state') {
+    return (
+      <JointStateEditor
+        value={value}
+        onChange={onChange}
+        robotTelemetry={robotTelemetry}
+        fieldSource={fieldSource}
+        availableSteps={availableSteps}
+        onFieldSourceChange={onFieldSourceChange}
+        fieldType={fieldType}
+        fieldName={fieldName}
       />
     )
   }
@@ -596,6 +612,172 @@ const TwistEditor = memo(({
   )
 })
 
+// JointState Editor for sensor_msgs/msg/JointState
+const JointStateEditor = memo(({
+  value,
+  onChange,
+  robotTelemetry,
+  fieldSource,
+  availableSteps,
+  onFieldSourceChange,
+  fieldType,
+  fieldName,
+}: {
+  value: unknown
+  onChange: (value: unknown) => void
+  robotTelemetry?: RobotTelemetryData | null
+  fieldSource?: ParameterFieldSource
+  availableSteps?: AvailableStep[]
+  onFieldSourceChange?: (source: ParameterFieldSource | undefined) => void
+  fieldType: string
+  fieldName: string
+}) => {
+  // Check if field has a binding (step_result source)
+  const hasBinding = fieldSource?.source === 'step_result'
+
+  // If bound to step result, show binding selector
+  if (hasBinding && onFieldSourceChange) {
+    return (
+      <ParameterSourceSelector
+        fieldSource={fieldSource}
+        availableSteps={availableSteps || []}
+        onChange={onFieldSourceChange}
+        targetFieldType={fieldType}
+        targetFieldName={fieldName}
+      />
+    )
+  }
+
+  // Get live joint state from telemetry
+  const liveJointState = robotTelemetry?.joint_state
+  const hasLiveTelemetry = !!(liveJointState?.name && liveJointState.name.length > 0)
+
+  // Current value as JointState
+  const jointStateValue = value as {
+    name?: string[]
+    position?: number[]
+    velocity?: number[]
+    effort?: number[]
+  } | null
+
+  const hasValue = jointStateValue && jointStateValue.name && jointStateValue.name.length > 0
+
+  // Capture current telemetry (only name and position - what planners actually use)
+  const handleCapture = useCallback(() => {
+    if (!liveJointState) return
+    // Only capture name and position - velocity/effort are rarely needed for goal
+    onChange({
+      name: [...liveJointState.name],
+      position: [...liveJointState.position],
+    })
+  }, [liveJointState, onChange])
+
+  // Check if there are any steps with result fields (for enabling binding)
+  const hasBindableSteps = availableSteps?.some(s => s.resultFields && s.resultFields.length > 0) || false
+
+  return (
+    <div className="space-y-2">
+      {/* Live Telemetry Preview */}
+      {hasLiveTelemetry ? (
+        <div className="p-2 bg-green-500/10 rounded border border-green-500/30">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <Radio className="w-3 h-3 text-green-400 animate-pulse" />
+              <span className="text-[9px] text-green-400 font-medium">LIVE JointState</span>
+              <span className="text-[8px] text-muted">({liveJointState!.name.length}개 관절)</span>
+            </div>
+          </div>
+          {/* Simplified view - only name and position (what planners need) */}
+          <div className="max-h-28 overflow-y-auto mb-2">
+            <div className="grid grid-cols-2 gap-2 text-[8px] text-muted font-semibold mb-1 px-1">
+              <span>Joint Name</span>
+              <span>Position (rad)</span>
+            </div>
+            {liveJointState!.name.map((name, idx) => (
+              <div key={name} className="grid grid-cols-2 gap-2 text-[9px] font-mono py-0.5 px-1 hover:bg-green-500/10 rounded">
+                <span className="text-primary truncate" title={name}>{name}</span>
+                <span className="text-cyan-400">{liveJointState!.position[idx]?.toFixed(4)}</span>
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={(e) => { e.stopPropagation(); handleCapture() }}
+            className="w-full py-2.5 bg-green-500/30 hover:bg-green-500/50 text-green-300 rounded text-[11px] font-bold flex items-center justify-center gap-2 transition-all"
+          >
+            <Crosshair size={14} />
+            현재 자세 캡처 ({liveJointState!.name.length}개 관절)
+          </button>
+        </div>
+      ) : (
+        <div className="p-3 bg-gray-800/50 rounded border border-gray-700/50">
+          <div className="flex items-center gap-2">
+            <Radio className="w-3 h-3 text-muted" />
+            <span className="text-[10px] text-muted">JointState Telemetry 없음</span>
+          </div>
+          <p className="text-[9px] text-muted mt-1.5">로봇을 선택하고 텔레메트리가 수신되면 현재 자세를 캡처할 수 있습니다.</p>
+        </div>
+      )}
+
+      {/* Saved Value - User-friendly display */}
+      {hasValue && (
+        <div className="p-2 bg-amber-500/10 rounded border border-amber-500/30">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] text-amber-400 font-medium">저장된 값</span>
+            <span className="text-[9px] text-amber-300">{jointStateValue!.name!.length}개 관절</span>
+          </div>
+          <div className="max-h-32 overflow-y-auto bg-sunken rounded p-1.5">
+            <div className="grid grid-cols-2 gap-2 text-[8px] text-muted font-semibold mb-1">
+              <span>Joint</span>
+              <span>Position</span>
+            </div>
+            {jointStateValue!.name!.map((name, idx) => (
+              <div key={name} className="grid grid-cols-2 gap-2 text-[9px] font-mono py-0.5">
+                <span className="text-secondary truncate" title={name}>{name}</span>
+                <span className="text-amber-400">{jointStateValue!.position?.[idx]?.toFixed(4) || '0'}</span>
+              </div>
+            ))}
+          </div>
+          {/* Clear button */}
+          <button
+            onClick={(e) => { e.stopPropagation(); onChange(null) }}
+            className="w-full mt-2 py-1 text-[9px] text-muted hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+          >
+            값 초기화
+          </button>
+        </div>
+      )}
+
+      {/* Binding option */}
+      {onFieldSourceChange && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            if (!hasBindableSteps) return
+            const firstStep = availableSteps?.find(s => s.resultFields && s.resultFields.length > 0)
+            if (firstStep) {
+              onFieldSourceChange({
+                source: 'step_result',
+                step_id: firstStep.id,
+                result_field: firstStep.resultFields?.[0]?.name || '',
+              })
+            }
+          }}
+          disabled={!hasBindableSteps}
+          className={`w-full py-1.5 border rounded text-[10px] flex items-center justify-center gap-1 transition-all ${
+            hasBindableSteps
+              ? 'bg-purple-500/10 hover:bg-purple-500/20 border-purple-500/30 text-purple-400 cursor-pointer'
+              : 'bg-gray-800/30 border-gray-700 text-muted cursor-not-allowed'
+          }`}
+        >
+          <Code size={10} />
+          이전 Step 결과 사용
+          {!hasBindableSteps && <span className="text-[9px] text-muted ml-1">(사용 가능한 Step 없음)</span>}
+        </button>
+      )}
+    </div>
+  )
+})
+
 // JSON Editor for complex types
 const JsonEditor = memo(({
   value,
@@ -639,6 +821,7 @@ const JsonEditor = memo(({
 
 ParameterEditorFactory.displayName = 'ParameterEditorFactory'
 PrimitiveEditor.displayName = 'PrimitiveEditor'
+JointStateEditor.displayName = 'JointStateEditor'
 NumericArrayEditor.displayName = 'NumericArrayEditor'
 StringArrayEditor.displayName = 'StringArrayEditor'
 ArrayEditorWithBinding.displayName = 'ArrayEditorWithBinding'

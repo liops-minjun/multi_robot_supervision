@@ -167,6 +167,12 @@ type BehaviorTree struct {
 	States             datatypes.JSON `gorm:"type:jsonb"` // []GraphState - available states for this graph
 	AutoGenerateStates bool           `gorm:"default:true"` // Auto-generate states from steps
 
+	// Edit lock fields (for concurrent editing prevention)
+	LockedBy      sql.NullString `gorm:"size:100"`        // Display name of user who holds the lock
+	LockedAt      sql.NullTime                            // When the lock was acquired
+	LockExpiresAt sql.NullTime                            // When the lock expires (5 min timeout)
+	LockSessionID sql.NullString `gorm:"size:100;index"`  // Session ID for lock ownership verification
+
 	// Relationships
 	Agent              *Agent              `gorm:"foreignKey:AgentID"`
 	Tasks              []Task              `gorm:"foreignKey:BehaviorTreeID"`

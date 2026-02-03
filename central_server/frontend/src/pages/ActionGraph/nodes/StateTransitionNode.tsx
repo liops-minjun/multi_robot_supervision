@@ -30,6 +30,7 @@ const StateTransitionNode = memo(({ id, data, selected }: NodeProps<StateTransit
 
   return (
     <div
+      draggable={false}
       className={`
         min-w-[180px] rounded-lg overflow-hidden
         bg-surface border-2

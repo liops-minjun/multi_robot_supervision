@@ -292,6 +292,7 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
 
   return (
     <div
+      draggable={false}
       className={`
         relative min-w-[280px] max-w-[340px] rounded-lg overflow-visible
         bg-surface border-2 shadow-lg

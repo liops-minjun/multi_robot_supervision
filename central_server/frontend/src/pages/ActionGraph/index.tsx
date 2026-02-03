@@ -21,9 +21,11 @@ import ReactFlow, {
 import 'reactflow/dist/style.css'
 import {
   Trash2, Zap, ChevronDown, ChevronRight, Server, Activity, Plus, PlusCircle, X,
-  Cpu, FileCode, Users, Link2, Unlink, Check, AlertCircle, Clock, Layout, Save, Radio
+  Cpu, FileCode, Users, Link2, Unlink, Check, AlertCircle, Clock, Layout, Save, Radio,
+  Edit, Lock, Unlock
 } from 'lucide-react'
-import { templateApi, stateDefinitionApi, agentApi, capabilityApi } from '../../api/client'
+import { templateApi, stateDefinitionApi, agentApi, capabilityApi, behaviorTreeLockApi } from '../../api/client'
+import { useWebSocket, BehaviorTreeLockMessage, GraphSyncMessage } from '../../contexts/WebSocketContext'
 import type {
   ActionGraph, StateDefinition, ActionMapping,
   AssignmentInfo, TemplateListItem,
@@ -337,6 +339,20 @@ function ActionGraphEditor() {
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isAutoSavingRef = useRef(false)  // Prevent re-trigger during save
 
+  // Edit lock state
+  const [sessionId] = useState(() => `session_${Date.now()}_${Math.random().toString(36).slice(2)}`)
+  const [isEditing, setIsEditing] = useState(false)
+  const [lockStatus, setLockStatus] = useState<{
+    isLocked: boolean
+    lockedBy: string | null
+    expiresAt: number | null
+    isOwnLock: boolean
+  }>({ isLocked: false, lockedBy: null, expiresAt: null, isOwnLock: false })
+  const lockHeartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // WebSocket for real-time updates
+  const { subscribeLockEvents, subscribeSyncEvents } = useWebSocket()
+
   // ReactFlow
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition } = useReactFlow()
@@ -461,11 +477,13 @@ function ActionGraphEditor() {
       steps,
       entryPoint,
       states,
+      lockSessionId,
     }: {
       templateId: string
       steps: ActionGraph['steps']
       entryPoint?: string
       states?: ActionGraph['states']
+      lockSessionId?: string
     }) => {
       const payload: Partial<ActionGraph> = { steps }
       if (entryPoint) {
@@ -474,7 +492,7 @@ function ActionGraphEditor() {
       if (states && states.length > 0) {
         payload.states = states
       }
-      return templateApi.update(templateId, payload)
+      return templateApi.update(templateId, payload, lockSessionId)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['template', selectedTemplateId] })
@@ -748,13 +766,19 @@ function ActionGraphEditor() {
         edges: JSON.stringify(edges),
       }
 
-      // Trigger save
+      // Trigger save (only if editing/have lock)
+      if (!isEditing) {
+        isAutoSavingRef.current = false
+        setSaveStatus('idle')
+        return
+      }
       const { steps, entryPoint, generatedStates } = convertGraphToSteps()
       saveTemplate.mutate({
         templateId,
         steps,
         entryPoint,
         states: generatedStates,
+        lockSessionId: sessionId,
       }, {
         onSuccess: () => {
           // Update lastSavedStateRef only after successful save
@@ -769,7 +793,7 @@ function ActionGraphEditor() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, edges, templateId])  // convertGraphToSteps and saveTemplate are stable refs
+  }, [nodes, edges, templateId, isEditing, sessionId])  // convertGraphToSteps and saveTemplate are stable refs
 
   // Clear validation errors when template changes
   useEffect(() => {
@@ -1066,13 +1090,216 @@ function ActionGraphEditor() {
     }
 
     const { steps, entryPoint, generatedStates } = convertGraphToSteps()
-    saveTemplate.mutate({ templateId: selectedTemplateId, steps, entryPoint, states: generatedStates }, {
+    saveTemplate.mutate({ templateId: selectedTemplateId, steps, entryPoint, states: generatedStates, lockSessionId: sessionId }, {
       onSuccess: () => {
         // Update lastSavedStateRef only after successful save
         lastSavedStateRef.current = stateToSave
       }
     })
-  }, [selectedTemplateId, convertGraphToSteps, saveTemplate, validateGraph, nodes, edges])
+  }, [selectedTemplateId, convertGraphToSteps, saveTemplate, validateGraph, nodes, edges, sessionId])
+
+  // Lock management functions
+  const acquireLock = useCallback(async () => {
+    if (!selectedTemplateId) return false
+
+    try {
+      const result = await behaviorTreeLockApi.acquire(selectedTemplateId, sessionId, 'User')
+      if (result.success) {
+        setIsEditing(true)
+        setLockStatus({
+          isLocked: true,
+          lockedBy: result.locked_by,
+          expiresAt: result.expires_at,
+          isOwnLock: true,
+        })
+
+        // Start heartbeat to keep lock alive (every 2 minutes)
+        if (lockHeartbeatRef.current) {
+          clearInterval(lockHeartbeatRef.current)
+        }
+        lockHeartbeatRef.current = setInterval(async () => {
+          if (!selectedTemplateId) return
+          const heartbeatResult = await behaviorTreeLockApi.heartbeat(selectedTemplateId, sessionId)
+          if (!heartbeatResult.success) {
+            // Lock was lost
+            console.warn('[Lock] Lock lost:', heartbeatResult.error)
+            setIsEditing(false)
+            setLockStatus({ isLocked: false, lockedBy: null, expiresAt: null, isOwnLock: false })
+            if (lockHeartbeatRef.current) {
+              clearInterval(lockHeartbeatRef.current)
+              lockHeartbeatRef.current = null
+            }
+          } else if (heartbeatResult.expires_at) {
+            setLockStatus(prev => ({ ...prev, expiresAt: heartbeatResult.expires_at! }))
+          }
+        }, 2 * 60 * 1000) // 2 minutes
+
+        return true
+      } else {
+        // Lock is held by someone else
+        setLockStatus({
+          isLocked: true,
+          lockedBy: result.locked_by || 'Another user',
+          expiresAt: result.expires_at || null,
+          isOwnLock: false,
+        })
+        alert(`This graph is currently being edited by ${result.locked_by || 'another user'}.`)
+        return false
+      }
+    } catch (error) {
+      console.error('[Lock] Failed to acquire lock:', error)
+      return false
+    }
+  }, [selectedTemplateId, sessionId])
+
+  const releaseLock = useCallback(async () => {
+    if (!selectedTemplateId || !isEditing) return
+
+    // Save changes before releasing lock
+    const { steps, entryPoint, generatedStates } = convertGraphToSteps()
+
+    try {
+      // Save the current state
+      const payload: Partial<ActionGraph> = { steps }
+      if (entryPoint) {
+        payload.entry_point = entryPoint
+      }
+      if (generatedStates && generatedStates.length > 0) {
+        payload.states = generatedStates
+      }
+      await templateApi.update(selectedTemplateId, payload, sessionId)
+
+      // Update saved state ref
+      lastSavedStateRef.current = {
+        nodes: JSON.stringify(nodes),
+        edges: JSON.stringify(edges),
+      }
+
+      // Invalidate queries to refetch
+      queryClient.invalidateQueries({ queryKey: ['template', selectedTemplateId] })
+      queryClient.invalidateQueries({ queryKey: ['templates-all'] })
+    } catch (error) {
+      console.error('[Lock] Failed to save before releasing lock:', error)
+      // Ask user if they want to release lock without saving
+      const proceed = window.confirm('저장에 실패했습니다. 저장하지 않고 편집을 종료하시겠습니까?')
+      if (!proceed) return
+    }
+
+    // Stop heartbeat
+    if (lockHeartbeatRef.current) {
+      clearInterval(lockHeartbeatRef.current)
+      lockHeartbeatRef.current = null
+    }
+
+    // Clear any pending auto-save timer
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current)
+      autoSaveTimerRef.current = null
+    }
+
+    try {
+      await behaviorTreeLockApi.release(selectedTemplateId, sessionId)
+    } catch (error) {
+      console.error('[Lock] Failed to release lock:', error)
+    }
+
+    setIsEditing(false)
+    setLockStatus({ isLocked: false, lockedBy: null, expiresAt: null, isOwnLock: false })
+  }, [selectedTemplateId, sessionId, isEditing, convertGraphToSteps, nodes, edges, queryClient])
+
+  // Fetch lock status when template changes
+  useEffect(() => {
+    if (!selectedTemplateId) {
+      setLockStatus({ isLocked: false, lockedBy: null, expiresAt: null, isOwnLock: false })
+      setIsEditing(false)
+      return
+    }
+
+    const fetchLockStatus = async () => {
+      try {
+        const status = await behaviorTreeLockApi.getStatus(selectedTemplateId, sessionId)
+        setLockStatus({
+          isLocked: status.is_locked,
+          lockedBy: status.locked_by || null,
+          expiresAt: status.expires_at || null,
+          isOwnLock: status.is_own_lock,
+        })
+        setIsEditing(status.is_own_lock)
+      } catch (error) {
+        console.error('[Lock] Failed to fetch lock status:', error)
+      }
+    }
+
+    fetchLockStatus()
+  }, [selectedTemplateId, sessionId])
+
+  // Subscribe to WebSocket lock events for current template
+  useEffect(() => {
+    if (!selectedTemplateId) return
+
+    const unsubscribeLock = subscribeLockEvents(selectedTemplateId, (msg: BehaviorTreeLockMessage) => {
+      console.log('[WebSocket] Lock event:', msg)
+      if (msg.action === 'acquired') {
+        // Check if it's our own lock (we already know about it)
+        if (msg.locked_by !== 'User') {
+          setLockStatus({
+            isLocked: true,
+            lockedBy: msg.locked_by || 'Another user',
+            expiresAt: msg.expires_at || null,
+            isOwnLock: false,
+          })
+        }
+      } else if (msg.action === 'released' || msg.action === 'expired') {
+        // Lock was released or expired
+        if (!isEditing) {
+          setLockStatus({ isLocked: false, lockedBy: null, expiresAt: null, isOwnLock: false })
+        }
+      }
+    })
+
+    const unsubscribeSync = subscribeSyncEvents(selectedTemplateId, (msg: GraphSyncMessage) => {
+      console.log('[WebSocket] Sync event:', msg)
+      if (msg.action === 'updated') {
+        // Graph was updated by someone else, refetch
+        if (!isEditing) {
+          queryClient.invalidateQueries({ queryKey: ['template', selectedTemplateId] })
+        }
+      }
+    })
+
+    return () => {
+      unsubscribeLock()
+      unsubscribeSync()
+    }
+  }, [selectedTemplateId, subscribeLockEvents, subscribeSyncEvents, isEditing, queryClient])
+
+  // Cleanup lock on unmount or template change
+  useEffect(() => {
+    const currentTemplateId = selectedTemplateId
+    const currentSessionId = sessionId
+    const wasEditing = isEditing
+
+    return () => {
+      // Release lock on cleanup
+      if (wasEditing && currentTemplateId) {
+        // Use fetch with keepalive for reliable cleanup on page unload
+        const url = `/api/behavior-trees/${currentTemplateId}/lock`
+        fetch(url, {
+          method: 'DELETE',
+          headers: { 'X-Session-ID': currentSessionId },
+          keepalive: true,
+        }).catch(() => {
+          // Ignore errors during cleanup
+        })
+      }
+
+      // Stop heartbeat
+      if (lockHeartbeatRef.current) {
+        clearInterval(lockHeartbeatRef.current)
+        lockHeartbeatRef.current = null
+      }
+    }
+  }, [selectedTemplateId, sessionId, isEditing])
 
   const onConnect = useCallback(
     (params: Connection) => {
@@ -1556,12 +1783,16 @@ function ActionGraphEditor() {
                       {category.items.map((item, idx) => (
                         <div
                           key={`${item.subtype}-${idx}`}
-                          draggable={true}
-                          onDragStart={(e) => {
+                          draggable={isEditing}
+                          onDragStart={isEditing ? (e) => {
                             e.stopPropagation()
                             onDragStart(e, item)
-                          }}
-                          className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-grab active:cursor-grabbing hover:bg-elevated transition-colors border border-transparent hover:border-secondary ${
+                          } : undefined}
+                          className={`flex items-center gap-2 px-2 py-1.5 rounded transition-colors border border-transparent ${
+                            isEditing
+                              ? 'cursor-grab active:cursor-grabbing hover:bg-elevated hover:border-secondary'
+                              : 'cursor-default opacity-60'
+                          } ${
                             item.isAvailable === false ? 'opacity-50' : ''
                           }`}
                         >
@@ -1617,6 +1848,40 @@ function ActionGraphEditor() {
           </div>
           {selectedTemplate && (
             <div className="flex items-center gap-2">
+              {/* Lock Status / Edit Button */}
+              {!isEditing ? (
+                // Not editing - show Edit button or lock status
+                lockStatus.isLocked && !lockStatus.isOwnLock ? (
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 bg-yellow-600/20 text-yellow-400 rounded-lg text-sm border border-yellow-500/30">
+                    <Lock size={14} />
+                    <span>{lockStatus.lockedBy}님이 편집 중</span>
+                  </div>
+                ) : (
+                  <button
+                    onClick={acquireLock}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm transition-colors"
+                  >
+                    <Edit size={14} />
+                    <span>편집</span>
+                  </button>
+                )
+              ) : (
+                // Editing - show editing status and finish button
+                <>
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600/20 text-green-400 rounded-lg text-sm border border-green-500/30">
+                    <Unlock size={14} />
+                    <span>편집 중</span>
+                  </div>
+                  <button
+                    onClick={releaseLock}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-600 hover:bg-gray-700 text-white rounded-lg text-sm transition-colors"
+                  >
+                    <Lock size={14} />
+                    <span>편집 완료</span>
+                  </button>
+                </>
+              )}
+
               {/* Validation Errors Indicator */}
               {validationErrors.length > 0 && (
                 <div className="flex items-center gap-1.5 px-2 py-1 bg-yellow-600/20 text-yellow-400 rounded-lg text-xs">
@@ -1624,44 +1889,50 @@ function ActionGraphEditor() {
                   <span>{validationErrors.length}개 문제 발견</span>
                 </div>
               )}
-              {/* Auto-save status indicator */}
-              <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border ${
-                saveStatus === 'saving' ? 'bg-btn-blue text-btn-blue border-btn-blue' :
-                saveStatus === 'saved' ? 'bg-btn-green text-btn-green border-btn-green' :
-                saveStatus === 'error' ? 'bg-btn-red text-btn-red border-btn-red' :
-                'bg-elevated text-secondary border-primary'
-              }`}>
-                {saveStatus === 'saving' ? (
-                  <>
-                    <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-                    <span>저장 중...</span>
-                  </>
-                ) : saveStatus === 'saved' ? (
-                  <>
-                    <Check size={14} />
-                    <span>저장됨</span>
-                  </>
-                ) : saveStatus === 'error' ? (
-                  <>
-                    <AlertCircle size={14} />
-                    <span>저장 오류</span>
-                  </>
-                ) : (
-                  <>
-                    <Save size={14} />
-                    <span>자동 저장</span>
-                  </>
-                )}
-              </div>
-              {/* Manual save button (in case user wants to force save) */}
-              <button
-                onClick={handleSave}
-                disabled={saveTemplate.isPending || saveStatus === 'saving'}
-                className="p-1.5 text-secondary hover:text-primary hover:bg-elevated border border-transparent hover:border-primary rounded-md transition-colors disabled:opacity-50"
-                title="수동 저장"
-              >
-                <Save size={16} />
-              </button>
+
+              {/* Auto-save status indicator (only show when editing) */}
+              {isEditing && (
+                <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border ${
+                  saveStatus === 'saving' ? 'bg-btn-blue text-btn-blue border-btn-blue' :
+                  saveStatus === 'saved' ? 'bg-btn-green text-btn-green border-btn-green' :
+                  saveStatus === 'error' ? 'bg-btn-red text-btn-red border-btn-red' :
+                  'bg-elevated text-secondary border-primary'
+                }`}>
+                  {saveStatus === 'saving' ? (
+                    <>
+                      <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                      <span>저장 중...</span>
+                    </>
+                  ) : saveStatus === 'saved' ? (
+                    <>
+                      <Check size={14} />
+                      <span>저장됨</span>
+                    </>
+                  ) : saveStatus === 'error' ? (
+                    <>
+                      <AlertCircle size={14} />
+                      <span>저장 오류</span>
+                    </>
+                  ) : (
+                    <>
+                      <Save size={14} />
+                      <span>자동 저장</span>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Manual save button (only when editing) */}
+              {isEditing && (
+                <button
+                  onClick={handleSave}
+                  disabled={saveTemplate.isPending || saveStatus === 'saving'}
+                  className="p-1.5 text-secondary hover:text-primary hover:bg-elevated border border-transparent hover:border-primary rounded-md transition-colors disabled:opacity-50"
+                  title="수동 저장"
+                >
+                  <Save size={16} />
+                </button>
+              )}
               <button
                 onClick={() => {
                   if (confirm(`Delete template "${selectedTemplate.name}"?`)) {
@@ -1684,15 +1955,18 @@ function ActionGraphEditor() {
               <ReactFlow
                 nodes={nodes}
                 edges={edgesWithDelete}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
-                onConnect={onConnect}
-                onConnectStart={onConnectStart}
-                onConnectEnd={onConnectEnd}
-                onDrop={onDrop}
-                onDragOver={onDragOver}
+                onNodesChange={isEditing ? onNodesChange : undefined}
+                onEdgesChange={isEditing ? onEdgesChange : undefined}
+                onConnect={isEditing ? onConnect : undefined}
+                onConnectStart={isEditing ? onConnectStart : undefined}
+                onConnectEnd={isEditing ? onConnectEnd : undefined}
+                onDrop={isEditing ? onDrop : undefined}
+                onDragOver={isEditing ? onDragOver : undefined}
                 nodeTypes={nodeTypes}
                 edgeTypes={edgeTypes}
+                nodesDraggable={isEditing}
+                nodesConnectable={isEditing}
+                elementsSelectable={isEditing}
                 fitView
                 snapToGrid
                 snapGrid={[16, 16]}
@@ -1710,7 +1984,9 @@ function ActionGraphEditor() {
                 {!bottomPanelTab && (
                   <Panel position="bottom-center" className="mb-4">
                     <div className="bg-surface/90 backdrop-blur-sm px-4 py-2 rounded-lg border border-primary text-xs text-secondary">
-                      Drag action servers to canvas to build workflow
+                      {isEditing
+                        ? 'Drag action servers to canvas to build workflow'
+                        : 'Click "편집" to start editing this template'}
                     </div>
                   </Panel>
                 )}

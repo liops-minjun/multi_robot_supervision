@@ -513,3 +513,49 @@ func (h *WebSocketHub) BroadcastTaskStateUpdate(update interface{}) {
 	}
 	h.Broadcast(msg)
 }
+
+// BehaviorTreeLockMessage represents a lock status change notification
+type BehaviorTreeLockMessage struct {
+	Type           string `json:"type"`              // "behavior_tree_lock"
+	BehaviorTreeID string `json:"behavior_tree_id"`
+	Action         string `json:"action"`            // "acquired", "released", "expired"
+	LockedBy       string `json:"locked_by,omitempty"`
+	ExpiresAt      int64  `json:"expires_at,omitempty"` // Unix timestamp in milliseconds
+	Timestamp      int64  `json:"timestamp"`
+}
+
+// BroadcastBehaviorTreeLock sends a lock status change to all clients
+func (h *WebSocketHub) BroadcastBehaviorTreeLock(behaviorTreeID, action, lockedBy string, expiresAt int64) {
+	msg := BehaviorTreeLockMessage{
+		Type:           "behavior_tree_lock",
+		BehaviorTreeID: behaviorTreeID,
+		Action:         action,
+		LockedBy:       lockedBy,
+		ExpiresAt:      expiresAt,
+		Timestamp:      time.Now().UnixMilli(),
+	}
+	h.Broadcast(msg)
+}
+
+// GraphSyncMessage represents a graph synchronization notification
+type GraphSyncMessage struct {
+	Type           string `json:"type"`              // "graph_sync"
+	BehaviorTreeID string `json:"behavior_tree_id"`
+	AgentID        string `json:"agent_id,omitempty"`
+	Action         string `json:"action"`            // "updated", "deployed", "unassigned", "deleted"
+	Version        int    `json:"version,omitempty"`
+	Timestamp      int64  `json:"timestamp"`
+}
+
+// BroadcastGraphSync sends a graph sync notification to all clients
+func (h *WebSocketHub) BroadcastGraphSync(behaviorTreeID, agentID, action string, version int) {
+	msg := GraphSyncMessage{
+		Type:           "graph_sync",
+		BehaviorTreeID: behaviorTreeID,
+		AgentID:        agentID,
+		Action:         action,
+		Version:        version,
+		Timestamp:      time.Now().UnixMilli(),
+	}
+	h.Broadcast(msg)
+}

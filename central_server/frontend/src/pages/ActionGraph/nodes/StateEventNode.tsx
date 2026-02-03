@@ -19,6 +19,7 @@ const StateEventNode = memo(({ data, selected }: NodeProps<StateEventNodeData>) 
 
   return (
     <div
+      draggable={false}
       className={`
         relative min-w-[140px] rounded-lg overflow-visible
         bg-surface border-2

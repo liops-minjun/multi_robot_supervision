@@ -255,8 +255,12 @@ export const behaviorTreeApi = {
     return data
   },
 
-  update: async (id: string, behaviorTree: Partial<ActionGraph>): Promise<ActionGraph> => {
-    const { data } = await api.put(`/behavior-trees/${id}`, behaviorTree)
+  update: async (id: string, behaviorTree: Partial<ActionGraph>, sessionId?: string): Promise<ActionGraph> => {
+    const headers: Record<string, string> = {}
+    if (sessionId) {
+      headers['X-Session-ID'] = sessionId
+    }
+    const { data } = await api.put(`/behavior-trees/${id}`, behaviorTree, { headers })
     return data
   },
 
@@ -317,6 +321,77 @@ export const behaviorTreeApi = {
 
 // Backward compatibility alias
 export const actionGraphApi = behaviorTreeApi
+
+// Behavior Tree Lock APIs
+export const behaviorTreeLockApi = {
+  // Acquire a lock on a behavior tree
+  acquire: async (graphId: string, sessionId: string, userName?: string): Promise<{
+    success: boolean
+    locked_by: string
+    expires_at: number
+    error?: string
+    message?: string
+  }> => {
+    try {
+      const { data } = await api.post(`/behavior-trees/${graphId}/lock`, {
+        session_id: sessionId,
+        user_name: userName || 'User',
+      })
+      return data
+    } catch (error: any) {
+      if (error.response?.status === 409) {
+        // Return the conflict response data
+        return error.response.data
+      }
+      throw error
+    }
+  },
+
+  // Release a lock on a behavior tree
+  release: async (graphId: string, sessionId: string): Promise<{
+    success: boolean
+    message?: string
+  }> => {
+    const { data } = await api.delete(`/behavior-trees/${graphId}/lock`, {
+      headers: { 'X-Session-ID': sessionId },
+    })
+    return data
+  },
+
+  // Get lock status of a behavior tree
+  getStatus: async (graphId: string, sessionId?: string): Promise<{
+    is_locked: boolean
+    locked_by?: string
+    expires_at?: number
+    is_own_lock: boolean
+  }> => {
+    const headers: Record<string, string> = {}
+    if (sessionId) {
+      headers['X-Session-ID'] = sessionId
+    }
+    const { data } = await api.get(`/behavior-trees/${graphId}/lock`, { headers })
+    return data
+  },
+
+  // Send heartbeat to extend lock
+  heartbeat: async (graphId: string, sessionId: string): Promise<{
+    success: boolean
+    expires_at?: number
+    error?: string
+  }> => {
+    try {
+      const { data } = await api.post(`/behavior-trees/${graphId}/lock/heartbeat`, null, {
+        headers: { 'X-Session-ID': sessionId },
+      })
+      return data
+    } catch (error: any) {
+      if (error.response?.status === 409 || error.response?.status === 403) {
+        return { success: false, error: error.response.data?.error || 'Lock lost' }
+      }
+      throw error
+    }
+  },
+}
 
 // Task APIs
 export const taskApi = {
@@ -446,9 +521,13 @@ export const templateApi = {
     return data
   },
 
-  // Update a template
-  update: async (id: string, template: Partial<ActionGraph>): Promise<ActionGraph> => {
-    const { data } = await api.put(`/templates/${id}`, template)
+  // Update a template (with optional session ID for lock validation)
+  update: async (id: string, template: Partial<ActionGraph>, sessionId?: string): Promise<ActionGraph> => {
+    const headers: Record<string, string> = {}
+    if (sessionId) {
+      headers['X-Session-ID'] = sessionId
+    }
+    const { data } = await api.put(`/templates/${id}`, template, { headers })
     return data
   },
 

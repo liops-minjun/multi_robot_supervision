@@ -45,6 +45,9 @@ func NewServer(repo *db.Repository, stateManager *state.GlobalStateManager, sche
 	// This is more efficient than per-client goroutines
 	go s.StartBroadcastLoop()
 
+	// Start lock cleanup background worker (cleans up expired edit locks)
+	s.StartLockCleanup()
+
 	return s
 }
 
@@ -118,6 +121,12 @@ func (s *Server) setupRouter() {
 			r.Post("/{graphID}/execute-multi", s.ExecuteMultiBehaviorTree) // Multi-agent simultaneous execution
 			r.Post("/{graphID}/validate", s.ValidateBehaviorTree)
 			r.Get("/{graphID}/export", s.ExportBehaviorTree) // Export canonical graph
+
+			// Edit lock endpoints (concurrent editing prevention)
+			r.Post("/{graphID}/lock", s.AcquireBehaviorTreeLock)
+			r.Delete("/{graphID}/lock", s.ReleaseBehaviorTreeLock)
+			r.Get("/{graphID}/lock", s.GetBehaviorTreeLockStatus)
+			r.Post("/{graphID}/lock/heartbeat", s.HeartbeatBehaviorTreeLock)
 
 			// Canonical Graph endpoints (new graph-optimized format)
 			r.Get("/{graphID}/canonical", s.GetCanonicalGraph)

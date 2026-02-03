@@ -4995,6 +4995,140 @@ func (h *RawQUICHandler) GetAgentForRobot(agentID string) (string, bool) {
 }
 
 // ============================================================
+// Graph Update Notifications (real-time sync)
+// ============================================================
+
+// SendGraphUpdateNotification sends a graph update notification to an agent
+// Used for real-time sync when graphs are modified, deleted, or unassigned
+// action: "MODIFIED" (with graphJSON), "DELETED", "UNASSIGNED"
+func (h *RawQUICHandler) SendGraphUpdateNotification(agentID, graphID string, version int, action string, graphJSON []byte) error {
+	h.connMu.RLock()
+	conn, exists := h.connections[agentID]
+	h.connMu.RUnlock()
+
+	if !exists || !conn.registered {
+		log.Printf("[RawQUIC] SendGraphUpdateNotification: agent %s not connected, skipping", agentID)
+		return nil // Not an error - agent may be offline
+	}
+
+	// Build GraphUpdateNotification message
+	// message GraphUpdateNotification {
+	//   string command_id = 1;
+	//   string agent_id = 2;
+	//   string action_graph_id = 3;
+	//   GraphUpdateAction action = 4;
+	//   int32 new_version = 5;
+	//   bytes graph_json = 6;
+	// }
+	var notification []byte
+
+	commandID := fmt.Sprintf("graph-update-%s-%d", graphID, time.Now().UnixNano())
+
+	// Field 1: command_id
+	notification = protowire.AppendTag(notification, 1, protowire.BytesType)
+	notification = protowire.AppendString(notification, commandID)
+
+	// Field 2: agent_id
+	notification = protowire.AppendTag(notification, 2, protowire.BytesType)
+	notification = protowire.AppendString(notification, agentID)
+
+	// Field 3: action_graph_id
+	notification = protowire.AppendTag(notification, 3, protowire.BytesType)
+	notification = protowire.AppendString(notification, graphID)
+
+	// Field 4: action (enum GraphUpdateAction)
+	var actionEnum uint64 = 0 // UPDATE_UNKNOWN
+	switch action {
+	case "MODIFIED":
+		actionEnum = 1
+	case "DELETED":
+		actionEnum = 2
+	case "UNASSIGNED":
+		actionEnum = 3
+	}
+	notification = protowire.AppendTag(notification, 4, protowire.VarintType)
+	notification = protowire.AppendVarint(notification, actionEnum)
+
+	// Field 5: new_version
+	if version > 0 {
+		notification = protowire.AppendTag(notification, 5, protowire.VarintType)
+		notification = protowire.AppendVarint(notification, uint64(version))
+	}
+
+	// Field 6: graph_json (only for MODIFIED action)
+	if action == "MODIFIED" && len(graphJSON) > 0 {
+		notification = protowire.AppendTag(notification, 6, protowire.BytesType)
+		notification = protowire.AppendBytes(notification, graphJSON)
+	}
+
+	// Build ServerMessage wrapper with field 18 (graph_update)
+	msgData := h.buildServerMessage(commandID, 18, notification)
+
+	if err := h.sendToAgent(conn, msgData); err != nil {
+		log.Printf("[RawQUIC] SendGraphUpdateNotification failed for agent %s: %v", agentID, err)
+		return err
+	}
+
+	log.Printf("[RawQUIC] Sent graph update notification to agent %s: graph=%s, action=%s, version=%d",
+		agentID, graphID, action, version)
+	return nil
+}
+
+// SendDeleteGraphCommand sends a delete graph command to an agent
+// Used when a graph is unassigned or deleted
+func (h *RawQUICHandler) SendDeleteGraphCommand(agentID, graphID, reason string) error {
+	h.connMu.RLock()
+	conn, exists := h.connections[agentID]
+	h.connMu.RUnlock()
+
+	if !exists || !conn.registered {
+		log.Printf("[RawQUIC] SendDeleteGraphCommand: agent %s not connected, skipping", agentID)
+		return nil
+	}
+
+	// Build DeleteGraphCommand message
+	// message DeleteGraphCommand {
+	//   string command_id = 1;
+	//   string agent_id = 2;
+	//   string action_graph_id = 3;
+	//   string reason = 4;
+	// }
+	var cmd []byte
+
+	commandID := fmt.Sprintf("delete-graph-%s-%d", graphID, time.Now().UnixNano())
+
+	// Field 1: command_id
+	cmd = protowire.AppendTag(cmd, 1, protowire.BytesType)
+	cmd = protowire.AppendString(cmd, commandID)
+
+	// Field 2: agent_id
+	cmd = protowire.AppendTag(cmd, 2, protowire.BytesType)
+	cmd = protowire.AppendString(cmd, agentID)
+
+	// Field 3: action_graph_id
+	cmd = protowire.AppendTag(cmd, 3, protowire.BytesType)
+	cmd = protowire.AppendString(cmd, graphID)
+
+	// Field 4: reason
+	if reason != "" {
+		cmd = protowire.AppendTag(cmd, 4, protowire.BytesType)
+		cmd = protowire.AppendString(cmd, reason)
+	}
+
+	// Build ServerMessage wrapper with field 17 (delete_graph)
+	msgData := h.buildServerMessage(commandID, 17, cmd)
+
+	if err := h.sendToAgent(conn, msgData); err != nil {
+		log.Printf("[RawQUIC] SendDeleteGraphCommand failed for agent %s: %v", agentID, err)
+		return err
+	}
+
+	log.Printf("[RawQUIC] Sent delete graph command to agent %s: graph=%s, reason=%s",
+		agentID, graphID, reason)
+	return nil
+}
+
+// ============================================================
 // Fleet State Broadcasting (for cross-agent coordination)
 // ============================================================
 
