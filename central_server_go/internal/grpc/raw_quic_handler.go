@@ -4624,16 +4624,26 @@ func (h *RawQUICHandler) SendCommand(agentID string, cmd *ExecuteCommandReq) err
 // SendCancelCommand sends a CancelCommand to an agent
 // In 1:1 model, targetAgentID is the same as agentID (kept for API compatibility).
 func (h *RawQUICHandler) SendCancelCommand(agentID, commandID, targetAgentID, taskID, reason string) error {
+	log.Printf("[QUIC] SendCancelCommand: agent=%s, task=%s, reason=%s", agentID, taskID, reason)
+
 	h.connMu.RLock()
 	conn, exists := h.connections[agentID]
 	h.connMu.RUnlock()
 
 	if !exists || !conn.registered {
+		log.Printf("[QUIC] SendCancelCommand failed: agent %s not connected", agentID)
 		return fmt.Errorf("agent %s not connected", agentID)
 	}
 
 	msgData := h.buildCancelCommandMessage(commandID, targetAgentID, taskID, reason)
-	return h.sendToAgent(conn, msgData)
+	log.Printf("[QUIC] SendCancelCommand: sending %d bytes to agent %s", len(msgData), agentID)
+	err := h.sendToAgent(conn, msgData)
+	if err != nil {
+		log.Printf("[QUIC] SendCancelCommand failed to send: %v", err)
+		return err
+	}
+	log.Printf("[QUIC] SendCancelCommand: sent successfully to agent %s", agentID)
+	return nil
 }
 
 // SendPing sends a ping request to an agent

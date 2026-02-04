@@ -1362,16 +1362,19 @@ func (s *Scheduler) CancelTask(taskID, reason string) error {
 		return fmt.Errorf("task %s not found", taskID)
 	}
 
-	log.Printf("Cancelling task %s: %s", taskID, reason)
+	log.Printf("[CancelTask] Cancelling task %s for agent %s: %s", taskID, task.AgentID, reason)
 
 	// Cancel context
 	task.CancelFunc()
 
-	// Send cancel to robot via QUIC
-	step := task.Steps[task.CurrentStep]
-	if step.Action != nil {
-		s.quicHandler.SendCancelCommand(task.AgentID, "", task.AgentID, taskID, reason)
+	// Always send cancel to agent via QUIC (for agent-driven execution)
+	log.Printf("[CancelTask] Sending cancel command to agent %s for task %s", task.AgentID, taskID)
+	err := s.quicHandler.SendCancelCommand(task.AgentID, "", task.AgentID, taskID, reason)
+	if err != nil {
+		log.Printf("[CancelTask] Failed to send cancel command: %v", err)
+		return fmt.Errorf("failed to send cancel to agent: %w", err)
 	}
+	log.Printf("[CancelTask] Cancel command sent successfully for task %s", taskID)
 
 	return nil
 }
