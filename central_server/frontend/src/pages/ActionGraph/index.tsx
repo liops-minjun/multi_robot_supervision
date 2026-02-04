@@ -332,12 +332,10 @@ function ActionGraphEditor() {
   // Validation state
   const [validationErrors, setValidationErrors] = useState<Array<{ nodeId: string; nodeName: string; errors: string[] }>>([])
 
-  // Auto-save state
+  // Save state
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const lastSavedStateRef = useRef<{ nodes: string; edges: string } | null>(null)
   const loadedTemplateIdRef = useRef<string | null>(null)  // Track which template's data is currently loaded on canvas
-  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const isAutoSavingRef = useRef(false)  // Prevent re-trigger during save
 
   // Edit lock state
   const [sessionId] = useState(() => `session_${Date.now()}_${Math.random().toString(36).slice(2)}`)
@@ -498,13 +496,9 @@ function ActionGraphEditor() {
       queryClient.invalidateQueries({ queryKey: ['template', selectedTemplateId] })
       queryClient.invalidateQueries({ queryKey: ['templates-all'] })
       setSaveStatus('saved')
-      isAutoSavingRef.current = false
-      // Reset to idle after 2 seconds
-      setTimeout(() => setSaveStatus('idle'), 2000)
     },
     onError: () => {
       setSaveStatus('error')
-      isAutoSavingRef.current = false
       // Reset to idle after 3 seconds
       setTimeout(() => setSaveStatus('idle'), 3000)
     },
@@ -699,11 +693,6 @@ function ActionGraphEditor() {
       setEdges([])
       setSaveStatus('idle')
       lastSavedStateRef.current = null
-      // Cancel any pending auto-save
-      if (autoSaveTimerRef.current) {
-        clearTimeout(autoSaveTimerRef.current)
-        autoSaveTimerRef.current = null
-      }
     }
   }, [templateId, setNodes, setEdges])
 
@@ -732,68 +721,16 @@ function ActionGraphEditor() {
     }
   }, [templateId, selectedTemplate?.id, setNodes, setEdges, selectedStateDef, availableStates, availableAgents])
 
-  // Auto-save: detect changes and trigger save with debounce
-  useEffect(() => {
-    if (!templateId || nodes.length === 0 || !lastSavedStateRef.current) return
-    if (isAutoSavingRef.current) return  // Already saving
-
+  // Track if there are unsaved changes (for UI indicator)
+  const hasUnsavedChanges = useMemo(() => {
+    if (!lastSavedStateRef.current || nodes.length === 0) return false
     const currentState = {
       nodes: JSON.stringify(nodes),
       edges: JSON.stringify(edges),
     }
-
-    // Compare with last saved state
-    const hasChanges =
-      currentState.nodes !== lastSavedStateRef.current.nodes ||
-      currentState.edges !== lastSavedStateRef.current.edges
-
-    if (!hasChanges) return
-
-    // Clear existing timer
-    if (autoSaveTimerRef.current) {
-      clearTimeout(autoSaveTimerRef.current)
-    }
-
-    // Set debounce timer (2 seconds)
-    autoSaveTimerRef.current = setTimeout(() => {
-      if (isAutoSavingRef.current) return
-      isAutoSavingRef.current = true
-      setSaveStatus('saving')
-
-      // Capture current state before save (will be finalized in onSuccess)
-      const stateToSave = {
-        nodes: JSON.stringify(nodes),
-        edges: JSON.stringify(edges),
-      }
-
-      // Trigger save (only if editing/have lock)
-      if (!isEditing) {
-        isAutoSavingRef.current = false
-        setSaveStatus('idle')
-        return
-      }
-      const { steps, entryPoint, generatedStates } = convertGraphToSteps()
-      saveTemplate.mutate({
-        templateId,
-        steps,
-        entryPoint,
-        states: generatedStates,
-        lockSessionId: sessionId,
-      }, {
-        onSuccess: () => {
-          // Update lastSavedStateRef only after successful save
-          lastSavedStateRef.current = stateToSave
-        }
-      })
-    }, 2000)
-
-    return () => {
-      if (autoSaveTimerRef.current) {
-        clearTimeout(autoSaveTimerRef.current)
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, edges, templateId, isEditing, sessionId])  // convertGraphToSteps and saveTemplate are stable refs
+    return currentState.nodes !== lastSavedStateRef.current.nodes ||
+           currentState.edges !== lastSavedStateRef.current.edges
+  }, [nodes, edges])
 
   // Clear validation errors when template changes
   useEffect(() => {
@@ -1075,12 +1012,6 @@ function ActionGraphEditor() {
       if (!proceed) return
     }
 
-    // Clear any pending auto-save timer
-    if (autoSaveTimerRef.current) {
-      clearTimeout(autoSaveTimerRef.current)
-      autoSaveTimerRef.current = null
-    }
-
     setSaveStatus('saving')
 
     // Capture current state before save
@@ -1196,12 +1127,6 @@ function ActionGraphEditor() {
     if (lockHeartbeatRef.current) {
       clearInterval(lockHeartbeatRef.current)
       lockHeartbeatRef.current = null
-    }
-
-    // Clear any pending auto-save timer
-    if (autoSaveTimerRef.current) {
-      clearTimeout(autoSaveTimerRef.current)
-      autoSaveTimerRef.current = null
     }
 
     try {
@@ -1897,47 +1822,40 @@ function ActionGraphEditor() {
                 </div>
               )}
 
-              {/* Auto-save status indicator (only show when editing) */}
+              {/* Save button (only show when editing) */}
               {isEditing && (
-                <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border ${
-                  saveStatus === 'saving' ? 'bg-btn-blue text-btn-blue border-btn-blue' :
-                  saveStatus === 'saved' ? 'bg-btn-green text-btn-green border-btn-green' :
-                  saveStatus === 'error' ? 'bg-btn-red text-btn-red border-btn-red' :
-                  'bg-elevated text-secondary border-primary'
-                }`}>
+                <button
+                  onClick={handleSave}
+                  disabled={saveTemplate.isPending || saveStatus === 'saving'}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+                    saveStatus === 'saving' ? 'bg-blue-600/20 text-blue-400 border-blue-500/50 cursor-wait' :
+                    saveStatus === 'saved' && !hasUnsavedChanges ? 'bg-green-600/20 text-green-400 border-green-500/50' :
+                    saveStatus === 'error' ? 'bg-red-600/20 text-red-400 border-red-500/50' :
+                    hasUnsavedChanges ? 'bg-yellow-600/20 text-yellow-400 border-yellow-500/50 hover:bg-yellow-600/30' :
+                    'bg-elevated text-secondary border-primary hover:bg-surface hover:text-primary'
+                  }`}
+                >
                   {saveStatus === 'saving' ? (
                     <>
                       <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
                       <span>저장 중...</span>
-                    </>
-                  ) : saveStatus === 'saved' ? (
-                    <>
-                      <Check size={14} />
-                      <span>저장됨</span>
                     </>
                   ) : saveStatus === 'error' ? (
                     <>
                       <AlertCircle size={14} />
                       <span>저장 오류</span>
                     </>
-                  ) : (
+                  ) : hasUnsavedChanges ? (
                     <>
                       <Save size={14} />
-                      <span>자동 저장</span>
+                      <span>저장</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check size={14} />
+                      <span>저장됨</span>
                     </>
                   )}
-                </div>
-              )}
-
-              {/* Manual save button (only when editing) */}
-              {isEditing && (
-                <button
-                  onClick={handleSave}
-                  disabled={saveTemplate.isPending || saveStatus === 'saving'}
-                  className="p-1.5 text-secondary hover:text-primary hover:bg-elevated border border-transparent hover:border-primary rounded-md transition-colors disabled:opacity-50"
-                  title="수동 저장"
-                >
-                  <Save size={16} />
                 </button>
               )}
               <button
