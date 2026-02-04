@@ -987,6 +987,8 @@ export default function AgentDashboard() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agent-state'] })
       queryClient.invalidateQueries({ queryKey: ['tasks'] })
+      // Refresh executability check immediately after cancel so Start button becomes enabled
+      queryClient.invalidateQueries({ queryKey: ['executability-check'] })
     },
   })
 
@@ -996,6 +998,8 @@ export default function AgentDashboard() {
       queryClient.invalidateQueries({ queryKey: ['agent-state'] })
       queryClient.invalidateQueries({ queryKey: ['tasks'] })
       queryClient.invalidateQueries({ queryKey: ['agents'] })
+      // Refresh executability check after reset so Start button becomes enabled
+      queryClient.invalidateQueries({ queryKey: ['executability-check'] })
     },
   })
 
@@ -1627,8 +1631,8 @@ export default function AgentDashboard() {
                           {/* Reset State button - only available when NOT executing */}
                           <button
                             onClick={() => {
-                              if (selectedRobotId && window.confirm('Reset agent state to idle? This will clear all execution state.')) {
-                                resetStateMutation.mutate(selectedRobotId)
+                              if (selectedAgentId && window.confirm('Reset agent state to idle? This will clear all execution state.')) {
+                                resetStateMutation.mutate(selectedAgentId)
                               }
                             }}
                             disabled={isExecutionLoading || selectedRobotExecuting}
