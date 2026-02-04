@@ -157,8 +157,8 @@ const outcomeCategory = (outcome: ActionOutcome): 'success' | 'failure' => {
   return outcome === 'success' ? 'success' : 'failure'
 }
 
-// Generate unique node IDs using crypto.randomUUID to avoid collisions with existing nodes
-const getNodeId = () => `node_${crypto.randomUUID().slice(0, 8)}`
+// Generate unique node IDs to avoid collisions with existing nodes
+const getNodeId = () => `node_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 
 const mapStartStatesToConditions = (startStates: StartStateConfig[] = []): StartCondition[] => {
   return startStates
