@@ -463,6 +463,21 @@ func (m *GlobalStateManager) GetRobotEnhancedState(agentID string) (stateCode st
 	return robot.CurrentStateCode, robot.SemanticTags, robot.CurrentGraphID, true
 }
 
+// GetAgentsExecutingGraph returns a list of agent IDs that are currently executing the given graph.
+// This is used to prevent editing a behavior tree while it's being executed.
+func (m *GlobalStateManager) GetAgentsExecutingGraph(graphID string) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var executingAgents []string
+	for agentID, robot := range m.robots {
+		if robot.IsExecuting && robot.CurrentGraphID == graphID {
+			executingAgents = append(executingAgents, agentID)
+		}
+	}
+	return executingAgents
+}
+
 // SetRobotStateOverride applies a temporary coordination state for a robot.
 func (m *GlobalStateManager) SetRobotStateOverride(agentID, sourceID, state string) error {
 	if state == "" {

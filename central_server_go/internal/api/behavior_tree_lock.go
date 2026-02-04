@@ -56,6 +56,17 @@ func (s *Server) AcquireBehaviorTreeLock(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Check if any agent is currently executing this behavior tree
+	executingAgents := s.stateManager.GetAgentsExecutingGraph(graphID)
+	if len(executingAgents) > 0 {
+		writeJSON(w, http.StatusConflict, map[string]interface{}{
+			"error":            "executing",
+			"message":          "Behavior Tree is currently being executed by agent(s)",
+			"executing_agents": executingAgents,
+		})
+		return
+	}
+
 	now := time.Now()
 
 	// Check if already locked by someone else

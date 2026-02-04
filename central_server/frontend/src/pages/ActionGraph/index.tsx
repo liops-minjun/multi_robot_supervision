@@ -447,7 +447,7 @@ function ActionGraphEditor() {
   const deleteTemplate = useMutation({
     mutationFn: (id: string) => templateApi.delete(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['templates'] })
+      queryClient.invalidateQueries({ queryKey: ['templates-all'] })
       setSelectedTemplateId(null)
     },
   })
@@ -1136,6 +1136,13 @@ function ActionGraphEditor() {
 
         return true
       } else {
+        // Check error type
+        if (result.error === 'executing') {
+          // Graph is being executed by agents
+          const agents = (result as any).executing_agents || []
+          alert(`이 Behavior Tree가 현재 실행 중입니다.\n\n실행 중인 Agent: ${agents.join(', ')}\n\nTask가 완료된 후 다시 시도해주세요.`)
+          return false
+        }
         // Lock is held by someone else
         setLockStatus({
           isLocked: true,
@@ -2206,11 +2213,14 @@ function convertActionGraphToGraph(
   const nodes: Node[] = []
   const edges: Edge[] = []
 
+  // Defensive: ensure steps is always an array
+  const steps = actionGraph.steps || []
+
   const actionMappings = stateDef?.action_mappings || []
   const defaultState = availableStates.includes('idle') ? 'idle' : availableStates[0] || 'idle'
   const errorState = availableStates.includes('error') ? 'error' : availableStates[availableStates.length - 1] || 'error'
-  const stepIds = new Set(actionGraph.steps.map(step => step.id))
-  const preferredEntry = actionGraph.entry_point || actionGraph.steps[0]?.id
+  const stepIds = new Set(steps.map(step => step.id))
+  const preferredEntry = actionGraph.entry_point || steps[0]?.id
 
   nodes.push({
     id: START_NODE_ID,
@@ -2229,7 +2239,7 @@ function convertActionGraphToGraph(
     deletable: false,
   })
 
-  actionGraph.steps.forEach((step, index) => {
+  steps.forEach((step, index) => {
     const x = 300 + (index % 3) * 300
     const y = 100 + Math.floor(index / 3) * 200
 
@@ -2400,7 +2410,7 @@ function convertActionGraphToGraph(
 
   const entryPoint = preferredEntry && stepIds.has(preferredEntry)
     ? preferredEntry
-    : actionGraph.steps[0]?.id
+    : steps[0]?.id
   if (entryPoint) {
     edges.push({
       id: `${START_NODE_ID}->${entryPoint}`,

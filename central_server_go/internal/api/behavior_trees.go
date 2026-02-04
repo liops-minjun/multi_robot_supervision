@@ -406,7 +406,9 @@ func (s *Server) ExecuteBehaviorTree(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("behavior tree '%s' is not assigned to agent '%s'. Please assign the graph first.", graphID, req.AgentID))
 		return
 	}
-	if abt.DeploymentStatus != "deployed" {
+	// Allow execution if deployed or outdated (server will use latest version)
+	// "outdated" means template was updated but agent has a previous deployment
+	if abt.DeploymentStatus != "deployed" && abt.DeploymentStatus != "outdated" {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("behavior tree '%s' is not deployed to agent '%s' (status: %s). Please deploy the graph first.", graphID, req.AgentID, abt.DeploymentStatus))
 		return
 	}
@@ -668,6 +670,10 @@ func behaviorTreeToResponse(graph *db.BehaviorTree, repo *db.Repository) Behavio
 	}
 	if graph.Steps != nil {
 		json.Unmarshal(graph.Steps, &response.Steps)
+	}
+	// Ensure steps is always an empty array, not null
+	if response.Steps == nil {
+		response.Steps = []map[string]interface{}{}
 	}
 
 	// Parse states
