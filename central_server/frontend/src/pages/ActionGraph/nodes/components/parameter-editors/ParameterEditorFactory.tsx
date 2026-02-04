@@ -57,7 +57,7 @@ const ParameterEditorFactory = memo(({
   if (editorType === 'pose') {
     const isStamped = fieldType.toLowerCase().includes('stamped') || fieldType.toLowerCase().includes('covariance')
     return (
-      <PoseEditor
+      <PoseEditorWithBinding
         fieldName={fieldName}
         fieldType={fieldType}
         value={value}
@@ -65,6 +65,9 @@ const ParameterEditorFactory = memo(({
         robotTelemetry={robotTelemetry}
         isStamped={isStamped}
         isPoint={false}
+        fieldSource={fieldSource}
+        availableSteps={availableSteps}
+        onFieldSourceChange={onFieldSourceChange}
       />
     )
   }
@@ -73,7 +76,7 @@ const ParameterEditorFactory = memo(({
   if (editorType === 'point') {
     const isStamped = fieldType.toLowerCase().includes('stamped')
     return (
-      <PoseEditor
+      <PoseEditorWithBinding
         fieldName={fieldName}
         fieldType={fieldType}
         value={value}
@@ -81,6 +84,9 @@ const ParameterEditorFactory = memo(({
         robotTelemetry={robotTelemetry}
         isStamped={isStamped}
         isPoint={true}
+        fieldSource={fieldSource}
+        availableSteps={availableSteps}
+        onFieldSourceChange={onFieldSourceChange}
       />
     )
   }
@@ -417,6 +423,93 @@ const ArrayEditorWithBinding = memo(({
           onChange={onChange}
         />
       )}
+
+      {/* Binding option - always show, disabled when no bindable steps */}
+      {onFieldSourceChange && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            if (!hasBindableSteps) return
+            const firstStep = availableSteps?.find(s => s.resultFields && s.resultFields.length > 0)
+            if (firstStep) {
+              onFieldSourceChange({
+                source: 'step_result',
+                step_id: firstStep.id,
+                result_field: firstStep.resultFields?.[0]?.name || '',
+              })
+            }
+          }}
+          disabled={!hasBindableSteps}
+          className={`w-full py-1.5 border rounded text-[10px] flex items-center justify-center gap-1 transition-all ${
+            hasBindableSteps
+              ? 'bg-purple-500/10 hover:bg-purple-500/20 border-purple-500/30 text-purple-400 cursor-pointer'
+              : 'bg-gray-800/30 border-gray-700 text-muted cursor-not-allowed'
+          }`}
+        >
+          <Code size={10} />
+          이전 Step 결과 사용
+          {!hasBindableSteps && <span className="text-[9px] text-muted ml-1">(사용 가능한 Step 없음)</span>}
+        </button>
+      )}
+    </div>
+  )
+})
+
+// Pose Editor with Binding support (includes telemetry capture)
+const PoseEditorWithBinding = memo(({
+  value,
+  onChange,
+  fieldSource,
+  availableSteps,
+  onFieldSourceChange,
+  fieldType,
+  fieldName,
+  robotTelemetry,
+  isStamped,
+  isPoint,
+}: {
+  value: unknown
+  onChange: (value: unknown) => void
+  fieldSource?: ParameterFieldSource
+  availableSteps?: AvailableStep[]
+  onFieldSourceChange?: (source: ParameterFieldSource | undefined) => void
+  fieldType: string
+  fieldName: string
+  robotTelemetry?: RobotTelemetryData | null
+  isStamped: boolean
+  isPoint: boolean
+}) => {
+  // Check if field has a binding (step_result source)
+  const hasBinding = fieldSource?.source === 'step_result'
+
+  // If bound to step result, show binding selector
+  if (hasBinding && onFieldSourceChange) {
+    return (
+      <ParameterSourceSelector
+        fieldSource={fieldSource}
+        availableSteps={availableSteps || []}
+        onChange={onFieldSourceChange}
+        targetFieldType={fieldType}
+        targetFieldName={fieldName}
+      />
+    )
+  }
+
+  // Check if there are any steps with result fields (for enabling binding)
+  const hasBindableSteps = availableSteps?.some(s => s.resultFields && s.resultFields.length > 0) || false
+
+  return (
+    <div className="space-y-2">
+      {/* PoseEditor with telemetry support */}
+      <PoseEditor
+        fieldName={fieldName}
+        fieldType={fieldType}
+        value={value}
+        onChange={onChange}
+        robotTelemetry={robotTelemetry}
+        isStamped={isStamped}
+        isPoint={isPoint}
+      />
 
       {/* Binding option - always show, disabled when no bindable steps */}
       {onFieldSourceChange && (
@@ -825,6 +918,7 @@ JointStateEditor.displayName = 'JointStateEditor'
 NumericArrayEditor.displayName = 'NumericArrayEditor'
 StringArrayEditor.displayName = 'StringArrayEditor'
 ArrayEditorWithBinding.displayName = 'ArrayEditorWithBinding'
+PoseEditorWithBinding.displayName = 'PoseEditorWithBinding'
 JointArrayEditorWithBinding.displayName = 'JointArrayEditorWithBinding'
 TwistEditor.displayName = 'TwistEditor'
 JsonEditor.displayName = 'JsonEditor'
