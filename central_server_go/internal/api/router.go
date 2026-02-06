@@ -66,7 +66,7 @@ func (s *Server) setupRouter() {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Session-ID"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: true,
 		MaxAge:           300,
@@ -127,6 +127,7 @@ func (s *Server) setupRouter() {
 			r.Delete("/{graphID}/lock", s.ReleaseBehaviorTreeLock)
 			r.Get("/{graphID}/lock", s.GetBehaviorTreeLockStatus)
 			r.Post("/{graphID}/lock/heartbeat", s.HeartbeatBehaviorTreeLock)
+			r.Delete("/{graphID}/lock/force", s.ForceReleaseBehaviorTreeLock)
 
 			// Canonical Graph endpoints (new graph-optimized format)
 			r.Get("/{graphID}/canonical", s.GetCanonicalGraph)

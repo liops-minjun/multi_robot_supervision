@@ -6,6 +6,7 @@ export interface BehaviorTreeLockMessage {
   behavior_tree_id: string
   action: 'acquired' | 'released' | 'expired'
   locked_by?: string
+  session_id?: string
   expires_at?: number
 }
 

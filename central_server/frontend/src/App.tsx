@@ -1,8 +1,10 @@
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom'
-import { Workflow, History, Globe, Server, FileCode2 } from 'lucide-react'
+import { Workflow, History, Globe, Server, FileCode2, User } from 'lucide-react'
 
 import { useTranslation } from './i18n'
+import { useUserStore } from './stores/userStore'
 import { ThemeToggle } from './components/ThemeToggle'
+import { UsernameDialog } from './components/UsernameDialog'
 import ActionGraph from './pages/ActionGraph'
 import PDDL from './pages/PDDL'
 import TaskHistory from './pages/TaskHistory'
@@ -10,6 +12,7 @@ import AgentDashboard from './pages/AgentDashboard'
 
 function App() {
   const { t, language, setLanguage } = useTranslation()
+  const { username, clearUser } = useUserStore()
 
   const toggleLanguage = () => {
     setLanguage(language === 'ko' ? 'en' : 'ko')
@@ -17,6 +20,7 @@ function App() {
 
   return (
     <BrowserRouter>
+      <UsernameDialog />
       <div className="flex h-screen bg-base">
         {/* Sidebar */}
         <nav className="w-64 bg-surface text-primary flex flex-col border-r border-primary">
@@ -32,8 +36,22 @@ function App() {
             <NavItem to="/tasks" icon={<History size={20} />} label={t('nav.taskHistory')} />
           </ul>
 
-          {/* Language Switcher */}
-          <div className="p-4 border-t border-primary">
+          {/* User & Language */}
+          <div className="p-4 border-t border-primary space-y-2">
+            {username && (
+              <div className="flex items-center justify-between px-2 py-1">
+                <div className="flex items-center gap-2 min-w-0">
+                  <User size={14} className="text-blue-400 shrink-0" />
+                  <span className="text-sm text-secondary truncate">{username}</span>
+                </div>
+                <button
+                  onClick={clearUser}
+                  className="text-xs text-muted hover:text-secondary shrink-0 ml-2"
+                >
+                  변경
+                </button>
+              </div>
+            )}
             <button
               onClick={toggleLanguage}
               className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-elevated hover:bg-sunken rounded-lg transition-colors"

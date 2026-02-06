@@ -520,17 +520,19 @@ type BehaviorTreeLockMessage struct {
 	BehaviorTreeID string `json:"behavior_tree_id"`
 	Action         string `json:"action"`            // "acquired", "released", "expired"
 	LockedBy       string `json:"locked_by,omitempty"`
+	SessionID      string `json:"session_id,omitempty"`
 	ExpiresAt      int64  `json:"expires_at,omitempty"` // Unix timestamp in milliseconds
 	Timestamp      int64  `json:"timestamp"`
 }
 
 // BroadcastBehaviorTreeLock sends a lock status change to all clients
-func (h *WebSocketHub) BroadcastBehaviorTreeLock(behaviorTreeID, action, lockedBy string, expiresAt int64) {
+func (h *WebSocketHub) BroadcastBehaviorTreeLock(behaviorTreeID, action, lockedBy, sessionID string, expiresAt int64) {
 	msg := BehaviorTreeLockMessage{
 		Type:           "behavior_tree_lock",
 		BehaviorTreeID: behaviorTreeID,
 		Action:         action,
 		LockedBy:       lockedBy,
+		SessionID:      sessionID,
 		ExpiresAt:      expiresAt,
 		Timestamp:      time.Now().UnixMilli(),
 	}

@@ -26,6 +26,7 @@ import {
 } from 'lucide-react'
 import { templateApi, stateDefinitionApi, agentApi, capabilityApi, behaviorTreeLockApi } from '../../api/client'
 import { useWebSocket, BehaviorTreeLockMessage, GraphSyncMessage } from '../../contexts/WebSocketContext'
+import { useUserStore } from '../../stores/userStore'
 import type {
   ActionGraph, StateDefinition, ActionMapping,
   AssignmentInfo, TemplateListItem,
@@ -337,8 +338,9 @@ function ActionGraphEditor() {
   const lastSavedStateRef = useRef<{ nodes: string; edges: string } | null>(null)
   const loadedTemplateIdRef = useRef<string | null>(null)  // Track which template's data is currently loaded on canvas
 
-  // Edit lock state
-  const [sessionId] = useState(() => `session_${Date.now()}_${Math.random().toString(36).slice(2)}`)
+  // Edit lock state (persistent session from user store)
+  const { username, sessionId: storeSessionId } = useUserStore()
+  const sessionId = storeSessionId || ''
   const [isEditing, setIsEditing] = useState(false)
   const [lockStatus, setLockStatus] = useState<{
     isLocked: boolean
@@ -1034,7 +1036,7 @@ function ActionGraphEditor() {
     if (!selectedTemplateId) return false
 
     try {
-      const result = await behaviorTreeLockApi.acquire(selectedTemplateId, sessionId, 'User')
+      const result = await behaviorTreeLockApi.acquire(selectedTemplateId, sessionId, username || 'User')
       if (result.success) {
         setIsEditing(true)
         setLockStatus({
@@ -1088,7 +1090,22 @@ function ActionGraphEditor() {
       console.error('[Lock] Failed to acquire lock:', error)
       return false
     }
-  }, [selectedTemplateId, sessionId])
+  }, [selectedTemplateId, sessionId, username])
+
+  // Force unlock - override another user's lock
+  const forceUnlock = useCallback(async () => {
+    if (!selectedTemplateId) return
+    const proceed = window.confirm(
+      `${lockStatus.lockedBy}님이 현재 편집 중입니다.\n강제 해제하면 상대방의 편집 세션이 중단됩니다.\n\n강제 해제하시겠습니까?`
+    )
+    if (!proceed) return
+    try {
+      await behaviorTreeLockApi.forceRelease(selectedTemplateId, sessionId, username || 'User')
+      setLockStatus({ isLocked: false, lockedBy: null, expiresAt: null, isOwnLock: false })
+    } catch (error) {
+      console.error('[Lock] Failed to force unlock:', error)
+    }
+  }, [selectedTemplateId, sessionId, username, lockStatus.lockedBy])
 
   const releaseLock = useCallback(async () => {
     if (!selectedTemplateId || !isEditing) return
@@ -1157,6 +1174,27 @@ function ActionGraphEditor() {
           isOwnLock: status.is_own_lock,
         })
         setIsEditing(status.is_own_lock)
+
+        // Reclaim lock after refresh: restart heartbeat if we still own it
+        if (status.is_own_lock) {
+          if (lockHeartbeatRef.current) {
+            clearInterval(lockHeartbeatRef.current)
+          }
+          lockHeartbeatRef.current = setInterval(async () => {
+            if (!selectedTemplateId) return
+            const heartbeatResult = await behaviorTreeLockApi.heartbeat(selectedTemplateId, sessionId)
+            if (!heartbeatResult.success) {
+              setIsEditing(false)
+              setLockStatus({ isLocked: false, lockedBy: null, expiresAt: null, isOwnLock: false })
+              if (lockHeartbeatRef.current) {
+                clearInterval(lockHeartbeatRef.current)
+                lockHeartbeatRef.current = null
+              }
+            } else if (heartbeatResult.expires_at) {
+              setLockStatus(prev => ({ ...prev, expiresAt: heartbeatResult.expires_at! }))
+            }
+          }, 2 * 60 * 1000)
+        }
       } catch (error) {
         console.error('[Lock] Failed to fetch lock status:', error)
       }
@@ -1172,8 +1210,8 @@ function ActionGraphEditor() {
     const unsubscribeLock = subscribeLockEvents(selectedTemplateId, (msg: BehaviorTreeLockMessage) => {
       console.log('[WebSocket] Lock event:', msg)
       if (msg.action === 'acquired') {
-        // Check if it's our own lock (we already know about it)
-        if (msg.locked_by !== 'User') {
+        // Ignore our own lock events (identified by session_id)
+        if (msg.session_id !== sessionId) {
           setLockStatus({
             isLocked: true,
             lockedBy: msg.locked_by || 'Another user',
@@ -1182,10 +1220,16 @@ function ActionGraphEditor() {
           })
         }
       } else if (msg.action === 'released' || msg.action === 'expired') {
-        // Lock was released or expired
-        if (!isEditing) {
-          setLockStatus({ isLocked: false, lockedBy: null, expiresAt: null, isOwnLock: false })
+        // Lock was released or expired - if we were force-unlocked, exit edit mode
+        if (isEditing && msg.session_id !== sessionId) {
+          // Our lock was force-released by someone else
+          setIsEditing(false)
+          if (lockHeartbeatRef.current) {
+            clearInterval(lockHeartbeatRef.current)
+            lockHeartbeatRef.current = null
+          }
         }
+        setLockStatus({ isLocked: false, lockedBy: null, expiresAt: null, isOwnLock: false })
       }
     })
 
@@ -1203,35 +1247,17 @@ function ActionGraphEditor() {
       unsubscribeLock()
       unsubscribeSync()
     }
-  }, [selectedTemplateId, subscribeLockEvents, subscribeSyncEvents, isEditing, queryClient])
+  }, [selectedTemplateId, subscribeLockEvents, subscribeSyncEvents, isEditing, sessionId, queryClient])
 
-  // Cleanup lock on unmount or template change
+  // Cleanup heartbeat on unmount (lock persists across refresh via persistent session)
   useEffect(() => {
-    const currentTemplateId = selectedTemplateId
-    const currentSessionId = sessionId
-    const wasEditing = isEditing
-
     return () => {
-      // Release lock on cleanup
-      if (wasEditing && currentTemplateId) {
-        // Use fetch with keepalive for reliable cleanup on page unload
-        const url = `/api/behavior-trees/${currentTemplateId}/lock`
-        fetch(url, {
-          method: 'DELETE',
-          headers: { 'X-Session-ID': currentSessionId },
-          keepalive: true,
-        }).catch(() => {
-          // Ignore errors during cleanup
-        })
-      }
-
-      // Stop heartbeat
       if (lockHeartbeatRef.current) {
         clearInterval(lockHeartbeatRef.current)
         lockHeartbeatRef.current = null
       }
     }
-  }, [selectedTemplateId, sessionId, isEditing])
+  }, [])
 
   const onConnect = useCallback(
     (params: Connection) => {
@@ -1784,9 +1810,19 @@ function ActionGraphEditor() {
               {!isEditing ? (
                 // Not editing - show Edit button or lock status
                 lockStatus.isLocked && !lockStatus.isOwnLock ? (
-                  <div className="flex items-center gap-1.5 px-3 py-1.5 bg-yellow-600/20 text-yellow-400 rounded-lg text-sm border border-yellow-500/30">
-                    <Lock size={14} />
-                    <span>{lockStatus.lockedBy}님이 편집 중</span>
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5 px-3 py-1.5 bg-yellow-600/20 text-yellow-400 rounded-lg text-sm border border-yellow-500/30">
+                      <Lock size={14} />
+                      <span>{lockStatus.lockedBy}님이 편집 중</span>
+                    </div>
+                    <button
+                      onClick={forceUnlock}
+                      className="flex items-center gap-1 px-2 py-1.5 text-xs text-red-400 hover:bg-red-600/20 rounded border border-red-500/30 transition-colors"
+                      title={`강제 해제 (만료: ${lockStatus.expiresAt ? new Date(lockStatus.expiresAt).toLocaleTimeString() : '알 수 없음'})`}
+                    >
+                      <Unlock size={12} />
+                      강제 해제
+                    </button>
                   </div>
                 ) : (
                   <button

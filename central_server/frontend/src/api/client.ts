@@ -373,6 +373,18 @@ export const behaviorTreeLockApi = {
     return data
   },
 
+  // Force release a lock (override ownership)
+  forceRelease: async (graphId: string, sessionId: string, userName: string): Promise<{
+    success: boolean
+    message?: string
+    previous_owner?: string
+  }> => {
+    const { data } = await api.delete(`/behavior-trees/${graphId}/lock/force`, {
+      data: { session_id: sessionId, user_name: userName },
+    })
+    return data
+  },
+
   // Send heartbeat to extend lock
   heartbeat: async (graphId: string, sessionId: string): Promise<{
     success: boolean

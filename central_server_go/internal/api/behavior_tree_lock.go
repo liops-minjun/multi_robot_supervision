@@ -106,7 +106,7 @@ func (s *Server) AcquireBehaviorTreeLock(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Broadcast lock acquired event via WebSocket
-	s.wsHub.BroadcastBehaviorTreeLock(graphID, "acquired", userName, expiresAt.UnixMilli())
+	s.wsHub.BroadcastBehaviorTreeLock(graphID, "acquired", userName, req.SessionID, expiresAt.UnixMilli())
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success":    true,
@@ -155,7 +155,7 @@ func (s *Server) ReleaseBehaviorTreeLock(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Broadcast lock released event via WebSocket
-	s.wsHub.BroadcastBehaviorTreeLock(graphID, "released", "", 0)
+	s.wsHub.BroadcastBehaviorTreeLock(graphID, "released", "", "", 0)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
@@ -324,6 +324,57 @@ func (s *Server) cleanupExpiredLocks() {
 		}
 
 		// Broadcast lock expired event via WebSocket
-		s.wsHub.BroadcastBehaviorTreeLock(graph.ID, "expired", "", 0)
+		s.wsHub.BroadcastBehaviorTreeLock(graph.ID, "expired", "", "", 0)
 	}
+}
+
+// ForceReleaseBehaviorTreeLock forcefully releases a lock regardless of ownership
+// DELETE /api/behavior-trees/{graphID}/lock/force
+func (s *Server) ForceReleaseBehaviorTreeLock(w http.ResponseWriter, r *http.Request) {
+	graphID := chi.URLParam(r, "graphID")
+
+	var req struct {
+		SessionID string `json:"session_id"`
+		UserName  string `json:"user_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	// Get the behavior tree
+	graph, err := s.repo.GetBehaviorTree(graphID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if graph == nil {
+		writeError(w, http.StatusNotFound, "Behavior Tree not found")
+		return
+	}
+
+	previousOwner := ""
+	if graph.LockedBy.Valid {
+		previousOwner = graph.LockedBy.String
+	}
+
+	// Clear the lock unconditionally
+	graph.LockedBy = sql.NullString{}
+	graph.LockedAt = sql.NullTime{}
+	graph.LockExpiresAt = sql.NullTime{}
+	graph.LockSessionID = sql.NullString{}
+
+	if err := s.repo.UpdateBehaviorTree(graph); err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to force release lock: "+err.Error())
+		return
+	}
+
+	// Broadcast lock released event via WebSocket
+	s.wsHub.BroadcastBehaviorTreeLock(graphID, "released", "", "", 0)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success":        true,
+		"message":        "Lock force released",
+		"previous_owner": previousOwner,
+	})
 }

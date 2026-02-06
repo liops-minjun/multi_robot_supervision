@@ -104,13 +104,15 @@ Central Server Go (Single Backend)        Robot Agent C++ (ROS2)
 
 ## Ports & Services
 
-| Port | Service | Protocol | Description |
-|------|---------|----------|-------------|
-| 3000 | Frontend | HTTP | nginx + React SPA |
-| 8081 | Go Backend | HTTP | REST API + WebSocket |
-| 9443 | Go Backend | QUIC | QUIC transport (Agent comm) |
-| 7474 | Neo4j | HTTP | Graph DB (Neo4j Browser / REST) |
-| 7687 | Neo4j | TCP | Bolt protocol |
+| Host Port | Container Port | Service | Protocol | Description |
+|-----------|---------------|---------|----------|-------------|
+| 13000 | 80 | Frontend | HTTP | nginx + React SPA |
+| 18081 | 8081 | Go Backend | HTTP | REST API + WebSocket |
+| 19090 | 9090 | Go Backend | gRPC | gRPC TCP (Agent comm) |
+| 19443/udp | 9443/udp | Go Backend | QUIC | gRPC over QUIC (Agent comm) |
+| 19444/udp | 9444/udp | Go Backend | QUIC | Raw QUIC (C++ Agent) |
+| 17474 | 7474 | Neo4j | HTTP | Graph DB (Neo4j Browser / REST) |
+| 17687 | 7687 | Neo4j | TCP | Bolt protocol |
 
 ## Transport Architecture
 
@@ -166,13 +168,13 @@ robots:
 server:
   quic:
     server_address: "192.168.0.200"
-    server_port: 9443
+    server_port: 19443
     ca_cert: "/etc/robot_agent/certs/ca.crt"
     enable_0rtt: true
     enable_datagrams: true
 ```
 
-### API Endpoints (Port 8081)
+### API Endpoints (Host Port 18081)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -291,10 +293,10 @@ Both Central Server and Fleet Agent maintain in-memory caches for deployed Behav
 **Cache Stats API:**
 ```bash
 # Get cache statistics
-curl http://localhost:8081/api/system/cache/stats
+curl http://localhost:18081/api/system/cache/stats
 
 # Manually evict stale entries
-curl -X POST http://localhost:8081/api/system/cache/evict \
+curl -X POST http://localhost:18081/api/system/cache/evict \
   -d '{"max_age_minutes": 30}'
 ```
 
@@ -433,10 +435,10 @@ Queue Architecture:
 docker-compose up -d
 
 # 2. Check health
-curl http://localhost:8081/health
+curl http://localhost:18081/health
 
 # 3. Register robot with capabilities
-curl -X POST http://localhost:8081/api/robots \
+curl -X POST http://localhost:18081/api/robots \
   -H "Content-Type: application/json" \
   -d '{
     "id": "robot_001",
@@ -452,10 +454,10 @@ curl -X POST http://localhost:8081/api/robots \
   }'
 
 # 4. Get fleet state
-curl http://localhost:8081/api/fleet/state
+curl http://localhost:18081/api/fleet/state
 
 # 5. Access frontend
-open http://localhost:3000
+open http://localhost:13000
 
 # 6. Build Fleet Agent (on robot)
 cd ros2_robot_agent
@@ -486,7 +488,7 @@ agent:
 server:
   quic:
     server_address: "192.168.0.200"
-    server_port: 9443
+    server_port: 19443
     ca_cert: "/etc/robot_agent/certs/ca.crt"
     client_cert: "/etc/robot_agent/certs/agent.crt"
     client_key: "/etc/robot_agent/certs/agent.key"
@@ -517,7 +519,7 @@ discovery:
 
 ### 2. QUIC Connection Issues
 - Ensure TLS certificates are valid and trusted
-- Check firewall allows UDP on port 9443
+- Check firewall allows UDP on port 19443
 - Verify MsQuic is properly installed (`libmsquic.so`)
 
 ### 3. Step Transition Logic
