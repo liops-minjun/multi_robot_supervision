@@ -22,7 +22,7 @@ import 'reactflow/dist/style.css'
 import {
   Trash2, Zap, ChevronDown, ChevronRight, Server, Activity, Plus, PlusCircle, X,
   Cpu, FileCode, Users, Link2, Unlink, Check, AlertCircle, Clock, Layout, Save, Radio,
-  Edit, Lock, Unlock, Eye, EyeOff
+  Edit, Lock, Unlock, Eye, EyeOff, Search
 } from 'lucide-react'
 import { templateApi, stateDefinitionApi, agentApi, capabilityApi, behaviorTreeLockApi } from '../../api/client'
 import { useWebSocket, BehaviorTreeLockMessage, GraphSyncMessage } from '../../contexts/WebSocketContext'
@@ -96,6 +96,7 @@ const getActionColor = (actionType: string): string => {
 }
 
 const HIDDEN_DISCOVERED_ACTIONS_STORAGE_KEY = 'action-graph.hidden-discovered-actions.v1'
+const LAST_OPENED_TASK_STORAGE_KEY = 'action-graph.last-opened-task.v1'
 
 type DiscoveryTab = 'visible' | 'hidden'
 
@@ -125,8 +126,16 @@ type PaletteCategory = {
   items: PaletteItem[]
 }
 
-const normalizeCapabilityKind = (kind?: string): 'action' | 'service' => {
-  return kind?.toLowerCase() === 'service' ? 'service' : 'action'
+const inferCapabilityKindFromActionType = (actionType?: string): 'action' | 'service' => {
+  const normalizedType = (actionType || '').toLowerCase()
+  return normalizedType.includes('/srv/') ? 'service' : 'action'
+}
+
+const normalizeCapabilityKind = (kind?: string, actionType?: string): 'action' | 'service' => {
+  const normalizedKind = kind?.toLowerCase().trim()
+  if (normalizedKind === 'service') return 'service'
+  if (normalizedKind === 'action') return 'action'
+  return inferCapabilityKindFromActionType(actionType)
 }
 
 const getServerLeafName = (serverName?: string): string => {
@@ -153,6 +162,50 @@ const loadHiddenDiscoveredActionKeys = (): string[] => {
   } catch {
     return []
   }
+}
+
+const loadLastOpenedTaskId = (): string | null => {
+  if (typeof window === 'undefined') return null
+
+  try {
+    const value = window.localStorage.getItem(LAST_OPENED_TASK_STORAGE_KEY)
+    if (!value) return null
+    const trimmed = value.trim()
+    return trimmed.length > 0 ? trimmed : null
+  } catch {
+    return null
+  }
+}
+
+const extractApiErrorMessage = (error: any, fallback: string): string => {
+  return (
+    error?.response?.data?.error ||
+    error?.response?.data?.detail ||
+    error?.message ||
+    fallback
+  )
+}
+
+const matchesPaletteSearch = (item: PaletteItem, query: string): boolean => {
+  if (!query) return true
+
+  const haystacks = [
+    item.label,
+    item.subtype,
+    item.type,
+    item.actionType,
+    item.server,
+    item.agentName,
+    item.providerNode,
+    item.duringState,
+    item.capabilityKind === 'service' ? 'service 서비스' : 'action 액션',
+    item.isLifecycleNode ? 'lifecycle 라이프사이클' : 'non-lifecycle 비라이프사이클',
+    item.lifecycleState,
+  ]
+
+  return haystacks.some((value) =>
+    (value || '').toString().toLowerCase().includes(query)
+  )
 }
 
 let stateColorsMap: Record<string, StateColorType> = {}
@@ -380,7 +433,7 @@ function ActionGraphEditor() {
 
   // Agent filtering for capabilities
   const [selectedAgentFilter, setSelectedAgentFilter] = useState<string | null>(null)
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null)
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(() => loadLastOpenedTaskId())
 
   // Modal state
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -393,6 +446,7 @@ function ActionGraphEditor() {
     'Configured Actions',
     'End Nodes',
   ])
+  const [nodeSearchQuery, setNodeSearchQuery] = useState('')
   const [discoveredActionTab, setDiscoveredActionTab] = useState<DiscoveryTab>('visible')
   const [hiddenDiscoveredActionKeys, setHiddenDiscoveredActionKeys] = useState<string[]>(() => loadHiddenDiscoveredActionKeys())
 
@@ -422,7 +476,7 @@ function ActionGraphEditor() {
 
   // ReactFlow
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
-  const { screenToFlowPosition } = useReactFlow()
+  const { screenToFlowPosition, fitView } = useReactFlow()
   const queryClient = useQueryClient()
 
   // Fetch all agents for capability-based workflow
@@ -447,10 +501,10 @@ function ActionGraphEditor() {
         // Fetch capabilities for specific agent and transform to match listAll() format
         const agentCaps = await agentApi.getCapabilities(selectedAgentFilter)
         const actionCaps = agentCaps.capabilities.filter(
-          (cap) => normalizeCapabilityKind(cap.capability_kind) === 'action'
+          (cap) => normalizeCapabilityKind(cap.capability_kind, cap.action_type) === 'action'
         )
         const serviceCaps = agentCaps.capabilities.filter(
-          (cap) => normalizeCapabilityKind(cap.capability_kind) === 'service'
+          (cap) => normalizeCapabilityKind(cap.capability_kind, cap.action_type) === 'service'
         )
 
         return {
@@ -481,9 +535,28 @@ function ActionGraphEditor() {
         }
       }
       const fleetCaps = await capabilityApi.listAll()
+      const rawActionServers = fleetCaps.action_servers || []
+      const normalizedActionServers = rawActionServers.filter((srv: any) =>
+        normalizeCapabilityKind(srv?.capability_kind, srv?.action_type) === 'action'
+      )
+      const inferredServiceServers = rawActionServers
+        .filter((srv: any) => normalizeCapabilityKind(srv?.capability_kind, srv?.action_type) === 'service')
+        .map((srv: any) => ({
+          service_type: srv.action_type,
+          service_name: srv.action_server,
+          agent_id: srv.agent_id,
+          agent_name: srv.agent_name,
+          node_name: srv.node_name,
+          is_lifecycle_node: srv.is_lifecycle_node ?? false,
+          is_available: srv.is_available ?? false,
+          lifecycle_state: srv.lifecycle_state || 'unknown',
+          status: srv.status || 'unknown',
+        }))
+
       return {
         ...fleetCaps,
-        service_servers: fleetCaps.service_servers || [],
+        action_servers: normalizedActionServers,
+        service_servers: [...(fleetCaps.service_servers || []), ...inferredServiceServers],
       }
     },
   })
@@ -497,15 +570,48 @@ function ActionGraphEditor() {
     )
   }, [hiddenDiscoveredActionKeys])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    if (selectedTemplateId) {
+      window.localStorage.setItem(LAST_OPENED_TASK_STORAGE_KEY, selectedTemplateId)
+    } else {
+      window.localStorage.removeItem(LAST_OPENED_TASK_STORAGE_KEY)
+    }
+  }, [selectedTemplateId])
+
   // Fetch all templates (capability-based - no type filtering)
   const { data: allTemplates = [], isLoading: templatesLoading } = useQuery({
     queryKey: ['templates-all'],
     queryFn: () => templateApi.list(),
   })
 
+  useEffect(() => {
+    if (templatesLoading) return
+    if (allTemplates.length === 0) {
+      if (selectedTemplateId !== null) {
+        setSelectedTemplateId(null)
+      }
+      return
+    }
+
+    const isCurrentSelectionValid = !!selectedTemplateId &&
+      allTemplates.some(template => template.id === selectedTemplateId)
+
+    if (!isCurrentSelectionValid) {
+      setSelectedTemplateId(allTemplates[0].id)
+    }
+  }, [templatesLoading, allTemplates, selectedTemplateId])
+
 
   // Fetch selected template
-  const { data: selectedTemplate } = useQuery({
+  const {
+    data: selectedTemplate,
+    isLoading: selectedTemplateLoading,
+    isError: selectedTemplateError,
+    error: selectedTemplateQueryError,
+    refetch: refetchSelectedTemplate,
+  } = useQuery({
     queryKey: ['template', selectedTemplateId],
     queryFn: () => templateApi.get(selectedTemplateId!),
     enabled: !!selectedTemplateId,
@@ -548,6 +654,9 @@ function ActionGraphEditor() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['templates-all'] })
       setSelectedTemplateId(null)
+    },
+    onError: (error: any) => {
+      alert(extractApiErrorMessage(error, '태스크 삭제에 실패했습니다'))
     },
   })
 
@@ -663,7 +772,7 @@ function ActionGraphEditor() {
       })
     }
 
-    // Discovered service servers (read-only list)
+    // Discovered service servers
     if (fleetCapabilities?.service_servers && fleetCapabilities.service_servers.length > 0) {
       const serviceMap = new Map<string, typeof fleetCapabilities.service_servers[0]>()
       for (const srv of fleetCapabilities.service_servers) {
@@ -677,21 +786,26 @@ function ActionGraphEditor() {
       palette.push({
         category: 'Discovered Services',
         icon: <Cpu className="w-3.5 h-3.5" />,
-        items: Array.from(serviceMap.values()).map((srv) => ({
-          type: 'service',
-          subtype: srv.service_name,
-          label: getServerLeafName(srv.service_name) || srv.service_name,
-          color: '#0ea5e9',
-          actionType: srv.service_type,
-          server: srv.service_name,
-          agentName: srv.agent_name,
-          isAvailable: srv.is_available,
-          capabilityKind: 'service',
-          providerNode: srv.node_name,
-          isLifecycleNode: srv.is_lifecycle_node,
-          lifecycleState: srv.lifecycle_state,
-          isDraggable: false,
-        })),
+        items: Array.from(serviceMap.values()).map((srv) => {
+          const serviceServerName = getServerLeafName(srv.service_name)
+          const namespaceServer = `{namespace}/${serviceServerName}`
+
+          return {
+            type: 'service',
+            subtype: srv.service_name,
+            label: serviceServerName || srv.service_name,
+            color: '#0ea5e9',
+            actionType: srv.service_type,
+            server: namespaceServer,
+            agentName: srv.agent_name,
+            isAvailable: srv.is_available,
+            capabilityKind: 'service',
+            providerNode: srv.node_name,
+            isLifecycleNode: srv.is_lifecycle_node,
+            lifecycleState: srv.lifecycle_state,
+            isDraggable: true,
+          }
+        }),
       })
     }
 
@@ -841,6 +955,19 @@ function ActionGraphEditor() {
       const { initialNodes, initialEdges } = convertActionGraphToGraph(selectedTemplate, selectedStateDef, availableStates, availableAgents)
       setNodes(initialNodes)
       setEdges(initialEdges)
+
+      // Always reset viewport when opening a task so the full flow is visible.
+      // Double RAF ensures ReactFlow store has applied new nodes/edges before fitting.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          fitView({
+            padding: 0.2,
+            duration: 250,
+            maxZoom: 1.2,
+          })
+        })
+      })
+
       loadedTemplateIdRef.current = templateId
       lastSavedStateRef.current = {
         nodes: JSON.stringify(initialNodes),
@@ -848,7 +975,7 @@ function ActionGraphEditor() {
       }
       setSaveStatus('idle')
     }
-  }, [templateId, selectedTemplate?.id, setNodes, setEdges, selectedStateDef, availableStates, availableAgents])
+  }, [templateId, selectedTemplate?.id, setNodes, setEdges, selectedStateDef, availableStates, availableAgents, fitView])
 
   // Track if there are unsaved changes (for UI indicator)
   const hasUnsavedChanges = useMemo(() => {
@@ -1002,6 +1129,10 @@ function ActionGraphEditor() {
         action: {
           type: node.data.actionType || node.data.subtype,
           server: node.data.server,
+          capability_kind: normalizeCapabilityKind(
+            node.data.capabilityKind,
+            node.data.actionType || node.data.subtype
+          ),
           params: node.data.fieldSources && Object.keys(node.data.fieldSources).length > 0
             ? {
                 source: 'mapped' as const,
@@ -1200,7 +1331,7 @@ function ActionGraphEditor() {
         if (result.error === 'executing') {
           // Graph is being executed by agents
           const agents = (result as any).executing_agents || []
-          alert(`이 Behavior Tree가 현재 실행 중입니다.\n\n실행 중인 Agent: ${agents.join(', ')}\n\nTask가 완료된 후 다시 시도해주세요.`)
+          alert(`이 태스크가 현재 실행 중입니다.\n\n실행 중인 RTM: ${agents.join(', ')}\n\nTask가 완료된 후 다시 시도해주세요.`)
           return false
         }
         // Lock is held by someone else
@@ -1504,10 +1635,12 @@ function ActionGraphEditor() {
       }
       console.log('[onDrop] Parsed data:', data)
 
-      if (data.type !== 'action' && data.type !== 'event') {
+      if (data.type !== 'action' && data.type !== 'service' && data.type !== 'event') {
         console.log('[onDrop] Unsupported palette item type:', data.type)
         return
       }
+
+      const isActionLikeNode = data.type === 'action' || data.type === 'service'
 
       const position = screenToFlowPosition({
         x: event.clientX,
@@ -1528,7 +1661,7 @@ function ActionGraphEditor() {
 
       const newNode: Node = {
         id: getNodeId(),
-        type: data.type,
+        type: isActionLikeNode ? 'action' : 'event',
         position,
         data: {
           label: data.label,
@@ -1536,6 +1669,9 @@ function ActionGraphEditor() {
           color: data.color,
           actionType: data.actionType,
           server: data.server,
+          capabilityKind: isActionLikeNode
+            ? (data.capabilityKind || (data.type === 'service' ? 'service' : 'action'))
+            : undefined,
           preStates: [],
           duringStateTargets: data.duringState
             ? [{ state: data.duringState, target_type: 'self' }]
@@ -1599,38 +1735,53 @@ function ActionGraphEditor() {
     })
   }, [])
 
+  const handleOpenTask = useCallback((taskId: string) => {
+    setSelectedTemplateId(taskId)
+    setBottomPanelTab(null)
+  }, [])
+
+  const selectedTaskSummary = useMemo(
+    () => allTemplates.find(template => template.id === selectedTemplateId) || null,
+    [allTemplates, selectedTemplateId]
+  )
+  const selectedTaskName = selectedTemplate?.name || selectedTaskSummary?.name || selectedTemplateId || ''
+  const selectedTaskVersion = selectedTemplate?.version || selectedTaskSummary?.version || null
+
   return (
     <div className="h-screen flex bg-base">
-      {/* Left Sidebar - Templates */}
+      {/* Left Sidebar - Task definitions */}
       <div className="w-64 bg-surface border-r border-primary flex flex-col">
-        {/* Templates List */}
+        {/* Task list */}
         <div className="flex-1 overflow-y-auto">
           <div className="py-2">
             <div className="px-3 py-2 flex items-center justify-between">
               <span className="text-xs font-semibold text-secondary uppercase tracking-wider">
-                템플릿
+                태스크
               </span>
               <button
                 onClick={() => setShowCreateModal(true)}
                 className="p-1 text-blue-400 hover:bg-blue-500/20 rounded"
-                title="새 템플릿 생성"
+                title="새 태스크 생성"
               >
                 <PlusCircle size={14} />
               </button>
+            </div>
+            <div className="px-3 pb-2 text-[10px] text-muted">
+              항목 클릭: 열기 · 상단 편집 버튼: 수정
             </div>
 
             {templatesLoading ? (
               <div className="px-3 py-4 text-center text-muted text-sm">로딩 중...</div>
             ) : allTemplates.length === 0 ? (
               <div className="px-3 py-4 text-center text-muted text-sm">
-                템플릿이 없습니다. 새로 생성하세요.
+                태스크가 없습니다. 새로 생성하세요.
               </div>
             ) : (
               <div className="space-y-0.5">
                 {allTemplates.map((template: TemplateListItem) => (
                   <div
                     key={template.id}
-                    onClick={() => setSelectedTemplateId(template.id)}
+                    onClick={() => handleOpenTask(template.id)}
                     className={`w-full px-3 py-2 flex items-center gap-2 text-left transition-colors cursor-pointer group ${
                       selectedTemplateId === template.id
                         ? 'bg-blue-600/20 text-blue-400 border-l-2 border-blue-500'
@@ -1647,12 +1798,14 @@ function ActionGraphEditor() {
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
-                        if (confirm(`Delete template "${template.name}"?`)) {
+                        if (confirm(`태스크 "${template.name}"을(를) 삭제할까요?`)) {
                           deleteTemplate.mutate(template.id)
                         }
                       }}
-                      className="p-1 text-muted hover:text-red-400 hover:bg-red-500/20 rounded opacity-0 group-hover:opacity-100 transition-opacity"
-                      title="템플릿 삭제"
+                      className={`p-1 text-muted hover:text-red-400 hover:bg-red-500/20 rounded transition-opacity ${
+                        selectedTemplateId === template.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                      }`}
+                      title="태스크 삭제"
                     >
                       <Trash2 size={12} />
                     </button>
@@ -1663,27 +1816,34 @@ function ActionGraphEditor() {
           </div>
         </div>
 
-        {/* Selected Template Info */}
-        {selectedTemplate && (
+        {/* Selected task info */}
+        {selectedTemplateId && (
           <div className="border-t border-primary p-3 bg-elevated/50">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-semibold text-secondary uppercase">선택된 템플릿</span>
+              <span className="text-xs font-semibold text-secondary uppercase">선택된 태스크</span>
               <button
-                onClick={() => setShowAssignModal(true)}
+                onClick={() => {
+                  if (!selectedTemplate) return
+                  setShowAssignModal(true)
+                }}
+                disabled={!selectedTemplate}
                 className="text-xs px-2 py-1 bg-blue-600/20 text-blue-400 rounded hover:bg-blue-600/30 flex items-center gap-1"
               >
                 <Link2 size={12} />
-                Assign
+                할당
               </button>
             </div>
-            <div className="text-sm text-primary font-medium truncate">{selectedTemplate.name}</div>
+            <div className="text-sm text-primary font-medium truncate">{selectedTaskName}</div>
             <div className="text-xs text-muted mt-1">
-              v{selectedTemplate.version}
+              {selectedTaskVersion ? `v${selectedTaskVersion}` : '상세 불러오는 중...'}
+            </div>
+            <div className="text-[10px] text-muted mt-1">
+              열림 상태입니다. 수정은 상단 `편집` 버튼을 눌러 시작합니다.
             </div>
             {templateAssignments.length > 0 && (
               <div className="mt-2 pt-2 border-t border-primary/50">
                 <div className="text-xs text-muted mb-1">
-                  Assigned to {templateAssignments.length} agent(s)
+                  {templateAssignments.length}개 RTM에 할당됨
                 </div>
                 <div className="flex flex-wrap gap-1">
                   {templateAssignments.slice(0, 3).map(a => (
@@ -1693,7 +1853,7 @@ function ActionGraphEditor() {
                   ))}
                   {templateAssignments.length > 3 && (
                     <span className="text-[10px] px-1.5 py-0.5 bg-gray-500/20 text-secondary rounded">
-                      +{templateAssignments.length - 3} more
+                      +{templateAssignments.length - 3}개 더
                     </span>
                   )}
                 </div>
@@ -1723,7 +1883,7 @@ function ActionGraphEditor() {
         )}
       </div>
 
-      {/* Middle: Node Palette (when template selected) */}
+      {/* Middle: Node Palette (when task loaded) */}
       {selectedTemplate && (
         <div className="w-56 bg-surface border-r border-primary flex flex-col">
           {/* States Management */}
@@ -1764,18 +1924,18 @@ function ActionGraphEditor() {
             )}
           </div>
 
-          {/* Agent Filter */}
+          {/* RTM Filter */}
           <div className="px-3 py-2 border-b border-primary">
             <div className="flex items-center gap-2 mb-1.5">
               <Cpu size={12} className="text-secondary" />
-              <span className="text-[10px] font-semibold text-secondary uppercase tracking-wider">Agent</span>
+              <span className="text-[10px] font-semibold text-secondary uppercase tracking-wider">RTM</span>
             </div>
             <select
               value={selectedAgentFilter || ''}
               onChange={(e) => setSelectedAgentFilter(e.target.value || null)}
               className="w-full px-2 py-1.5 bg-elevated border border-primary rounded-lg text-xs text-primary focus:outline-none focus:border-blue-500 cursor-pointer"
             >
-              <option value="">All Agents</option>
+              <option value="">All RTMs</option>
               {agents?.map((agent) => (
                 <option key={agent.id} value={agent.id}>
                   {agent.name || agent.id}
@@ -1784,18 +1944,22 @@ function ActionGraphEditor() {
             </select>
           </div>
 
-          {/* Compatible Agents Section - Prominent placement */}
+          {/* Compatible RTM Section - Prominent placement */}
           {selectedTemplate && compatibleAgentsData && (() => {
             // Merge compatible agents with assigned agents
             const assignedAgentIds = new Set(templateAssignments.map(a => a.agent_id))
-            const compatibleAgents = compatibleAgentsData.agents?.filter(a => a.has_all_capabilities) || []
+            const onlineAgentMap = new Map((agents || []).map(agent => [agent.id, agent.status === 'online']))
+            const compatibleAgents = (compatibleAgentsData.agents || []).filter(a => a.has_all_capabilities && a.status === 'online')
             const compatibleAgentIds = new Set(compatibleAgents.map(a => a.agent_id))
 
             // Find assigned agents not in compatible list (may have partial or no capabilities data)
-            const assignedOnlyAgents = templateAssignments.filter(a => !compatibleAgentIds.has(a.agent_id))
+            const assignedOnlyAgents = templateAssignments.filter(
+              a => !compatibleAgentIds.has(a.agent_id) && (onlineAgentMap.get(a.agent_id) ?? false)
+            )
 
             // Total count: compatible + assigned-only
             const totalCount = compatibleAgents.length + assignedOnlyAgents.length
+            const hiddenOfflineCount = (compatibleAgentsData.agents || []).filter(a => a.status !== 'online').length
 
             return (
               <div className="mx-3 my-2 p-2.5 bg-gradient-to-r from-green-500/10 to-emerald-500/5 border border-green-500/30 rounded-lg">
@@ -1803,7 +1967,7 @@ function ActionGraphEditor() {
                   <div className="flex items-center gap-2">
                     <Users size={14} className="text-green-400" />
                     <span className="text-xs font-semibold text-green-400">
-                      호환 에이전트
+                      호환 RTM
                     </span>
                   </div>
                   <span className="text-xs text-green-300 font-bold">
@@ -1818,11 +1982,7 @@ function ActionGraphEditor() {
                       return (
                         <div
                           key={agent.agent_id}
-                          className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium ${
-                            agent.status === 'online'
-                              ? 'bg-green-500/20 text-green-300 border border-green-500/40'
-                              : 'bg-gray-600/20 text-secondary border border-gray-500/30'
-                          }`}
+                          className="flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium bg-green-500/20 text-green-300 border border-green-500/40"
                         >
                           <div className={`w-1.5 h-1.5 rounded-full ${
                             agent.status === 'online' ? 'bg-green-400' : 'bg-gray-500'
@@ -1848,7 +2008,12 @@ function ActionGraphEditor() {
                   </div>
                 ) : (
                   <div className="text-[10px] text-yellow-400 bg-yellow-500/10 px-2 py-1 rounded">
-                    ⚠️ 호환되는 에이전트 없음 - Action Type 확인 필요
+                    ⚠️ 호환되는 RTM 없음 - Action Type 확인 필요
+                  </div>
+                )}
+                {hiddenOfflineCount > 0 && (
+                  <div className="text-[9px] text-muted mt-1.5">
+                    오프라인 {hiddenOfflineCount}개 숨김
                   </div>
                 )}
                 {compatibleAgentsData.agents?.filter(a => !a.has_all_capabilities).length > 0 && (
@@ -1860,18 +2025,49 @@ function ActionGraphEditor() {
             )
           })()}
 
+          {/* Node Search */}
+          <div className="px-3 py-2 border-b border-primary">
+            <div className="flex items-center gap-2 px-2 py-1.5 bg-elevated border border-primary rounded-lg">
+              <Search size={12} className="text-secondary flex-shrink-0" />
+              <input
+                type="text"
+                value={nodeSearchQuery}
+                onChange={(e) => setNodeSearchQuery(e.target.value)}
+                placeholder="Action / Service / Node 검색"
+                className="flex-1 bg-transparent text-xs text-primary placeholder:text-muted focus:outline-none"
+              />
+              {nodeSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setNodeSearchQuery('')}
+                  className="p-0.5 text-muted hover:text-primary hover:bg-surface rounded"
+                  title="검색어 지우기"
+                >
+                  <X size={10} />
+                </button>
+              )}
+            </div>
+            <div className="mt-1 text-[9px] text-muted">
+              서비스와 lifecycle 노드도 함께 검색됩니다.
+            </div>
+          </div>
+
           {/* Node Palette */}
           <div className="flex-1 overflow-y-auto">
             {nodePalette.length === 0 ? (
               <div className="p-4 text-center text-muted text-xs">No nodes found</div>
             ) : (
               nodePalette.map(category => {
+                const normalizedSearchQuery = nodeSearchQuery.trim().toLowerCase()
                 const isDiscoveredActionsCategory = category.category === 'Discovered Actions'
                 const visibleDiscoveredCount = category.items.filter((item) => !item.isHidden).length
                 const hiddenDiscoveredCount = category.items.filter((item) => item.isHidden).length
-                const categoryItems = isDiscoveredActionsCategory
+                const baseCategoryItems = isDiscoveredActionsCategory
                   ? category.items.filter((item) => discoveredActionTab === 'hidden' ? item.isHidden : !item.isHidden)
                   : category.items
+                const categoryItems = normalizedSearchQuery
+                  ? baseCategoryItems.filter((item) => matchesPaletteSearch(item, normalizedSearchQuery))
+                  : baseCategoryItems
 
                 return (
                   <div key={category.category}>
@@ -1884,7 +2080,10 @@ function ActionGraphEditor() {
                         <span>{category.category}</span>
                       </div>
                       <div className="flex items-center gap-2">
-                        <span className="text-[9px] text-muted normal-case">{categoryItems.length}</span>
+                        <span className="text-[9px] text-muted normal-case">
+                          {categoryItems.length}
+                          {normalizedSearchQuery ? `/${baseCategoryItems.length}` : ''}
+                        </span>
                         {expandedCategories.includes(category.category) ? (
                           <ChevronDown className="w-3.5 h-3.5" />
                         ) : (
@@ -1923,7 +2122,9 @@ function ActionGraphEditor() {
 
                         {categoryItems.length === 0 ? (
                           <div className="px-2 py-2 text-[10px] text-muted italic">
-                            {isDiscoveredActionsCategory && discoveredActionTab === 'hidden'
+                            {normalizedSearchQuery
+                              ? '검색 결과가 없습니다.'
+                              : isDiscoveredActionsCategory && discoveredActionTab === 'hidden'
                               ? '숨겨진 action이 없습니다.'
                               : '표시할 항목이 없습니다.'}
                           </div>
@@ -1972,12 +2173,17 @@ function ActionGraphEditor() {
                                   </span>
                                 )}
                                 {item.isLifecycleNode !== undefined && (
-                                  <span className={`text-[9px] block ${
-                                    item.isLifecycleNode ? 'text-amber-400' : 'text-muted'
+                                  <span className={`inline-flex items-center gap-1 mt-0.5 px-1.5 py-0.5 rounded border text-[9px] ${
+                                    item.isLifecycleNode
+                                      ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                      : 'bg-gray-500/10 text-muted border-gray-500/20'
                                   }`}>
+                                    <span className={`w-1.5 h-1.5 rounded-full ${
+                                      item.isLifecycleNode ? 'bg-amber-400' : 'bg-gray-500'
+                                    }`} />
                                     {item.isLifecycleNode
-                                      ? `lifecycle: ${item.lifecycleState || 'unknown'}`
-                                      : 'non-lifecycle'}
+                                      ? `Lifecycle · ${item.lifecycleState || 'unknown'}`
+                                      : 'Non-lifecycle'}
                                   </span>
                                 )}
                                 {item.actionType && !item.duringState && !item.robotCount && (
@@ -2028,17 +2234,19 @@ function ActionGraphEditor() {
         <div className="h-12 bg-surface border-b border-primary flex items-center justify-between px-4">
           <div className="flex items-center gap-2">
             <Zap className="w-5 h-5 text-blue-400" />
-            <span className="font-semibold text-primary">Behavior Tree Templates</span>
-            {selectedTemplate && (
+            <span className="font-semibold text-primary">Task Definitions</span>
+            {selectedTemplateId && (
               <>
                 <span className="text-muted">/</span>
                 <FileCode className="w-4 h-4 text-blue-400" />
-                <span className="text-blue-400 text-sm">{selectedTemplate.name}</span>
-                <span className="text-muted text-xs ml-2">v{selectedTemplate.version}</span>
+                <span className="text-blue-400 text-sm">{selectedTaskName}</span>
+                {selectedTaskVersion && (
+                  <span className="text-muted text-xs ml-2">v{selectedTaskVersion}</span>
+                )}
               </>
             )}
           </div>
-          {selectedTemplate && (
+          {selectedTemplateId && (
             <div className="flex items-center gap-2">
               {/* Lock Status / Edit Button */}
               {!isEditing ? (
@@ -2130,8 +2338,9 @@ function ActionGraphEditor() {
               )}
               <button
                 onClick={() => {
-                  if (confirm(`Delete template "${selectedTemplate.name}"?`)) {
-                    deleteTemplate.mutate(selectedTemplate.id)
+                  if (!selectedTemplateId) return
+                  if (confirm(`태스크 "${selectedTaskName}"을(를) 삭제할까요?`)) {
+                    deleteTemplate.mutate(selectedTemplateId)
                   }
                 }}
                 className="p-1.5 text-red-400 hover:bg-red-500/20 rounded-md transition-colors"
@@ -2146,7 +2355,28 @@ function ActionGraphEditor() {
         <div className="flex-1 flex flex-col">
           {/* Canvas Area */}
           <div ref={reactFlowWrapper} className="flex-1">
-            {selectedTemplate ? (
+            {selectedTemplateId ? (
+              selectedTemplateLoading ? (
+                <div className="h-full flex items-center justify-center text-sm text-muted">
+                  태스크를 불러오는 중...
+                </div>
+              ) : selectedTemplateError ? (
+                <div className="h-full flex items-center justify-center">
+                  <div className="text-center">
+                    <AlertCircle className="w-10 h-10 mx-auto mb-3 text-yellow-400" />
+                    <h3 className="text-base font-semibold text-secondary mb-2">태스크를 불러오지 못했습니다</h3>
+                    <p className="text-xs text-muted mb-3">
+                      {extractApiErrorMessage(selectedTemplateQueryError, '요청 처리 중 오류가 발생했습니다')}
+                    </p>
+                    <button
+                      onClick={() => refetchSelectedTemplate()}
+                      className="px-3 py-1.5 bg-blue-600 text-primary rounded hover:bg-blue-700 text-sm"
+                    >
+                      다시 시도
+                    </button>
+                  </div>
+                </div>
+              ) : selectedTemplate ? (
               <ReactFlow
                 nodes={nodes}
                 edges={edgesWithDelete}
@@ -2180,27 +2410,32 @@ function ActionGraphEditor() {
                   <Panel position="bottom-center" className="mb-4">
                     <div className="bg-surface/90 backdrop-blur-sm px-4 py-2 rounded-lg border border-primary text-xs text-secondary">
                       {isEditing
-                        ? 'Drag action servers to canvas to build workflow'
-                        : 'Click "편집" to start editing this template'}
+                        ? 'Drag action servers to canvas to build task flow'
+                        : '상단 "편집" 버튼을 눌러 태스크 수정을 시작하세요'}
                     </div>
                   </Panel>
                 )}
               </ReactFlow>
+              ) : (
+                <div className="h-full flex items-center justify-center text-sm text-muted">
+                  태스크 상세 데이터가 없습니다.
+                </div>
+              )
             ) : (
               <div className="h-full flex items-center justify-center">
                 <div className="text-center">
                   <Layout className="w-16 h-16 mx-auto mb-4 text-muted" />
-                  <h2 className="text-xl font-semibold text-secondary mb-2">템플릿을 선택하세요</h2>
+                  <h2 className="text-xl font-semibold text-secondary mb-2">태스크를 선택하세요</h2>
                   <p className="text-muted text-sm max-w-md">
-                    왼쪽 패널에서 템플릿을 선택하여 워크플로우를 확인하고 편집하거나,
-                    새 템플릿을 생성하세요.
+                    왼쪽 패널에서 태스크를 열어 흐름을 확인/편집하거나,
+                    새 태스크를 생성하세요.
                   </p>
                   <button
                     onClick={() => setShowCreateModal(true)}
                     className="mt-4 px-4 py-2 bg-blue-600 text-primary rounded-lg hover:bg-blue-700 inline-flex items-center gap-2"
                   >
                     <Plus size={16} />
-                    Create New Template
+                    새 태스크 생성
                   </button>
                 </div>
               </div>
@@ -2263,21 +2498,21 @@ function ActionGraphEditor() {
                     />
                   ) : bottomPanelTab === 'assignments' ? (
                     <div className="h-full flex gap-4 p-3 overflow-x-auto">
-                      {/* Assigned Agents */}
+                      {/* Assigned RTMs */}
                       <div className="flex-shrink-0 w-72">
                         <div className="flex items-center justify-between mb-2">
-                          <h3 className="text-xs font-semibold text-secondary uppercase">할당된 에이전트</h3>
+                          <h3 className="text-xs font-semibold text-secondary uppercase">할당된 RTM</h3>
                           <button
                             onClick={() => setShowAssignModal(true)}
                             className="p-1 text-blue-400 hover:bg-blue-500/20 rounded"
-                            title="에이전트에 할당"
+                            title="RTM에 할당"
                           >
                             <Plus size={14} />
                           </button>
                         </div>
                         {templateAssignments.length === 0 ? (
                           <div className="text-xs text-muted p-3 bg-elevated rounded-lg">
-                            할당된 에이전트 없음
+                            할당된 RTM 없음
                           </div>
                         ) : (
                           <div className="space-y-1.5 max-h-32 overflow-y-auto">
@@ -2300,10 +2535,10 @@ function ActionGraphEditor() {
                         )}
                       </div>
 
-                      {/* Compatible Agents */}
+                      {/* Compatible RTMs */}
                       {compatibleAgentsData && (
                         <div className="flex-shrink-0 w-72">
-                          <h3 className="text-xs font-semibold text-secondary uppercase mb-2">호환 에이전트</h3>
+                          <h3 className="text-xs font-semibold text-secondary uppercase mb-2">호환 RTM</h3>
                           <div className="space-y-1.5 max-h-32 overflow-y-auto">
                             {(compatibleAgentsData.agents || [])
                               .filter(a => a.has_all_capabilities && !templateAssignments.some(ta => ta.agent_id === a.agent_id))
@@ -2323,7 +2558,7 @@ function ActionGraphEditor() {
                               ))}
                             {(compatibleAgentsData.agents || []).filter(a => a.has_all_capabilities && !templateAssignments.some(ta => ta.agent_id === a.agent_id)).length === 0 && (
                               <div className="text-xs text-muted p-3 bg-elevated rounded-lg">
-                                추가 호환 에이전트 없음
+                                추가 호환 RTM 없음
                               </div>
                             )}
                           </div>
@@ -2365,12 +2600,12 @@ function ActionGraphEditor() {
           // Debug: Modal was triggered but no template selected
           <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
             <div className="bg-surface rounded-xl shadow-2xl p-6 border border-primary">
-              <p className="text-primary mb-4">Error: No template selected</p>
+              <p className="text-primary mb-4">오류: 선택된 태스크가 없습니다</p>
               <button
                 onClick={() => setShowAssignModal(false)}
                 className="px-4 py-2 bg-blue-600 text-primary rounded"
               >
-                Close
+                닫기
               </button>
             </div>
           </div>
@@ -2432,18 +2667,19 @@ function convertActionGraphToGraph(
     const y = 100 + Math.floor(index / 3) * 200
 
     let subtype = step.action?.server || step.action?.type || 'Unknown'
-    let color = '#6b7280'
+    const capabilityKind = normalizeCapabilityKind(step.action?.capability_kind, step.action?.type)
+    let color = capabilityKind === 'service' ? '#0ea5e9' : '#6b7280'
     let actionType = step.action?.type
     let duringStates: string[] = []
 
     const mapping = actionMappings.find(m => m.action_type === step.action?.type) ||
       actionMappings.find(m => m.server === step.action?.server)
-    if (mapping) {
+    if (mapping && capabilityKind !== 'service') {
       color = getActionColor(mapping.action_type)
       actionType = mapping.action_type
       duringStates = mapping.during_states || (mapping.during_state ? [mapping.during_state] : [])
     } else if (step.action?.type) {
-      color = getActionColor(step.action.type)
+      color = capabilityKind === 'service' ? '#0ea5e9' : getActionColor(step.action.type)
     }
 
     const stepStartStates = step.startStates || mapStartConditionsToStates(step.start_conditions || [])
@@ -2495,6 +2731,7 @@ function convertActionGraphToGraph(
         color,
         actionType,
         server: step.action?.server,
+        capabilityKind,
         startStates: stepStartStates,
         preStates: stepPreStates,
         duringStateTargets: stepDuringTargets,
@@ -2637,14 +2874,14 @@ function CreateTemplateModal({
       steps: [],
     }),
     onSuccess: () => onCreated(formData.id),
-    onError: (err: any) => setError(err.response?.data?.detail || 'Failed to create template'),
+    onError: (err: any) => setError(err.response?.data?.detail || '태스크 생성에 실패했습니다'),
   })
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
       <div className="bg-surface rounded-xl shadow-2xl w-full max-w-md border border-primary">
         <div className="px-6 py-4 border-b border-primary flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-primary">Create New Template</h2>
+          <h2 className="text-lg font-semibold text-primary">새 태스크 생성</h2>
           <button onClick={onClose} className="text-muted hover:text-primary">
             <X size={20} />
           </button>
@@ -2667,7 +2904,7 @@ function CreateTemplateModal({
           )}
 
           <div>
-            <label className="block text-sm font-medium text-primary mb-1">템플릿 ID</label>
+            <label className="block text-sm font-medium text-primary mb-1">태스크 ID</label>
             <input
               type="text"
               value={formData.id}
@@ -2710,7 +2947,7 @@ function CreateTemplateModal({
               disabled={createTemplate.isPending}
               className="px-6 py-2 bg-blue-600 text-primary rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
-              {createTemplate.isPending ? '생성 중...' : '템플릿 생성'}
+              {createTemplate.isPending ? '생성 중...' : '태스크 생성'}
             </button>
           </div>
         </form>
@@ -2796,7 +3033,7 @@ function AssignTemplateModal({
       <div className="bg-surface rounded-xl shadow-2xl w-full max-w-lg border border-primary">
         <div className="px-6 py-4 border-b border-primary flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-primary">Assign Template</h2>
+            <h2 className="text-lg font-semibold text-primary">태스크 할당</h2>
             <p className="text-sm text-muted mt-0.5">{template.name}</p>
           </div>
           <button onClick={onClose} className="text-muted hover:text-primary">
@@ -2822,24 +3059,24 @@ function AssignTemplateModal({
             ) : (
               <div className="flex items-center gap-2 text-sm text-muted">
                 <AlertCircle size={14} />
-                <span className="italic">No actions in this template. Add actions to enable assignment.</span>
+                <span className="italic">이 태스크에 action이 없습니다. 할당하려면 action을 추가하세요.</span>
               </div>
             )}
           </div>
 
-          {/* Agent list */}
+          {/* RTM list */}
           <div className="text-xs text-secondary mb-2 font-medium uppercase tracking-wider">
-            Agents ({sortedAgents.filter(a => a.has_all_capabilities).length} compatible)
+            RTMs ({sortedAgents.filter(a => a.has_all_capabilities).length} compatible)
           </div>
 
           <div className="space-y-2 max-h-72 overflow-y-auto">
             {compatibleLoading ? (
-              <div className="text-center py-8 text-muted">Loading agents...</div>
+              <div className="text-center py-8 text-muted">Loading RTMs...</div>
             ) : sortedAgents.length === 0 ? (
               <div className="text-center py-8 text-muted">
                 {requiredActionTypes.length === 0
-                  ? 'Add actions to template first'
-                  : 'No agents registered yet'}
+                  ? '먼저 태스크에 action을 추가하세요'
+                  : 'No RTMs registered yet'}
               </div>
             ) : (
               sortedAgents.map(agent => {

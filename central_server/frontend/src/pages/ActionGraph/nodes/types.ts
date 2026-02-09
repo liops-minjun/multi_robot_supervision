@@ -6,6 +6,7 @@ export interface StateActionNodeData {
   color: string
   actionType?: string
   server?: string
+  capabilityKind?: 'action' | 'service'
   // Job configuration
   jobName?: string
   params?: Record<string, unknown>

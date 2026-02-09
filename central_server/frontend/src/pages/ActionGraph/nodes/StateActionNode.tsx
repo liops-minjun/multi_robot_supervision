@@ -23,6 +23,7 @@ export { AUTO_STATE_SUFFIXES } from './constants'
 
 const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeData>) => {
   const color = data.color || '#3b82f6'
+  const capabilityKind = data.capabilityKind === 'service' ? 'service' : 'action'
   const { setNodes, setEdges } = useReactFlow()
   const updateNodeInternals = useUpdateNodeInternals()
   const allNodes = useNodes()
@@ -336,12 +337,12 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
           <input
             type="text"
             value={data.server || data.subtype || ''}
-            onChange={(e) => { e.stopPropagation(); updateData('server', e.target.value) }}
-            onClick={(e) => e.stopPropagation()}
-            className="flex-1 min-w-0 text-[9px] font-mono text-secondary bg-transparent border-b border-transparent hover:border-gray-600 focus:border-white focus:outline-none truncate"
-            placeholder="{namespace}/action_server"
-            title="Action Server. {namespace}는 배포 시 에이전트의 namespace로 치환됩니다."
-          />
+              onChange={(e) => { e.stopPropagation(); updateData('server', e.target.value) }}
+              onClick={(e) => e.stopPropagation()}
+              className="flex-1 min-w-0 text-[9px] font-mono text-secondary bg-transparent border-b border-transparent hover:border-gray-600 focus:border-white focus:outline-none truncate"
+              placeholder={capabilityKind === 'service' ? '{namespace}/service_server' : '{namespace}/action_server'}
+              title={`${capabilityKind === 'service' ? 'Service' : 'Action'} Server. {namespace}는 배포 시 로봇 매니저의 namespace로 치환됩니다.`}
+            />
           {data.actionType && (
             <span className="text-[8px] px-1 py-0.5 rounded truncate flex-shrink-0" style={{ backgroundColor: `${color}30`, color }}>
               {data.actionType.split('/').pop()}

@@ -380,11 +380,15 @@ func (s *Server) GetTemplateCompatibleAgents(w http.ResponseWriter, r *http.Requ
 		if assignedAgents[info.Agent.ID] {
 			continue
 		}
+		// Only include currently online agents in compatibility list.
+		if !s.stateManager.IsAgentOnline(info.Agent.ID) {
+			continue
+		}
 
 		result = append(result, CompatibleAgentResponse{
 			AgentID:             info.Agent.ID,
 			AgentName:           info.Agent.Name,
-			Status:              info.Agent.Status,
+			Status:              "online",
 			HasAllCapabilities:  info.HasAllCapabilities,
 			MissingCapabilities: info.MissingCapabilities,
 		})

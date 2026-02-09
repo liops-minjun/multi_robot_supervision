@@ -369,11 +369,12 @@ type BehaviorTreeStep struct {
 }
 
 type StepAction struct {
-	Type         string            `json:"type"`
-	Server       string            `json:"server"`
-	Params       *ActionParams     `json:"params,omitempty"`
-	TimeoutSec   float64           `json:"timeout_sec,omitempty"`
-	ResultSchema *StepResultSchema `json:"result_schema,omitempty"` // Expected result schema (for other steps to reference)
+	Type           string            `json:"type"`
+	Server         string            `json:"server"`
+	CapabilityKind string            `json:"capability_kind,omitempty"` // action, service
+	Params         *ActionParams     `json:"params,omitempty"`
+	TimeoutSec     float64           `json:"timeout_sec,omitempty"`
+	ResultSchema   *StepResultSchema `json:"result_schema,omitempty"` // Expected result schema (for other steps to reference)
 }
 
 // ParameterFieldSource defines how a single parameter field gets its value

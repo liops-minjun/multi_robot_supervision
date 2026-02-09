@@ -116,6 +116,15 @@ func getStringSlice(props map[string]any, key string) []string {
 	return nil
 }
 
+// isTemplateFromProps returns true for explicit templates and legacy template records.
+// Legacy data may not have is_template set, so we treat empty agent_id as template.
+func isTemplateFromProps(props map[string]any) bool {
+	if getBool(props, "is_template") {
+		return true
+	}
+	return strings.TrimSpace(getString(props, "agent_id")) == ""
+}
+
 func toNullString(val string) sql.NullString {
 	if val == "" {
 		return sql.NullString{}
@@ -801,7 +810,7 @@ func (r *Repository) GetBehaviorTree(id string) (*BehaviorTree, error) {
 					Description:        toNullString(getString(props, "description")),
 					AgentID:            toNullString(getString(props, "agent_id")),
 					Version:            int(getInt64(props, "version")),
-					IsTemplate:         getBool(props, "is_template"),
+					IsTemplate:         isTemplateFromProps(props),
 					TemplateCategory:   toNullString(getString(props, "template_category")),
 					AutoGenerateStates: getBool(props, "auto_generate_states"),
 					CreatedAt:          time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
@@ -900,7 +909,7 @@ func (r *Repository) GetBehaviorTrees(agentID string, includeTemplates bool) ([]
 	params := map[string]any{}
 	if agentID != "" {
 		if includeTemplates {
-			query += "WHERE g.agent_id = $agent_id OR g.is_template = true "
+			query += "WHERE g.agent_id = $agent_id OR g.is_template = true OR coalesce(g.agent_id, '') = '' "
 		} else {
 			query += "WHERE g.agent_id = $agent_id "
 		}
@@ -933,7 +942,7 @@ func (r *Repository) GetBehaviorTrees(agentID string, includeTemplates bool) ([]
 					AgentID:            toNullString(getString(props, "agent_id")),
 					EntryPoint:         entryPointValue,
 					Version:            int(getInt64(props, "version")),
-					IsTemplate:         getBool(props, "is_template"),
+					IsTemplate:         isTemplateFromProps(props),
 					TemplateCategory:   toNullString(getString(props, "template_category")),
 					AutoGenerateStates: getBool(props, "auto_generate_states"),
 					CreatedAt:          time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
@@ -2519,7 +2528,18 @@ func (r *Repository) DeleteStateDefinition(id string) error {
 // =============================================================================
 
 func (r *Repository) GetTemplates() ([]BehaviorTree, error) {
-	return r.GetBehaviorTrees("", true)
+	graphs, err := r.GetBehaviorTrees("", true)
+	if err != nil {
+		return nil, err
+	}
+
+	templates := make([]BehaviorTree, 0, len(graphs))
+	for _, g := range graphs {
+		if g.IsTemplate {
+			templates = append(templates, g)
+		}
+	}
+	return templates, nil
 }
 
 func (r *Repository) GetTemplate(id string) (*BehaviorTree, error) {
@@ -2527,7 +2547,8 @@ func (r *Repository) GetTemplate(id string) (*BehaviorTree, error) {
 	if err != nil || graph == nil {
 		return graph, err
 	}
-	if !graph.IsTemplate {
+	// Backward compatibility: treat graphs without agent ownership as templates.
+	if !graph.IsTemplate && graph.AgentID.Valid {
 		return nil, nil
 	}
 	return graph, nil
@@ -2724,10 +2745,22 @@ func capabilityFromNeo4jNode(props map[string]any) AgentCapability {
 	if cap.SchemaVersion == 0 {
 		cap.SchemaVersion = 1
 	}
-	if cap.CapabilityKind == "" {
-		cap.CapabilityKind = "action"
-	}
+	cap.CapabilityKind = normalizeCapabilityKind(cap.CapabilityKind, cap.ActionType)
 	return cap
+}
+
+func normalizeCapabilityKind(kind, actionType string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "service":
+		return "service"
+	case "action":
+		return "action"
+	default:
+		if strings.Contains(strings.ToLower(actionType), "/srv/") {
+			return "service"
+		}
+		return "action"
+	}
 }
 
 func (r *Repository) GetAllAgentCapabilities() ([]AgentCapability, error) {
@@ -2933,9 +2966,6 @@ func (r *Repository) GetAgentActionTypes(agentID string) ([]string, error) {
 	}
 	set := map[string]bool{}
 	for _, c := range caps {
-		if strings.EqualFold(c.CapabilityKind, "service") {
-			continue
-		}
 		set[c.ActionType] = true
 	}
 	var types []string
@@ -2962,9 +2992,6 @@ func (r *Repository) FindCompatibleAgents(requiredActionTypes []string) ([]Agent
 	// Build action types set per agent
 	actionTypesByAgent := make(map[string]map[string]bool)
 	for _, cap := range allCaps {
-		if strings.EqualFold(cap.CapabilityKind, "service") {
-			continue
-		}
 		if actionTypesByAgent[cap.AgentID] == nil {
 			actionTypesByAgent[cap.AgentID] = make(map[string]bool)
 		}
@@ -3008,9 +3035,6 @@ func (r *Repository) FindAgentsWithCompatibility(requiredActionTypes []string) (
 	// Build action types set per agent
 	actionTypesByAgent := make(map[string]map[string]bool)
 	for _, cap := range allCaps {
-		if strings.EqualFold(cap.CapabilityKind, "service") {
-			continue
-		}
 		if actionTypesByAgent[cap.AgentID] == nil {
 			actionTypesByAgent[cap.AgentID] = make(map[string]bool)
 		}
@@ -3293,7 +3317,7 @@ func (r *Repository) GetBehaviorTreesByIDs(ids []string) (map[string]*BehaviorTr
 					Description:        toNullString(getString(props, "description")),
 					AgentID:            toNullString(getString(props, "agent_id")),
 					Version:            int(getInt64(props, "version")),
-					IsTemplate:         getBool(props, "is_template"),
+					IsTemplate:         isTemplateFromProps(props),
 					TemplateCategory:   toNullString(getString(props, "template_category")),
 					AutoGenerateStates: getBool(props, "auto_generate_states"),
 					CreatedAt:          time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),

@@ -46,7 +46,7 @@ func (s *Server) RegisterCapabilities(w http.ResponseWriter, r *http.Request) {
 	// Convert request to DB models
 	capabilities := make([]db.AgentCapability, len(req.Capabilities))
 	for i, cap := range req.Capabilities {
-		capabilityKind := normalizeCapabilityKind(cap.CapabilityKind)
+		capabilityKind := normalizeCapabilityKind(cap.CapabilityKind, cap.ActionType)
 		isLifecycleNode := false
 		if cap.IsLifecycleNode != nil {
 			isLifecycleNode = *cap.IsLifecycleNode
@@ -164,7 +164,7 @@ func (s *Server) GetRobotCapabilities(w http.ResponseWriter, r *http.Request) {
 		}
 
 		response.Capabilities[i] = CapabilityResponse{
-			CapabilityKind:  normalizeCapabilityKind(cap.CapabilityKind),
+			CapabilityKind:  normalizeCapabilityKind(cap.CapabilityKind, cap.ActionType),
 			ActionType:      cap.ActionType,
 			ActionServer:    cap.ActionServer,
 			NodeName:        cap.NodeName,
@@ -262,7 +262,7 @@ func (s *Server) ListAllCapabilities(w http.ResponseWriter, r *http.Request) {
 	serviceServerMap := make(map[string]ServiceServerInfo)
 
 	for _, cap := range allCaps {
-		capabilityKind := normalizeCapabilityKind(cap.CapabilityKind)
+		capabilityKind := normalizeCapabilityKind(cap.CapabilityKind, cap.ActionType)
 
 		if capabilityKind == "service" {
 			dedupeKey := cap.ActionType + "|" + cap.ActionServer
@@ -368,7 +368,7 @@ func (s *Server) GetCapabilitiesByActionType(w http.ResponseWriter, r *http.Requ
 	// Filter by action type
 	var caps []db.AgentCapability
 	for _, cap := range allCaps {
-		if normalizeCapabilityKind(cap.CapabilityKind) == "action" && cap.ActionType == actionType {
+		if cap.ActionType == actionType {
 			caps = append(caps, cap)
 		}
 	}
@@ -485,7 +485,7 @@ func (s *Server) RegisterRobot(w http.ResponseWriter, r *http.Request) {
 	if len(req.Capabilities) > 0 {
 		capabilities := make([]db.AgentCapability, len(req.Capabilities))
 		for i, cap := range req.Capabilities {
-			capabilityKind := normalizeCapabilityKind(cap.CapabilityKind)
+			capabilityKind := normalizeCapabilityKind(cap.CapabilityKind, cap.ActionType)
 			isLifecycleNode := false
 			if cap.IsLifecycleNode != nil {
 				isLifecycleNode = *cap.IsLifecycleNode
@@ -596,7 +596,7 @@ func (s *Server) GetAgentCapabilities(w http.ResponseWriter, r *http.Request) {
 		}
 
 		capabilities[i] = CapabilityResponse{
-			CapabilityKind:  normalizeCapabilityKind(cap.CapabilityKind),
+			CapabilityKind:  normalizeCapabilityKind(cap.CapabilityKind, cap.ActionType),
 			ActionType:      cap.ActionType,
 			ActionServer:    cap.ActionServer,
 			NodeName:        cap.NodeName,
@@ -872,7 +872,7 @@ func capabilityToDetailResponse(cap *db.AgentCapability, agentName string) Capab
 		ID:              cap.ID,
 		AgentID:         cap.AgentID,
 		AgentName:       agentName,
-		CapabilityKind:  normalizeCapabilityKind(cap.CapabilityKind),
+		CapabilityKind:  normalizeCapabilityKind(cap.CapabilityKind, cap.ActionType),
 		ActionType:      cap.ActionType,
 		ActionServer:    cap.ActionServer,
 		NodeName:        cap.NodeName,
@@ -906,13 +906,16 @@ func capabilityToDetailResponse(cap *db.AgentCapability, agentName string) Capab
 	return resp
 }
 
-func normalizeCapabilityKind(kind string) string {
+func normalizeCapabilityKind(kind string, actionType string) string {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
-	case "", "action":
+	case "action":
 		return "action"
 	case "service":
 		return "service"
 	default:
+		if strings.Contains(strings.ToLower(actionType), "/srv/") {
+			return "service"
+		}
 		return "action"
 	}
 }

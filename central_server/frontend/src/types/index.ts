@@ -644,6 +644,7 @@ export interface StepResultSchema {
 export interface StepAction {
   type: string
   server?: string
+  capability_kind?: 'action' | 'service'
   params: {
     source: 'waypoint' | 'inline' | 'dynamic' | 'mapped'
     waypoint_id?: string

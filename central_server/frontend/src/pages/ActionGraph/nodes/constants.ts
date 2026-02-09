@@ -52,5 +52,5 @@ export const OUTCOME_OPTIONS: Array<{ value: ActionOutcome; label: string }> = [
 export const DURING_TARGET_OPTIONS: Array<{ value: NonNullable<DuringStateTarget['target_type']>; label: string }> = [
   { value: 'self', label: '자신' },
   { value: 'all', label: '전체' },
-  { value: 'agent', label: '에이전트' },
+  { value: 'agent', label: '로봇 매니저' },
 ]

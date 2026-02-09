@@ -570,6 +570,7 @@ type ActionCapabilityMsg struct {
 	CapabilityKind  string // action, service
 	NodeName        string // ROS2 node name that provides this capability
 	IsLifecycleNode bool   // True if provider is lifecycle-managed
+	LifecycleState  string // unknown, unconfigured, inactive, active, finalized
 	GoalSchema      string
 	ResultSchema    string
 	FeedbackSchema  string
@@ -1281,6 +1282,21 @@ func parseStepResultInfo(data []byte) (*StepResultInfoMsg, error) {
 	return info, nil
 }
 
+func lifecycleStateFromProto(value uint64) string {
+	switch value {
+	case 1:
+		return "unconfigured"
+	case 2:
+		return "inactive"
+	case 3:
+		return "active"
+	case 4:
+		return "finalized"
+	default:
+		return "unknown"
+	}
+}
+
 // parseActionCapability parses ActionCapability protobuf
 func parseActionCapability(data []byte) (*ActionCapabilityMsg, error) {
 	cap := &ActionCapabilityMsg{}
@@ -1329,13 +1345,20 @@ func parseActionCapability(data []byte) (*ActionCapabilityMsg, error) {
 				cap.ActionName = v
 				data = data[n:]
 			}
-		case 10: // capability_kind
+		case 10: // capability_kind (string, new) OR lifecycle_state (enum, legacy)
 			if wireType == protowire.BytesType {
 				v, n := protowire.ConsumeString(data)
 				if n < 0 {
 					return nil, fmt.Errorf("invalid capability_kind")
 				}
 				cap.CapabilityKind = v
+				data = data[n:]
+			} else if wireType == protowire.VarintType {
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid lifecycle_state")
+				}
+				cap.LifecycleState = lifecycleStateFromProto(v)
 				data = data[n:]
 			}
 		case 11: // node_name
@@ -1354,6 +1377,15 @@ func parseActionCapability(data []byte) (*ActionCapabilityMsg, error) {
 					return nil, fmt.Errorf("invalid is_lifecycle_node")
 				}
 				cap.IsLifecycleNode = v != 0
+				data = data[n:]
+			}
+		case 13: // lifecycle_state (enum, new)
+			if wireType == protowire.VarintType {
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid lifecycle_state")
+				}
+				cap.LifecycleState = lifecycleStateFromProto(v)
 				data = data[n:]
 			}
 		case 5: // goal_schema
@@ -1414,7 +1446,17 @@ func parseActionCapability(data []byte) (*ActionCapabilityMsg, error) {
 	}
 
 	if cap.CapabilityKind == "" {
-		cap.CapabilityKind = "action"
+		if strings.Contains(strings.ToLower(cap.ActionType), "/srv/") {
+			cap.CapabilityKind = "service"
+		} else {
+			cap.CapabilityKind = "action"
+		}
+	}
+	if cap.LifecycleState == "" {
+		cap.LifecycleState = "unknown"
+	}
+	if cap.IsLifecycleNode == false && cap.LifecycleState != "unknown" {
+		cap.IsLifecycleNode = true
 	}
 
 	return cap, nil
@@ -2490,8 +2532,17 @@ func (h *RawQUICHandler) handleCapabilityRegistration(
 	for _, cap := range reg.Capabilities {
 		capabilityKind := strings.ToLower(strings.TrimSpace(cap.CapabilityKind))
 		if capabilityKind == "" {
-			capabilityKind = "action"
+			if strings.Contains(strings.ToLower(cap.ActionType), "/srv/") {
+				capabilityKind = "service"
+			} else {
+				capabilityKind = "action"
+			}
 		}
+		lifecycleState := strings.ToLower(strings.TrimSpace(cap.LifecycleState))
+		if lifecycleState == "" {
+			lifecycleState = "unknown"
+		}
+		isLifecycleNode := cap.IsLifecycleNode || lifecycleState != "unknown"
 
 		// Generate ID using agent_id + action_server (unique per server per agent)
 		id := fmt.Sprintf("%s_%s_%s_%s", agentID, capabilityKind, cap.ActionType, cap.ActionServer)
@@ -2509,9 +2560,10 @@ func (h *RawQUICHandler) handleCapabilityRegistration(
 			ActionType:      cap.ActionType,
 			ActionServer:    cap.ActionServer,
 			NodeName:        cap.NodeName,
-			IsLifecycleNode: cap.IsLifecycleNode,
+			IsLifecycleNode: isLifecycleNode,
 			IsAvailable:     cap.IsAvailable, // Use the actual availability from the agent
 			Status:          status,
+			LifecycleState:  lifecycleState,
 		}
 
 		// Store schemas as JSON (they come as JSON strings from C++)
@@ -2535,8 +2587,8 @@ func (h *RawQUICHandler) handleCapabilityRegistration(
 
 		dbCaps = append(dbCaps, dbCap)
 
-		log.Printf("[RawQUIC]   - [%s] %s at %s (node=%s, lifecycle=%v, available=%v, criteria=%v)",
-			capabilityKind, cap.ActionType, cap.ActionServer, cap.NodeName, cap.IsLifecycleNode, cap.IsAvailable, cap.SuccessCriteria != nil)
+		log.Printf("[RawQUIC]   - [%s] %s at %s (node=%s, lifecycle_node=%v, lifecycle_state=%s, available=%v, criteria=%v)",
+			capabilityKind, cap.ActionType, cap.ActionServer, cap.NodeName, isLifecycleNode, lifecycleState, cap.IsAvailable, cap.SuccessCriteria != nil)
 	}
 
 	// Sync to database (using agent-based capabilities)
@@ -2554,8 +2606,17 @@ func (h *RawQUICHandler) handleCapabilityRegistration(
 		for _, cap := range reg.Capabilities {
 			capabilityKind := strings.ToLower(strings.TrimSpace(cap.CapabilityKind))
 			if capabilityKind == "" {
-				capabilityKind = "action"
+				if strings.Contains(strings.ToLower(cap.ActionType), "/srv/") {
+					capabilityKind = "service"
+				} else {
+					capabilityKind = "action"
+				}
 			}
+			lifecycleState := strings.ToLower(strings.TrimSpace(cap.LifecycleState))
+			if lifecycleState == "" {
+				lifecycleState = "unknown"
+			}
+			isLifecycleNode := cap.IsLifecycleNode || lifecycleState != "unknown"
 			wsCaps = append(wsCaps, map[string]interface{}{
 				"capability_kind":   capabilityKind,
 				"action_type":       cap.ActionType,
@@ -2563,7 +2624,8 @@ func (h *RawQUICHandler) handleCapabilityRegistration(
 				"package":           cap.Package,
 				"action_name":       cap.ActionName,
 				"node_name":         cap.NodeName,
-				"is_lifecycle_node": cap.IsLifecycleNode,
+				"is_lifecycle_node": isLifecycleNode,
+				"lifecycle_state":   lifecycleState,
 				"is_available":      cap.IsAvailable,
 				"status":            statusFromAvailability(cap.IsAvailable),
 			})

@@ -508,7 +508,7 @@ function TelemetryPanel({
             <div className="flex flex-col items-center justify-center py-6 text-muted">
               <Gauge className="w-8 h-8 mb-2 opacity-50" />
               <p className="text-sm">No telemetry data available</p>
-              <p className="text-[10px] mt-1">Telemetry will appear when the agent sends data</p>
+              <p className="text-[10px] mt-1">Telemetry will appear when the RTM sends data</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -1011,7 +1011,7 @@ export default function AgentDashboard() {
       setIsEditingName(false)
     },
     onError: (error: Error) => {
-      alert(`Failed to rename agent: ${error.message}`)
+      alert(`Failed to rename RTM: ${error.message}`)
     },
   })
 
@@ -1025,7 +1025,7 @@ export default function AgentDashboard() {
       }
     },
     onError: (error: Error) => {
-      alert(`Failed to delete agent: ${error.message}`)
+      alert(`Failed to delete RTM: ${error.message}`)
     },
   })
 
@@ -1092,11 +1092,11 @@ export default function AgentDashboard() {
             <div className="p-8 text-center">
               <Server className="w-12 h-12 mx-auto mb-3 text-muted" />
               <p className="text-muted text-sm">
-                {showOnlineOnly ? 'No online agents' : t('agent.noAgents')}
+                {showOnlineOnly ? 'No online RTMs' : t('agent.noAgents')}
               </p>
               <p className="text-xs text-muted mt-1">
                 {showOnlineOnly && agents.length > 0
-                  ? `${offlineCount} offline agent(s) hidden`
+                  ? `${offlineCount} offline RTM(s) hidden`
                   : t('agent.noAgentsHint')}
               </p>
             </div>
@@ -1185,12 +1185,12 @@ export default function AgentDashboard() {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation()
-                                if (confirm(`Delete agent "${agent.name}"?`)) {
+                                if (confirm(`Delete RTM "${agent.name}"?`)) {
                                   deleteAgentMutation.mutate(agent.id)
                                 }
                               }}
                               className="p-0.5 text-muted hover:text-red-400 transition-colors"
-                              title="Delete agent"
+                              title="Delete RTM"
                             >
                               <Trash2 className="w-3 h-3" />
                             </button>
@@ -1213,12 +1213,12 @@ export default function AgentDashboard() {
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
-                        if (confirm(`Delete agent "${agent.name}"?`)) {
+                        if (confirm(`Delete RTM "${agent.name}"?`)) {
                           deleteAgentMutation.mutate(agent.id)
                         }
                       }}
                       className="p-1.5 text-muted hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
-                      title="Delete agent"
+                      title="Delete RTM"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -1331,7 +1331,7 @@ export default function AgentDashboard() {
                             setIsEditingName(true)
                           }}
                           className="p-1 text-muted hover:text-blue-400 transition-colors"
-                          title="Rename agent"
+                          title="Rename RTM"
                         >
                           <Pencil className="w-4 h-4" />
                         </button>
@@ -1486,7 +1486,7 @@ export default function AgentDashboard() {
                     <Layout className="w-10 h-10 mx-auto mb-3 text-muted" />
                     <p className="text-muted text-sm">No behavior tree configured</p>
                     <p className="text-xs text-muted mt-1">
-                      Create a Behavior Tree to visualize execution for this agent.
+                      Create a Behavior Tree to visualize execution for this RTM.
                     </p>
                   </div>
                 ) : (
@@ -1557,7 +1557,7 @@ export default function AgentDashboard() {
                                 className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-primary text-xs font-medium rounded transition-colors"
                                 title={
                                   !selectedRobotState.is_online
-                                    ? 'Agent is offline'
+                                    ? 'RTM is offline'
                                     : !fleetGraph
                                       ? 'No graph available'
                                       : !canExecute
@@ -1611,7 +1611,7 @@ export default function AgentDashboard() {
                                   if (currentTaskId) {
                                     cancelTaskMutation.mutate({
                                       taskId: currentTaskId,
-                                      reason: 'User cancelled from Agent Dashboard',
+                                      reason: 'User cancelled from RTM Dashboard',
                                     })
                                   }
                                 }}
@@ -1631,13 +1631,13 @@ export default function AgentDashboard() {
                           {/* Reset State button - only available when NOT executing */}
                           <button
                             onClick={() => {
-                              if (selectedAgentId && window.confirm('Reset agent state to idle? This will clear all execution state.')) {
+                              if (selectedAgentId && window.confirm('Reset RTM state to idle? This will clear all execution state.')) {
                                 resetStateMutation.mutate(selectedAgentId)
                               }
                             }}
                             disabled={isExecutionLoading || selectedRobotExecuting}
                             className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-600 hover:bg-gray-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-primary text-xs font-medium rounded transition-colors ml-auto"
-                            title={selectedRobotExecuting ? 'Cannot reset while executing' : 'Reset agent state to idle'}
+                            title={selectedRobotExecuting ? 'Cannot reset while executing' : 'Reset RTM state to idle'}
                           >
                             {resetStateMutation.isPending ? (
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1705,7 +1705,7 @@ export default function AgentDashboard() {
                       <div className="flex items-center gap-2 mb-2 px-2 py-1.5 bg-yellow-500/10 border border-yellow-500/30 rounded">
                         <AlertTriangle className="w-3.5 h-3.5 text-yellow-400" />
                         <span className="text-xs text-yellow-400">
-                          No graphs assigned to this agent. Assign and deploy a graph from the Behavior Tree Editor.
+                          No graphs assigned to this RTM. Assign and deploy a graph from the Behavior Tree Editor.
                         </span>
                       </div>
                     ) : (
@@ -1756,7 +1756,7 @@ export default function AgentDashboard() {
                                 'text-orange-400'
                               }`}>
                                 {fleetGraphMeta.deployment_status === 'pending' && 'Graph assigned but not deployed. Deploy to enable execution.'}
-                                {fleetGraphMeta.deployment_status === 'deploying' && 'Deploying graph to agent...'}
+                                {fleetGraphMeta.deployment_status === 'deploying' && 'Deploying graph to RTM...'}
                                 {fleetGraphMeta.deployment_status === 'failed' && `Deployment failed: ${fleetGraphMeta.deployment_error || 'Unknown error'}`}
                                 {fleetGraphMeta.deployment_status === 'outdated' && `Graph outdated (server: v${fleetGraphMeta.server_version}, deployed: v${fleetGraphMeta.version})`}
                               </span>
