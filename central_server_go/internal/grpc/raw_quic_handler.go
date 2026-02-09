@@ -57,7 +57,7 @@ type RawQUICHandler struct {
 	configMu      sync.RWMutex
 
 	// Graph execution state overrides (execution_id -> override state)
-	graphOverrides map[string]*graphOverrideState
+	graphOverrides  map[string]*graphOverrideState
 	graphOverrideMu sync.Mutex
 
 	// Ping interval for latency tracking
@@ -85,12 +85,12 @@ type WebSocketBroadcaster interface {
 
 // TaskStateUpdateBroadcast is the struct sent to WebSocket clients for task state updates
 type TaskStateUpdateBroadcast struct {
-	TaskID         string            `json:"task_id"`
-	StepID         string            `json:"step_id"`
-	State          string            `json:"state"`
-	Progress       float32           `json:"progress"`
-	BlockingReason string            `json:"blocking_reason,omitempty"`
-	Variables      map[string]string `json:"variables,omitempty"`
+	TaskID         string               `json:"task_id"`
+	StepID         string               `json:"step_id"`
+	State          string               `json:"state"`
+	Progress       float32              `json:"progress"`
+	BlockingReason string               `json:"blocking_reason,omitempty"`
+	Variables      map[string]string    `json:"variables,omitempty"`
 	StepResult     *StepResultBroadcast `json:"step_result,omitempty"`
 }
 
@@ -355,16 +355,17 @@ type AgentMsg struct {
 }
 
 // TaskStateUpdateMsg represents agent-driven task state update
-// message TaskStateUpdate {
-//   string task_id = 1;
-//   string current_step_id = 2;
-//   TaskState state = 3;
-//   float progress = 4;
-//   string blocking_reason = 5;
-//   map<string, string> variables = 6;
-//   StepResultInfo step_result = 7;
-//   int64 timestamp_ms = 8;
-// }
+//
+//	message TaskStateUpdate {
+//	  string task_id = 1;
+//	  string current_step_id = 2;
+//	  TaskState state = 3;
+//	  float progress = 4;
+//	  string blocking_reason = 5;
+//	  map<string, string> variables = 6;
+//	  StepResultInfo step_result = 7;
+//	  int64 timestamp_ms = 8;
+//	}
 type TaskStateUpdateMsg struct {
 	TaskID         string
 	CurrentStepID  string
@@ -566,6 +567,9 @@ type ActionCapabilityMsg struct {
 	ActionServer    string
 	Package         string
 	ActionName      string
+	CapabilityKind  string // action, service
+	NodeName        string // ROS2 node name that provides this capability
+	IsLifecycleNode bool   // True if provider is lifecycle-managed
 	GoalSchema      string
 	ResultSchema    string
 	FeedbackSchema  string
@@ -1059,16 +1063,17 @@ func parseTaskLog(data []byte) (*TaskLogMsg, error) {
 }
 
 // parseTaskStateUpdate parses TaskStateUpdate protobuf (agent-driven execution)
-// message TaskStateUpdate {
-//   string task_id = 1;
-//   string current_step_id = 2;
-//   TaskState state = 3;
-//   float progress = 4;
-//   string blocking_reason = 5;
-//   map<string, string> variables = 6;
-//   StepResultInfo step_result = 7;
-//   int64 timestamp_ms = 8;
-// }
+//
+//	message TaskStateUpdate {
+//	  string task_id = 1;
+//	  string current_step_id = 2;
+//	  TaskState state = 3;
+//	  float progress = 4;
+//	  string blocking_reason = 5;
+//	  map<string, string> variables = 6;
+//	  StepResultInfo step_result = 7;
+//	  int64 timestamp_ms = 8;
+//	}
 func parseTaskStateUpdate(data []byte) (*TaskStateUpdateMsg, error) {
 	update := &TaskStateUpdateMsg{
 		Variables: make(map[string]string),
@@ -1200,13 +1205,14 @@ func parseTaskStateUpdate(data []byte) (*TaskStateUpdateMsg, error) {
 }
 
 // parseStepResultInfo parses StepResultInfo protobuf
-// message StepResultInfo {
-//   string step_id = 1;
-//   ActionStatus status = 2;
-//   bytes result_json = 3;
-//   string error = 4;
-//   int64 duration_ms = 5;
-// }
+//
+//	message StepResultInfo {
+//	  string step_id = 1;
+//	  ActionStatus status = 2;
+//	  bytes result_json = 3;
+//	  string error = 4;
+//	  int64 duration_ms = 5;
+//	}
 func parseStepResultInfo(data []byte) (*StepResultInfoMsg, error) {
 	info := &StepResultInfoMsg{}
 
@@ -1323,6 +1329,33 @@ func parseActionCapability(data []byte) (*ActionCapabilityMsg, error) {
 				cap.ActionName = v
 				data = data[n:]
 			}
+		case 10: // capability_kind
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid capability_kind")
+				}
+				cap.CapabilityKind = v
+				data = data[n:]
+			}
+		case 11: // node_name
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid node_name")
+				}
+				cap.NodeName = v
+				data = data[n:]
+			}
+		case 12: // is_lifecycle_node
+			if wireType == protowire.VarintType {
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid is_lifecycle_node")
+				}
+				cap.IsLifecycleNode = v != 0
+				data = data[n:]
+			}
 		case 5: // goal_schema
 			if wireType == protowire.BytesType {
 				v, n := protowire.ConsumeString(data)
@@ -1378,6 +1411,10 @@ func parseActionCapability(data []byte) (*ActionCapabilityMsg, error) {
 			}
 			data = data[n:]
 		}
+	}
+
+	if cap.CapabilityKind == "" {
+		cap.CapabilityKind = "action"
 	}
 
 	return cap, nil
@@ -1997,10 +2034,10 @@ func (h *RawQUICHandler) buildDeployGraphMessage(correlationID string, graphJSON
 			Step *struct {
 				StepType string `json:"step_type"`
 				Action   *struct {
-					Type      string                 `json:"type"`
-					Server    string                 `json:"server"`
-					TimeoutS  float64                `json:"timeout_sec"`
-					Params    map[string]interface{} `json:"params"`
+					Type     string                 `json:"type"`
+					Server   string                 `json:"server"`
+					TimeoutS float64                `json:"timeout_sec"`
+					Params   map[string]interface{} `json:"params"`
 				} `json:"action"`
 				States *struct {
 					During  []string `json:"during"`
@@ -2138,10 +2175,10 @@ func (h *RawQUICHandler) buildVertexMessage(id, vType string, step interface{}, 
 		stepData, ok := step.(*struct {
 			StepType string `json:"step_type"`
 			Action   *struct {
-				Type      string                 `json:"type"`
-				Server    string                 `json:"server"`
-				TimeoutS  float64                `json:"timeout_sec"`
-				Params    map[string]interface{} `json:"params"`
+				Type     string                 `json:"type"`
+				Server   string                 `json:"server"`
+				TimeoutS float64                `json:"timeout_sec"`
+				Params   map[string]interface{} `json:"params"`
 			} `json:"action"`
 			States *struct {
 				During  []string `json:"during"`
@@ -2163,10 +2200,10 @@ func (h *RawQUICHandler) buildVertexMessage(id, vType string, step interface{}, 
 func (h *RawQUICHandler) buildStepVertexMessage(step *struct {
 	StepType string `json:"step_type"`
 	Action   *struct {
-		Type      string                 `json:"type"`
-		Server    string                 `json:"server"`
-		TimeoutS  float64                `json:"timeout_sec"`
-		Params    map[string]interface{} `json:"params"`
+		Type     string                 `json:"type"`
+		Server   string                 `json:"server"`
+		TimeoutS float64                `json:"timeout_sec"`
+		Params   map[string]interface{} `json:"params"`
 	} `json:"action"`
 	States *struct {
 		During  []string `json:"during"`
@@ -2451,8 +2488,13 @@ func (h *RawQUICHandler) handleCapabilityRegistration(
 	// Convert to db.AgentCapability (agent-based, not robot-based)
 	dbCaps := make([]db.AgentCapability, 0, len(reg.Capabilities))
 	for _, cap := range reg.Capabilities {
+		capabilityKind := strings.ToLower(strings.TrimSpace(cap.CapabilityKind))
+		if capabilityKind == "" {
+			capabilityKind = "action"
+		}
+
 		// Generate ID using agent_id + action_server (unique per server per agent)
-		id := fmt.Sprintf("%s_%s", agentID, cap.ActionServer)
+		id := fmt.Sprintf("%s_%s_%s_%s", agentID, capabilityKind, cap.ActionType, cap.ActionServer)
 
 		// Determine status based on availability
 		status := "idle"
@@ -2461,12 +2503,15 @@ func (h *RawQUICHandler) handleCapabilityRegistration(
 		}
 
 		dbCap := db.AgentCapability{
-			ID:           id,
-			AgentID:      agentID,
-			ActionType:   cap.ActionType,
-			ActionServer: cap.ActionServer,
-			IsAvailable:  cap.IsAvailable, // Use the actual availability from the agent
-			Status:       status,
+			ID:              id,
+			AgentID:         agentID,
+			CapabilityKind:  capabilityKind,
+			ActionType:      cap.ActionType,
+			ActionServer:    cap.ActionServer,
+			NodeName:        cap.NodeName,
+			IsLifecycleNode: cap.IsLifecycleNode,
+			IsAvailable:     cap.IsAvailable, // Use the actual availability from the agent
+			Status:          status,
 		}
 
 		// Store schemas as JSON (they come as JSON strings from C++)
@@ -2490,8 +2535,8 @@ func (h *RawQUICHandler) handleCapabilityRegistration(
 
 		dbCaps = append(dbCaps, dbCap)
 
-		log.Printf("[RawQUIC]   - %s at %s (available: %v, criteria: %v)",
-			cap.ActionType, cap.ActionServer, cap.IsAvailable, cap.SuccessCriteria != nil)
+		log.Printf("[RawQUIC]   - [%s] %s at %s (node=%s, lifecycle=%v, available=%v, criteria=%v)",
+			capabilityKind, cap.ActionType, cap.ActionServer, cap.NodeName, cap.IsLifecycleNode, cap.IsAvailable, cap.SuccessCriteria != nil)
 	}
 
 	// Sync to database (using agent-based capabilities)
@@ -2507,13 +2552,20 @@ func (h *RawQUICHandler) handleCapabilityRegistration(
 	if h.wsHub != nil {
 		wsCaps := make([]map[string]interface{}, 0, len(reg.Capabilities))
 		for _, cap := range reg.Capabilities {
+			capabilityKind := strings.ToLower(strings.TrimSpace(cap.CapabilityKind))
+			if capabilityKind == "" {
+				capabilityKind = "action"
+			}
 			wsCaps = append(wsCaps, map[string]interface{}{
-				"action_type":   cap.ActionType,
-				"action_server": cap.ActionServer,
-				"package":       cap.Package,
-				"action_name":   cap.ActionName,
-				"is_available":  cap.IsAvailable,
-				"status":        statusFromAvailability(cap.IsAvailable),
+				"capability_kind":   capabilityKind,
+				"action_type":       cap.ActionType,
+				"action_server":     cap.ActionServer,
+				"package":           cap.Package,
+				"action_name":       cap.ActionName,
+				"node_name":         cap.NodeName,
+				"is_lifecycle_node": cap.IsLifecycleNode,
+				"is_available":      cap.IsAvailable,
+				"status":            statusFromAvailability(cap.IsAvailable),
 			})
 		}
 		// Broadcast with agent_id instead of robot_id
@@ -4947,12 +4999,13 @@ func (h *RawQUICHandler) SendStartTask(agentID, taskID, graphID, robotID string,
 
 // buildStartTaskMessage builds a ServerMessage with StartTaskCommand
 // StartTaskCommand is field 18 in ServerMessage oneof
-// message StartTaskCommand {
-//   string task_id = 1;
-//   string graph_id = 2;
-//   string robot_id = 3;
-//   map<string, string> params = 4;
-// }
+//
+//	message StartTaskCommand {
+//	  string task_id = 1;
+//	  string graph_id = 2;
+//	  string robot_id = 3;
+//	  map<string, string> params = 4;
+//	}
 func (h *RawQUICHandler) buildStartTaskMessage(taskID, graphID, robotID string, params map[string]string) []byte {
 	var cmd []byte
 

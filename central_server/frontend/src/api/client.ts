@@ -22,6 +22,7 @@ import type {
   AgentActionGraphInfo,
   ActionTypeStats,
   ActionServerInfo,
+  ServiceServerInfo,
   CompatibleAgentsResponse,
   AgentCompatibleTemplatesResponse,
   AgentConnectionStatus,
@@ -158,6 +159,7 @@ export const capabilityApi = {
       total_count: number
     }>
     action_servers: ActionServerInfo[]  // Individual action servers (not grouped)
+    service_servers: ServiceServerInfo[]  // Individual service servers (not grouped)
     total_agents: number
   }> => {
     const { data } = await api.get('/capabilities')

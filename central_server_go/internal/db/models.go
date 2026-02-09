@@ -44,10 +44,13 @@ func (Agent) TableName() string {
 // AgentCapability represents an auto-discovered capability from ROS2 Action Server
 // Capabilities are discovered per-agent from ROS2 Action Servers
 type AgentCapability struct {
-	ID           string         `gorm:"primaryKey;size:100"` // agent_id + action_server hash
-	AgentID      string         `gorm:"size:50;not null;index"`
-	ActionType   string         `gorm:"size:100;not null;index"` // e.g., "nav2_msgs/action/NavigateToPose"
-	ActionServer string         `gorm:"size:200;not null"` // e.g., "/navigate_to_pose"
+	ID              string `gorm:"primaryKey;size:100"` // agent_id + action_server hash
+	AgentID         string `gorm:"size:50;not null;index"`
+	CapabilityKind  string `gorm:"size:20;not null;default:action;index"` // action, service
+	ActionType      string `gorm:"size:100;not null;index"`               // e.g., "nav2_msgs/action/NavigateToPose"
+	ActionServer    string `gorm:"size:200;not null"`                     // e.g., "/navigate_to_pose"
+	NodeName        string `gorm:"size:200"`                              // ROS2 node that provides this capability
+	IsLifecycleNode bool   `gorm:"default:false"`                         // True if provider is lifecycle-managed
 
 	// Auto-introspected schemas
 	GoalSchema     datatypes.JSON `gorm:"type:jsonb"` // Goal message schema
@@ -58,19 +61,19 @@ type AgentCapability struct {
 	SuccessCriteria datatypes.JSON `gorm:"type:jsonb"` // Auto-inferred from result schema
 
 	// User-editable metadata (for UI/documentation)
-	Description    sql.NullString `gorm:"type:text"`           // Human-readable description
-	Category       sql.NullString `gorm:"size:50;index"`       // Category: navigation, manipulation, perception, etc.
-	DefaultTimeout float64        `gorm:"default:30.0"`        // Default timeout in seconds
-	SchemaVersion  int            `gorm:"default:1"`           // Schema version for compatibility tracking
+	Description    sql.NullString `gorm:"type:text"`     // Human-readable description
+	Category       sql.NullString `gorm:"size:50;index"` // Category: navigation, manipulation, perception, etc.
+	DefaultTimeout float64        `gorm:"default:30.0"`  // Default timeout in seconds
+	SchemaVersion  int            `gorm:"default:1"`     // Schema version for compatibility tracking
 
 	// Runtime status
-	Status         string       `gorm:"size:20;default:idle"` // idle, executing
-	IsAvailable    bool         `gorm:"default:true"`
-	LifecycleState string       `gorm:"size:20;default:unknown"` // unknown, unconfigured, inactive, active, finalized
+	Status         string `gorm:"size:20;default:idle"` // idle, executing
+	IsAvailable    bool   `gorm:"default:true"`
+	LifecycleState string `gorm:"size:20;default:unknown"` // unknown, unconfigured, inactive, active, finalized
 	LastUsedAt     sql.NullTime
 	DiscoveredAt   time.Time    `gorm:"autoCreateTime"`
-	UpdatedAt      time.Time    `gorm:"autoUpdateTime;index"`  // Index for incremental sync
-	DeletedAt      sql.NullTime `gorm:"index"`                 // Soft delete for sync tracking
+	UpdatedAt      time.Time    `gorm:"autoUpdateTime;index"` // Index for incremental sync
+	DeletedAt      sql.NullTime `gorm:"index"`                // Soft delete for sync tracking
 
 	// Relationships
 	Agent *Agent `gorm:"foreignKey:AgentID"`
@@ -79,7 +82,6 @@ type AgentCapability struct {
 func (AgentCapability) TableName() string {
 	return "agent_capabilities"
 }
-
 
 // Waypoint represents saved positions/poses
 type Waypoint struct {
@@ -108,16 +110,16 @@ type StateActionMapping struct {
 
 // StateDefinition defines valid states and action mappings
 type StateDefinition struct {
-	ID                string                 `gorm:"primaryKey;size:50"`
-	Name              string                 `gorm:"size:100;not null"`
-	Description       sql.NullString         `gorm:"type:text"`
-	States            []string               `gorm:"-"`
-	DefaultState      string                 `gorm:"size:50;not null"`
-	ActionMappings    []StateActionMapping   `gorm:"-"`
-	TeachableWaypoints []string              `gorm:"-"`
-	Version           int                    `gorm:"default:1"`
-	CreatedAt         time.Time              `gorm:"autoCreateTime"`
-	UpdatedAt         time.Time              `gorm:"autoUpdateTime"`
+	ID                 string               `gorm:"primaryKey;size:50"`
+	Name               string               `gorm:"size:100;not null"`
+	Description        sql.NullString       `gorm:"type:text"`
+	States             []string             `gorm:"-"`
+	DefaultState       string               `gorm:"size:50;not null"`
+	ActionMappings     []StateActionMapping `gorm:"-"`
+	TeachableWaypoints []string             `gorm:"-"`
+	Version            int                  `gorm:"default:1"`
+	CreatedAt          time.Time            `gorm:"autoCreateTime"`
+	UpdatedAt          time.Time            `gorm:"autoUpdateTime"`
 }
 
 func (StateDefinition) TableName() string {
@@ -164,14 +166,14 @@ type BehaviorTree struct {
 	RequiredActionTypes datatypes.JSON `gorm:"type:jsonb;default:'[]'"` // ["nav2_msgs/NavigateToPose", ...]
 
 	// State management
-	States             datatypes.JSON `gorm:"type:jsonb"` // []GraphState - available states for this graph
+	States             datatypes.JSON `gorm:"type:jsonb"`   // []GraphState - available states for this graph
 	AutoGenerateStates bool           `gorm:"default:true"` // Auto-generate states from steps
 
 	// Edit lock fields (for concurrent editing prevention)
-	LockedBy      sql.NullString `gorm:"size:100"`        // Display name of user who holds the lock
-	LockedAt      sql.NullTime                            // When the lock was acquired
-	LockExpiresAt sql.NullTime                            // When the lock expires (5 min timeout)
-	LockSessionID sql.NullString `gorm:"size:100;index"`  // Session ID for lock ownership verification
+	LockedBy      sql.NullString `gorm:"size:100"` // Display name of user who holds the lock
+	LockedAt      sql.NullTime   // When the lock was acquired
+	LockExpiresAt sql.NullTime   // When the lock expires (5 min timeout)
+	LockSessionID sql.NullString `gorm:"size:100;index"` // Session ID for lock ownership verification
 
 	// Relationships
 	Agent              *Agent              `gorm:"foreignKey:AgentID"`
@@ -238,7 +240,7 @@ type Task struct {
 
 	// Precondition waiting state
 	WaitingForPreconditionSince sql.NullTime   `gorm:"column:waiting_for_precondition_since"`
-	BlockingConditions          datatypes.JSON `gorm:"type:jsonb"` // []BlockingConditionInfo
+	BlockingConditions          datatypes.JSON `gorm:"type:jsonb"`  // []BlockingConditionInfo
 	PreconditionTimeoutSec      int            `gorm:"default:300"` // Default 5 minutes
 
 	// Relationships
@@ -306,9 +308,9 @@ type AgentBehaviorTree struct {
 	UpdatedAt time.Time `gorm:"autoUpdateTime"`
 
 	// Relationships
-	Agent          *Agent                       `gorm:"foreignKey:AgentID"`
-	BehaviorTree   *BehaviorTree                `gorm:"foreignKey:BehaviorTreeID"`
-	DeploymentLogs []BehaviorTreeDeploymentLog  `gorm:"foreignKey:AgentBehaviorTreeID"`
+	Agent          *Agent                      `gorm:"foreignKey:AgentID"`
+	BehaviorTree   *BehaviorTree               `gorm:"foreignKey:BehaviorTreeID"`
+	DeploymentLogs []BehaviorTreeDeploymentLog `gorm:"foreignKey:AgentBehaviorTreeID"`
 }
 
 // TableName returns "agent_action_graphs" to keep the same DB table (avoid migration)
@@ -376,11 +378,11 @@ type StepAction struct {
 
 // ParameterFieldSource defines how a single parameter field gets its value
 type ParameterFieldSource struct {
-	Source      string      `json:"source"`                  // constant, step_result, dynamic, expression
-	Value       interface{} `json:"value,omitempty"`         // For constant
-	StepID      string      `json:"step_id,omitempty"`       // For step_result
-	ResultField string      `json:"result_field,omitempty"`  // For step_result (e.g., "pose.position.x")
-	Expression  string      `json:"expression,omitempty"`    // For expression
+	Source      string      `json:"source"`                 // constant, step_result, dynamic, expression
+	Value       interface{} `json:"value,omitempty"`        // For constant
+	StepID      string      `json:"step_id,omitempty"`      // For step_result
+	ResultField string      `json:"result_field,omitempty"` // For step_result (e.g., "pose.position.x")
+	Expression  string      `json:"expression,omitempty"`   // For expression
 }
 
 // ResultFieldDef defines a single field in the result schema
@@ -406,17 +408,17 @@ type ActionParams struct {
 }
 
 type WaitFor struct {
-	Type       string  `json:"type"`                  // manual_confirm
+	Type       string  `json:"type"` // manual_confirm
 	Message    string  `json:"message,omitempty"`
 	TimeoutSec float64 `json:"timeout_sec,omitempty"`
 }
 
 type StepTransition struct {
-	OnSuccess interface{} `json:"on_success,omitempty"` // string or object
-	OnFailure interface{} `json:"on_failure,omitempty"` // string or TransitionOnFailure
-	OnConfirm string      `json:"on_confirm,omitempty"`
-	OnCancel  string      `json:"on_cancel,omitempty"`
-	OnTimeout string      `json:"on_timeout,omitempty"`
+	OnSuccess  interface{}         `json:"on_success,omitempty"` // string or object
+	OnFailure  interface{}         `json:"on_failure,omitempty"` // string or TransitionOnFailure
+	OnConfirm  string              `json:"on_confirm,omitempty"`
+	OnCancel   string              `json:"on_cancel,omitempty"`
+	OnTimeout  string              `json:"on_timeout,omitempty"`
 	OnOutcomes []OutcomeTransition `json:"on_outcomes,omitempty"`
 }
 

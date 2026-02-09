@@ -636,11 +636,11 @@ func (r *Repository) UpdateAgentEnhancedState(id, stateCode string, semanticTags
 	}
 
 	props := map[string]any{
-		"id":             id,
-		"state_code":     stateCode,
-		"semantic_tags":  tagsJSON,
-		"graph_id":       graphID,
-		"updated_at_ms":  time.Now().UTC().UnixMilli(),
+		"id":            id,
+		"state_code":    stateCode,
+		"semantic_tags": tagsJSON,
+		"graph_id":      graphID,
+		"updated_at_ms": time.Now().UTC().UnixMilli(),
 	}
 
 	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
@@ -1106,10 +1106,10 @@ func (r *Repository) UpdateBehaviorTree(graph *BehaviorTree) error {
 		"auto_generate_states":  graph.AutoGenerateStates,
 		"updated_at_ms":         time.Now().UTC().UnixMilli(),
 		// Lock fields
-		"locked_by":        graph.LockedBy.String,
-		"locked_at_ms":     lockedAtMs,
+		"locked_by":          graph.LockedBy.String,
+		"locked_at_ms":       lockedAtMs,
 		"lock_expires_at_ms": lockExpiresAtMs,
-		"lock_session_id":  graph.LockSessionID.String,
+		"lock_session_id":    graph.LockSessionID.String,
 	}
 	_, err = r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
 		_, err := tx.Run(ctx, `
@@ -1451,7 +1451,7 @@ func (r *Repository) GetAgentBehaviorTree(agentID, graphID string) (*AgentBehavi
 				aag := AgentBehaviorTree{
 					ID:               getString(props, "id"),
 					AgentID:          getString(props, "agent_id"),
-					BehaviorTreeID:    getStringWithFallback(props, "behavior_tree_id", "action_graph_id"),
+					BehaviorTreeID:   getStringWithFallback(props, "behavior_tree_id", "action_graph_id"),
 					ServerVersion:    int(getInt64(props, "server_version")),
 					DeployedVersion:  int(getInt64(props, "deployed_version")),
 					DeploymentStatus: getString(props, "deployment_status"),
@@ -1494,7 +1494,7 @@ func (r *Repository) GetAgentBehaviorTrees(agentID string) ([]AgentBehaviorTree,
 				list = append(list, AgentBehaviorTree{
 					ID:               getString(props, "id"),
 					AgentID:          getString(props, "agent_id"),
-					BehaviorTreeID:    getStringWithFallback(props, "behavior_tree_id", "action_graph_id"),
+					BehaviorTreeID:   getStringWithFallback(props, "behavior_tree_id", "action_graph_id"),
 					ServerVersion:    int(getInt64(props, "server_version")),
 					DeployedVersion:  int(getInt64(props, "deployed_version")),
 					DeploymentStatus: getString(props, "deployment_status"),
@@ -1523,7 +1523,7 @@ func (r *Repository) CreateAgentBehaviorTree(aag *AgentBehaviorTree) error {
 	props := map[string]any{
 		"id":                aag.ID,
 		"agent_id":          aag.AgentID,
-		"behavior_tree_id":   aag.BehaviorTreeID,
+		"behavior_tree_id":  aag.BehaviorTreeID,
 		"server_version":    aag.ServerVersion,
 		"deployed_version":  aag.DeployedVersion,
 		"deployment_status": aag.DeploymentStatus,
@@ -1631,7 +1631,7 @@ func (r *Repository) GetAgentBehaviorTreesByGraphID(graphID string) ([]AgentBeha
 				list = append(list, AgentBehaviorTree{
 					ID:               getString(props, "id"),
 					AgentID:          getString(props, "agent_id"),
-					BehaviorTreeID:    getStringWithFallback(props, "behavior_tree_id", "action_graph_id"),
+					BehaviorTreeID:   getStringWithFallback(props, "behavior_tree_id", "action_graph_id"),
 					ServerVersion:    int(getInt64(props, "server_version")),
 					DeployedVersion:  int(getInt64(props, "deployed_version")),
 					DeploymentStatus: getString(props, "deployment_status"),
@@ -1669,7 +1669,7 @@ func (r *Repository) GetAgentBehaviorTreeByID(id string) (*AgentBehaviorTree, er
 				aag := AgentBehaviorTree{
 					ID:               getString(props, "id"),
 					AgentID:          getString(props, "agent_id"),
-					BehaviorTreeID:    getStringWithFallback(props, "behavior_tree_id", "action_graph_id"),
+					BehaviorTreeID:   getStringWithFallback(props, "behavior_tree_id", "action_graph_id"),
 					ServerVersion:    int(getInt64(props, "server_version")),
 					DeployedVersion:  int(getInt64(props, "deployed_version")),
 					DeploymentStatus: getString(props, "deployment_status"),
@@ -1738,14 +1738,14 @@ func (r *Repository) CreateDeploymentLog(logEntry *BehaviorTreeDeploymentLog) er
 	}
 	ctx := context.Background()
 	props := map[string]any{
-		"id":                    logEntry.ID,
+		"id":                     logEntry.ID,
 		"agent_behavior_tree_id": logEntry.AgentBehaviorTreeID,
-		"action":                logEntry.Action,
-		"version":               logEntry.Version,
-		"status":                logEntry.Status,
-		"error_message":         logEntry.ErrorMessage.String,
-		"initiated_at_ms":       timeToMillis(logEntry.InitiatedAt),
-		"completed_at_ms":       timeToMillis(logEntry.CompletedAt.Time),
+		"action":                 logEntry.Action,
+		"version":                logEntry.Version,
+		"status":                 logEntry.Status,
+		"error_message":          logEntry.ErrorMessage.String,
+		"initiated_at_ms":        timeToMillis(logEntry.InitiatedAt),
+		"completed_at_ms":        timeToMillis(logEntry.CompletedAt.Time),
 	}
 	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
 		_, err := tx.Run(ctx, `
@@ -1805,14 +1805,14 @@ func (r *Repository) GetDeploymentLogs(agentBehaviorTreeID string) ([]BehaviorTr
 			if lNode, ok := node.(neo4j.Node); ok {
 				props := lNode.Props
 				logs = append(logs, BehaviorTreeDeploymentLog{
-					ID:                 getString(props, "id"),
+					ID:                  getString(props, "id"),
 					AgentBehaviorTreeID: getString(props, "agent_behavior_tree_id"),
-					Action:             getString(props, "action"),
-					Version:            int(getInt64(props, "version")),
-					Status:             getString(props, "status"),
-					ErrorMessage:       toNullString(getString(props, "error_message")),
-					InitiatedAt:        time.UnixMilli(getInt64(props, "initiated_at_ms")).UTC(),
-					CompletedAt:        toNullTimeMillis(getInt64(props, "completed_at_ms")),
+					Action:              getString(props, "action"),
+					Version:             int(getInt64(props, "version")),
+					Status:              getString(props, "status"),
+					ErrorMessage:        toNullString(getString(props, "error_message")),
+					InitiatedAt:         time.UnixMilli(getInt64(props, "initiated_at_ms")).UTC(),
+					CompletedAt:         toNullTimeMillis(getInt64(props, "completed_at_ms")),
 				})
 			}
 		}
@@ -1852,7 +1852,7 @@ func (r *Repository) GetTask(id string) (*Task, error) {
 				props := tNode.Props
 				task := Task{
 					ID:               getString(props, "id"),
-					BehaviorTreeID:    toNullString(getStringWithFallback(props, "behavior_tree_id", "action_graph_id")),
+					BehaviorTreeID:   toNullString(getStringWithFallback(props, "behavior_tree_id", "action_graph_id")),
 					AgentID:          toNullString(getString(props, "agent_id")),
 					Status:           getString(props, "status"),
 					CurrentStepID:    toNullString(getString(props, "current_step_id")),
@@ -1916,7 +1916,7 @@ func (r *Repository) GetTasks(agentID, status string) ([]Task, error) {
 				props := tNode.Props
 				tasks = append(tasks, Task{
 					ID:               getString(props, "id"),
-					BehaviorTreeID:    toNullString(getStringWithFallback(props, "behavior_tree_id", "action_graph_id")),
+					BehaviorTreeID:   toNullString(getStringWithFallback(props, "behavior_tree_id", "action_graph_id")),
 					AgentID:          toNullString(getString(props, "agent_id")),
 					Status:           getString(props, "status"),
 					CurrentStepID:    toNullString(getString(props, "current_step_id")),
@@ -1945,7 +1945,7 @@ func (r *Repository) CreateTask(task *Task) error {
 	ctx := context.Background()
 	props := map[string]any{
 		"id":                 task.ID,
-		"behavior_tree_id":    task.BehaviorTreeID.String,
+		"behavior_tree_id":   task.BehaviorTreeID.String,
 		"agent_id":           task.AgentID.String,
 		"status":             task.Status,
 		"current_step_id":    task.CurrentStepID.String,
@@ -2613,8 +2613,11 @@ func (r *Repository) SyncAgentCapabilities(agentID string, capabilities []AgentC
 			_, err := tx.Run(ctx, `
 				MERGE (c:AgentCapability {id: $id})
 				SET c.agent_id = $agent_id,
+					c.capability_kind = $capability_kind,
 					c.action_type = $action_type,
 					c.action_server = $action_server,
+					c.node_name = $node_name,
+					c.is_lifecycle_node = $is_lifecycle_node,
 					c.goal_schema_json = $goal_schema_json,
 					c.result_schema_json = $result_schema_json,
 					c.feedback_schema_json = $feedback_schema_json,
@@ -2632,8 +2635,11 @@ func (r *Repository) SyncAgentCapabilities(agentID string, capabilities []AgentC
 			`, map[string]any{
 				"id":                    cap.ID,
 				"agent_id":              agentID,
+				"capability_kind":       cap.CapabilityKind,
 				"action_type":           cap.ActionType,
 				"action_server":         cap.ActionServer,
+				"node_name":             cap.NodeName,
+				"is_lifecycle_node":     cap.IsLifecycleNode,
 				"goal_schema_json":      string(cap.GoalSchema),
 				"result_schema_json":    string(cap.ResultSchema),
 				"feedback_schema_json":  string(cap.FeedbackSchema),
@@ -2688,8 +2694,11 @@ func capabilityFromNeo4jNode(props map[string]any) AgentCapability {
 	cap := AgentCapability{
 		ID:              getString(props, "id"),
 		AgentID:         getString(props, "agent_id"),
+		CapabilityKind:  getString(props, "capability_kind"),
 		ActionType:      getString(props, "action_type"),
 		ActionServer:    getString(props, "action_server"),
+		NodeName:        getString(props, "node_name"),
+		IsLifecycleNode: getBool(props, "is_lifecycle_node"),
 		GoalSchema:      datatypes.JSON([]byte(getString(props, "goal_schema_json"))),
 		ResultSchema:    datatypes.JSON([]byte(getString(props, "result_schema_json"))),
 		FeedbackSchema:  datatypes.JSON([]byte(getString(props, "feedback_schema_json"))),
@@ -2714,6 +2723,9 @@ func capabilityFromNeo4jNode(props map[string]any) AgentCapability {
 	}
 	if cap.SchemaVersion == 0 {
 		cap.SchemaVersion = 1
+	}
+	if cap.CapabilityKind == "" {
+		cap.CapabilityKind = "action"
 	}
 	return cap
 }
@@ -2921,6 +2933,9 @@ func (r *Repository) GetAgentActionTypes(agentID string) ([]string, error) {
 	}
 	set := map[string]bool{}
 	for _, c := range caps {
+		if strings.EqualFold(c.CapabilityKind, "service") {
+			continue
+		}
 		set[c.ActionType] = true
 	}
 	var types []string
@@ -2947,6 +2962,9 @@ func (r *Repository) FindCompatibleAgents(requiredActionTypes []string) ([]Agent
 	// Build action types set per agent
 	actionTypesByAgent := make(map[string]map[string]bool)
 	for _, cap := range allCaps {
+		if strings.EqualFold(cap.CapabilityKind, "service") {
+			continue
+		}
 		if actionTypesByAgent[cap.AgentID] == nil {
 			actionTypesByAgent[cap.AgentID] = make(map[string]bool)
 		}
@@ -2990,6 +3008,9 @@ func (r *Repository) FindAgentsWithCompatibility(requiredActionTypes []string) (
 	// Build action types set per agent
 	actionTypesByAgent := make(map[string]map[string]bool)
 	for _, cap := range allCaps {
+		if strings.EqualFold(cap.CapabilityKind, "service") {
+			continue
+		}
 		if actionTypesByAgent[cap.AgentID] == nil {
 			actionTypesByAgent[cap.AgentID] = make(map[string]bool)
 		}
@@ -3024,6 +3045,9 @@ func (r *Repository) GetAllActionTypesWithAgentCount() ([]ActionTypeWithCount, e
 	}
 	counts := map[string]map[string]bool{}
 	for _, c := range caps {
+		if strings.EqualFold(c.CapabilityKind, "service") {
+			continue
+		}
 		if counts[c.ActionType] == nil {
 			counts[c.ActionType] = map[string]bool{}
 		}
@@ -3078,9 +3102,9 @@ func (r *Repository) FindTemplatesCompatibleWithAgent(agentID string) ([]Templat
 
 // CleanupReport summarizes retention cleanup results.
 type CleanupReport struct {
-	DeploymentLogs   int
-	Tasks            int
-	Commands         int
+	DeploymentLogs int
+	Tasks          int
+	Commands       int
 }
 
 // Total returns the total number of deleted nodes.
@@ -3218,7 +3242,7 @@ func (r *Repository) GetAllAgentBehaviorTrees() ([]AgentBehaviorTree, error) {
 				list = append(list, AgentBehaviorTree{
 					ID:               getString(props, "id"),
 					AgentID:          getString(props, "agent_id"),
-					BehaviorTreeID:    getStringWithFallback(props, "behavior_tree_id", "action_graph_id"),
+					BehaviorTreeID:   getStringWithFallback(props, "behavior_tree_id", "action_graph_id"),
 					ServerVersion:    int(getInt64(props, "server_version")),
 					DeployedVersion:  int(getInt64(props, "deployed_version")),
 					DeploymentStatus: getString(props, "deployment_status"),

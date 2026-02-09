@@ -22,7 +22,7 @@ import 'reactflow/dist/style.css'
 import {
   Trash2, Zap, ChevronDown, ChevronRight, Server, Activity, Plus, PlusCircle, X,
   Cpu, FileCode, Users, Link2, Unlink, Check, AlertCircle, Clock, Layout, Save, Radio,
-  Edit, Lock, Unlock
+  Edit, Lock, Unlock, Eye, EyeOff
 } from 'lucide-react'
 import { templateApi, stateDefinitionApi, agentApi, capabilityApi, behaviorTreeLockApi } from '../../api/client'
 import { useWebSocket, BehaviorTreeLockMessage, GraphSyncMessage } from '../../contexts/WebSocketContext'
@@ -30,7 +30,7 @@ import { useUserStore } from '../../stores/userStore'
 import type {
   ActionGraph, StateDefinition, ActionMapping,
   AssignmentInfo, TemplateListItem,
-  StartCondition, StartStateConfig, EndStateConfig, ActionOutcome, OutcomeTransition, DuringStateTarget
+  StartCondition, StartStateConfig, EndStateConfig, ActionOutcome, OutcomeTransition, DuringStateTarget, LifecycleState
 } from '../../types'
 
 // State-based Node Components
@@ -93,6 +93,66 @@ const OUTCOME_EDGE_COLORS: Record<ActionOutcome, string> = {
 
 const getActionColor = (actionType: string): string => {
   return ACTION_COLORS[actionType] || '#6b7280'
+}
+
+const HIDDEN_DISCOVERED_ACTIONS_STORAGE_KEY = 'action-graph.hidden-discovered-actions.v1'
+
+type DiscoveryTab = 'visible' | 'hidden'
+
+type PaletteItem = {
+  type: string
+  subtype: string
+  label: string
+  color: string
+  actionType?: string
+  server?: string
+  duringState?: string
+  robotCount?: number
+  agentName?: string
+  isAvailable?: boolean
+  capabilityKind?: 'action' | 'service'
+  providerNode?: string
+  isLifecycleNode?: boolean
+  lifecycleState?: LifecycleState
+  hideKey?: string
+  isHidden?: boolean
+  isDraggable?: boolean
+}
+
+type PaletteCategory = {
+  category: string
+  icon: React.ReactNode
+  items: PaletteItem[]
+}
+
+const normalizeCapabilityKind = (kind?: string): 'action' | 'service' => {
+  return kind?.toLowerCase() === 'service' ? 'service' : 'action'
+}
+
+const getServerLeafName = (serverName?: string): string => {
+  if (!serverName) return ''
+  const parts = serverName.split('/').filter(Boolean)
+  return parts[parts.length - 1] || serverName
+}
+
+const getDiscoveredActionHideKey = (actionType: string, actionServerName: string): string => {
+  return `${actionType}|${actionServerName}`
+}
+
+const loadHiddenDiscoveredActionKeys = (): string[] => {
+  if (typeof window === 'undefined') return []
+
+  try {
+    const raw = window.localStorage.getItem(HIDDEN_DISCOVERED_ACTIONS_STORAGE_KEY)
+    if (!raw) return []
+
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+
+    return parsed.filter((key): key is string => typeof key === 'string')
+  } catch {
+    return []
+  }
 }
 
 let stateColorsMap: Record<string, StateColorType> = {}
@@ -327,7 +387,14 @@ function ActionGraphEditor() {
   const [showAssignModal, setShowAssignModal] = useState(false)
   const [showAddStateModal, setShowAddStateModal] = useState(false)
 
-  const [expandedCategories, setExpandedCategories] = useState<string[]>(['Discovered Actions', 'Configured Actions', 'End Nodes'])
+  const [expandedCategories, setExpandedCategories] = useState<string[]>([
+    'Discovered Actions',
+    'Discovered Services',
+    'Configured Actions',
+    'End Nodes',
+  ])
+  const [discoveredActionTab, setDiscoveredActionTab] = useState<DiscoveryTab>('visible')
+  const [hiddenDiscoveredActionKeys, setHiddenDiscoveredActionKeys] = useState<string[]>(() => loadHiddenDiscoveredActionKeys())
 
 
   // Validation state
@@ -379,24 +446,56 @@ function ActionGraphEditor() {
       if (selectedAgentFilter) {
         // Fetch capabilities for specific agent and transform to match listAll() format
         const agentCaps = await agentApi.getCapabilities(selectedAgentFilter)
+        const actionCaps = agentCaps.capabilities.filter(
+          (cap) => normalizeCapabilityKind(cap.capability_kind) === 'action'
+        )
+        const serviceCaps = agentCaps.capabilities.filter(
+          (cap) => normalizeCapabilityKind(cap.capability_kind) === 'service'
+        )
+
         return {
           action_types: [],
-          action_servers: agentCaps.capabilities.map((cap) => ({
+          action_servers: actionCaps.map((cap) => ({
             action_type: cap.action_type,
             action_server: cap.action_server,
             agent_id: agentCaps.agent_id,
             agent_name: agentCaps.agent_name,
+            node_name: cap.node_name,
+            is_lifecycle_node: cap.is_lifecycle_node ?? false,
             is_available: cap.is_available,
+            lifecycle_state: cap.lifecycle_state || 'unknown',
             status: cap.status,
-            goal_schema: cap.goal_schema,
-            result_schema: cap.result_schema,
+          })),
+          service_servers: serviceCaps.map((cap) => ({
+            service_type: cap.action_type,
+            service_name: cap.action_server,
+            agent_id: agentCaps.agent_id,
+            agent_name: agentCaps.agent_name,
+            node_name: cap.node_name,
+            is_lifecycle_node: cap.is_lifecycle_node ?? false,
+            is_available: cap.is_available,
+            lifecycle_state: cap.lifecycle_state || 'unknown',
+            status: cap.status,
           })),
           total_agents: 1,
         }
       }
-      return capabilityApi.listAll()
+      const fleetCaps = await capabilityApi.listAll()
+      return {
+        ...fleetCaps,
+        service_servers: fleetCaps.service_servers || [],
+      }
     },
   })
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    window.localStorage.setItem(
+      HIDDEN_DISCOVERED_ACTIONS_STORAGE_KEY,
+      JSON.stringify(hiddenDiscoveredActionKeys)
+    )
+  }, [hiddenDiscoveredActionKeys])
 
   // Fetch all templates (capability-based - no type filtering)
   const { data: allTemplates = [], isLoading: templatesLoading } = useQuery({
@@ -513,39 +612,25 @@ function ActionGraphEditor() {
     return selectedStateDef?.states?.length ? selectedStateDef.states : DEFAULT_STATES
   }, [selectedStateDef?.states])
 
+  const hiddenDiscoveredActionKeySet = useMemo(
+    () => new Set(hiddenDiscoveredActionKeys),
+    [hiddenDiscoveredActionKeys]
+  )
+
   // Build node palette
   const nodePalette = useMemo(() => {
-    const palette: Array<{
-      category: string
-      icon: React.ReactNode
-      items: Array<{
-        type: string
-        subtype: string
-        label: string
-        color: string
-        actionType?: string
-        server?: string
-        duringState?: string
-        robotCount?: number
-        agentName?: string
-        isAvailable?: boolean
-      }>
-    }> = []
+    const palette: PaletteCategory[] = []
 
     // Use discovered action servers from the fleet - show all servers with {namespace} pattern
     if (fleetCapabilities && fleetCapabilities.action_servers && fleetCapabilities.action_servers.length > 0) {
-      // Deduplicate by action_server path (same server from different agents)
+      // Deduplicate by action type + action server leaf name
       const serverMap = new Map<string, typeof fleetCapabilities.action_servers[0]>()
       for (const srv of fleetCapabilities.action_servers) {
-        // Extract server path without namespace: /robot_001/test_a_action -> /test_a_action
-        const serverParts = srv.action_server.split('/')
-        // serverParts = ['', 'robot_001', 'test_a_action'] for /robot_001/test_a_action
-        // We want the action server name (last part)
-        const actionServerName = serverParts[serverParts.length - 1]
-
-        // Use action_server_name as key to deduplicate across agents
-        if (!serverMap.has(actionServerName)) {
-          serverMap.set(actionServerName, srv)
+        const actionServerName = getServerLeafName(srv.action_server)
+        const dedupeKey = `${srv.action_type}|${actionServerName}`
+        const existing = serverMap.get(dedupeKey)
+        if (!existing || (!existing.is_available && srv.is_available)) {
+          serverMap.set(dedupeKey, srv)
         }
       }
 
@@ -553,22 +638,60 @@ function ActionGraphEditor() {
         category: 'Discovered Actions',
         icon: <Server className="w-3.5 h-3.5" />,
         items: Array.from(serverMap.values()).map((srv) => {
-          // Extract action server name from path: /robot_001/test_a_action -> test_a_action
-          const serverParts = srv.action_server.split('/')
-          const actionServerName = serverParts[serverParts.length - 1]
+          const actionServerName = getServerLeafName(srv.action_server)
           const namespaceServer = `{namespace}/${actionServerName}`
+          const hideKey = getDiscoveredActionHideKey(srv.action_type, actionServerName)
 
           return {
             type: 'action',
-            subtype: srv.action_server,  // Use full action_server path as subtype (unique identifier)
-            label: actionServerName,  // Display action server name
+            subtype: srv.action_server, // Use full action_server path as subtype (unique identifier)
+            label: actionServerName || srv.action_server, // Display action server name
             color: getActionColor(srv.action_type),
             actionType: srv.action_type,
-            server: namespaceServer,  // Use {namespace} pattern by default
+            server: namespaceServer, // Use {namespace} pattern by default
             agentName: srv.agent_name,
             isAvailable: srv.is_available,
+            capabilityKind: 'action',
+            providerNode: srv.node_name,
+            isLifecycleNode: srv.is_lifecycle_node,
+            lifecycleState: srv.lifecycle_state,
+            hideKey,
+            isHidden: hiddenDiscoveredActionKeySet.has(hideKey),
+            isDraggable: true,
           }
         }),
+      })
+    }
+
+    // Discovered service servers (read-only list)
+    if (fleetCapabilities?.service_servers && fleetCapabilities.service_servers.length > 0) {
+      const serviceMap = new Map<string, typeof fleetCapabilities.service_servers[0]>()
+      for (const srv of fleetCapabilities.service_servers) {
+        const dedupeKey = `${srv.service_type}|${srv.service_name}`
+        const existing = serviceMap.get(dedupeKey)
+        if (!existing || (!existing.is_available && srv.is_available)) {
+          serviceMap.set(dedupeKey, srv)
+        }
+      }
+
+      palette.push({
+        category: 'Discovered Services',
+        icon: <Cpu className="w-3.5 h-3.5" />,
+        items: Array.from(serviceMap.values()).map((srv) => ({
+          type: 'service',
+          subtype: srv.service_name,
+          label: getServerLeafName(srv.service_name) || srv.service_name,
+          color: '#0ea5e9',
+          actionType: srv.service_type,
+          server: srv.service_name,
+          agentName: srv.agent_name,
+          isAvailable: srv.is_available,
+          capabilityKind: 'service',
+          providerNode: srv.node_name,
+          isLifecycleNode: srv.is_lifecycle_node,
+          lifecycleState: srv.lifecycle_state,
+          isDraggable: false,
+        })),
       })
     }
 
@@ -585,6 +708,8 @@ function ActionGraphEditor() {
           actionType: mapping.action_type,
           server: mapping.server,
           duringState: mapping.during_states?.[0] || mapping.during_state,
+          capabilityKind: 'action',
+          isDraggable: true,
         })),
       })
     }
@@ -599,18 +724,20 @@ function ActionGraphEditor() {
           subtype: 'End',
           label: 'End (Success)',
           color: '#22c55e',
+          isDraggable: true,
         },
         {
           type: 'event',
           subtype: 'Error',
           label: 'End (Error)',
           color: '#ef4444',
+          isDraggable: true,
         },
       ],
     })
 
     return palette
-  }, [selectedStateDef, fleetCapabilities])
+  }, [selectedStateDef, fleetCapabilities, hiddenDiscoveredActionKeySet])
 
   // Convert template to graph
   const { initialNodes, initialEdges } = useMemo(() => {
@@ -1376,6 +1503,12 @@ function ActionGraphEditor() {
         return
       }
       console.log('[onDrop] Parsed data:', data)
+
+      if (data.type !== 'action' && data.type !== 'event') {
+        console.log('[onDrop] Unsupported palette item type:', data.type)
+        return
+      }
+
       const position = screenToFlowPosition({
         x: event.clientX,
         y: event.clientY,
@@ -1439,7 +1572,7 @@ function ActionGraphEditor() {
     [screenToFlowPosition, setNodes, availableStates, availableAgents]
   )
 
-  const onDragStart = (event: React.DragEvent<HTMLDivElement>, item: any) => {
+  const onDragStart = (event: React.DragEvent<HTMLDivElement>, item: PaletteItem) => {
     console.log('[DragStart] Item:', item)
     const itemData = JSON.stringify(item)
     // Set data with both keys for compatibility
@@ -1453,6 +1586,18 @@ function ActionGraphEditor() {
       prev.includes(category) ? prev.filter(c => c !== category) : [...prev, category]
     )
   }
+
+  const toggleDiscoveredActionHidden = useCallback((hideKey: string, hide: boolean) => {
+    setHiddenDiscoveredActionKeys(prev => {
+      const next = new Set(prev)
+      if (hide) {
+        next.add(hideKey)
+      } else {
+        next.delete(hideKey)
+      }
+      return Array.from(next)
+    })
+  }, [])
 
   return (
     <div className="h-screen flex bg-base">
@@ -1720,68 +1865,157 @@ function ActionGraphEditor() {
             {nodePalette.length === 0 ? (
               <div className="p-4 text-center text-muted text-xs">No nodes found</div>
             ) : (
-              nodePalette.map(category => (
-                <div key={category.category}>
-                  <button
-                    onClick={() => toggleCategory(category.category)}
-                    className="w-full px-3 py-2 flex items-center justify-between text-[10px] font-semibold text-secondary uppercase tracking-wider hover:bg-elevated"
-                  >
-                    <div className="flex items-center gap-1.5">
-                      {category.icon}
-                      <span>{category.category}</span>
-                    </div>
-                    {expandedCategories.includes(category.category) ? (
-                      <ChevronDown className="w-3.5 h-3.5" />
-                    ) : (
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    )}
-                  </button>
-                  {expandedCategories.includes(category.category) && (
-                    <div className="px-2 pb-2 space-y-0.5">
-                      {category.items.map((item, idx) => (
-                        <div
-                          key={`${item.subtype}-${idx}`}
-                          draggable={isEditing}
-                          onDragStart={isEditing ? (e) => {
-                            e.stopPropagation()
-                            onDragStart(e, item)
-                          } : undefined}
-                          className={`flex items-center gap-2 px-2 py-1.5 rounded transition-colors border border-transparent ${
-                            isEditing
-                              ? 'cursor-grab active:cursor-grabbing hover:bg-elevated hover:border-secondary'
-                              : 'cursor-default opacity-60'
-                          } ${
-                            item.isAvailable === false ? 'opacity-50' : ''
-                          }`}
-                        >
-                          <div
-                            className="w-2.5 h-2.5 rounded-sm flex-shrink-0"
-                            style={{ backgroundColor: item.color }}
-                          />
-                          <div className="flex-1 min-w-0">
-                            <span className="text-xs text-primary block truncate">{item.label}</span>
-                            {item.duringState && (
-                              <span className="text-[9px] text-yellow-500">{item.duringState}</span>
-                            )}
-                            {item.robotCount !== undefined && (
-                              <span className="text-[9px] text-blue-400">{item.robotCount} robot{item.robotCount !== 1 ? 's' : ''}</span>
-                            )}
-                            {item.agentName && (
-                              <span className="text-[9px] text-cyan-400">{item.agentName}</span>
-                            )}
-                            {item.actionType && !item.duringState && !item.robotCount && (
-                              <span className="text-[9px] text-purple-400">{item.actionType.split('/').pop()}</span>
-                            )}
+              nodePalette.map(category => {
+                const isDiscoveredActionsCategory = category.category === 'Discovered Actions'
+                const visibleDiscoveredCount = category.items.filter((item) => !item.isHidden).length
+                const hiddenDiscoveredCount = category.items.filter((item) => item.isHidden).length
+                const categoryItems = isDiscoveredActionsCategory
+                  ? category.items.filter((item) => discoveredActionTab === 'hidden' ? item.isHidden : !item.isHidden)
+                  : category.items
+
+                return (
+                  <div key={category.category}>
+                    <button
+                      onClick={() => toggleCategory(category.category)}
+                      className="w-full px-3 py-2 flex items-center justify-between text-[10px] font-semibold text-secondary uppercase tracking-wider hover:bg-elevated"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        {category.icon}
+                        <span>{category.category}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[9px] text-muted normal-case">{categoryItems.length}</span>
+                        {expandedCategories.includes(category.category) ? (
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        ) : (
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        )}
+                      </div>
+                    </button>
+                    {expandedCategories.includes(category.category) && (
+                      <div className="px-2 pb-2 space-y-0.5">
+                        {isDiscoveredActionsCategory && (
+                          <div className="px-1 pt-1 pb-1.5">
+                            <div className="inline-flex rounded-md border border-primary overflow-hidden">
+                              <button
+                                onClick={() => setDiscoveredActionTab('visible')}
+                                className={`px-2 py-1 text-[10px] transition-colors ${
+                                  discoveredActionTab === 'visible'
+                                    ? 'bg-blue-600/25 text-blue-300'
+                                    : 'bg-elevated text-secondary hover:text-primary'
+                                }`}
+                              >
+                                Visible ({visibleDiscoveredCount})
+                              </button>
+                              <button
+                                onClick={() => setDiscoveredActionTab('hidden')}
+                                className={`px-2 py-1 text-[10px] transition-colors border-l border-primary ${
+                                  discoveredActionTab === 'hidden'
+                                    ? 'bg-yellow-600/25 text-yellow-300'
+                                    : 'bg-elevated text-secondary hover:text-primary'
+                                }`}
+                              >
+                                Hidden ({hiddenDiscoveredCount})
+                              </button>
+                            </div>
                           </div>
-                          {item.isAvailable === false && (
-                            <span className="text-[8px] text-red-400">busy</span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))
+                        )}
+
+                        {categoryItems.length === 0 ? (
+                          <div className="px-2 py-2 text-[10px] text-muted italic">
+                            {isDiscoveredActionsCategory && discoveredActionTab === 'hidden'
+                              ? '숨겨진 action이 없습니다.'
+                              : '표시할 항목이 없습니다.'}
+                          </div>
+                        ) : categoryItems.map((item, idx) => {
+                          const canDrag = isEditing && item.isDraggable !== false
+                          const isDiscoveredActionItem = isDiscoveredActionsCategory && !!item.hideKey
+
+                          return (
+                            <div
+                              key={`${item.subtype}-${idx}`}
+                              draggable={canDrag}
+                              onDragStart={canDrag ? (e) => {
+                                e.stopPropagation()
+                                onDragStart(e, item)
+                              } : undefined}
+                              className={`flex items-center gap-2 px-2 py-1.5 rounded transition-colors border border-transparent ${
+                                canDrag
+                                  ? 'cursor-grab active:cursor-grabbing hover:bg-elevated hover:border-secondary'
+                                  : item.isDraggable === false
+                                    ? 'cursor-default hover:bg-elevated/70'
+                                    : 'cursor-default opacity-60'
+                              } ${
+                                item.isAvailable === false ? 'opacity-50' : ''
+                              }`}
+                            >
+                              <div
+                                className="w-2.5 h-2.5 rounded-sm flex-shrink-0"
+                                style={{ backgroundColor: item.color }}
+                              />
+                              <div className="flex-1 min-w-0">
+                                <span className="text-xs text-primary block truncate">{item.label}</span>
+                                {item.duringState && (
+                                  <span className="text-[9px] text-yellow-500 block">{item.duringState}</span>
+                                )}
+                                {item.robotCount !== undefined && (
+                                  <span className="text-[9px] text-blue-400 block">
+                                    {item.robotCount} robot{item.robotCount !== 1 ? 's' : ''}
+                                  </span>
+                                )}
+                                {item.agentName && (
+                                  <span className="text-[9px] text-cyan-400 block truncate">{item.agentName}</span>
+                                )}
+                                {item.providerNode && (
+                                  <span className="text-[9px] text-emerald-400 block truncate">
+                                    node: {item.providerNode}
+                                  </span>
+                                )}
+                                {item.isLifecycleNode !== undefined && (
+                                  <span className={`text-[9px] block ${
+                                    item.isLifecycleNode ? 'text-amber-400' : 'text-muted'
+                                  }`}>
+                                    {item.isLifecycleNode
+                                      ? `lifecycle: ${item.lifecycleState || 'unknown'}`
+                                      : 'non-lifecycle'}
+                                  </span>
+                                )}
+                                {item.actionType && !item.duringState && !item.robotCount && (
+                                  <span className={`text-[9px] block ${
+                                    item.capabilityKind === 'service' ? 'text-sky-400' : 'text-purple-400'
+                                  }`}>
+                                    {item.actionType.split('/').pop()}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex flex-col items-end gap-1">
+                                {item.isAvailable === false && (
+                                  <span className="text-[8px] text-red-400">
+                                    {item.capabilityKind === 'service' ? 'down' : 'busy'}
+                                  </span>
+                                )}
+                                {isDiscoveredActionItem && item.hideKey && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      toggleDiscoveredActionHidden(item.hideKey!, !item.isHidden)
+                                    }}
+                                    className="p-0.5 text-muted hover:text-primary hover:bg-elevated rounded"
+                                    title={item.isHidden ? 'Show action' : 'Hide action'}
+                                  >
+                                    {item.isHidden ? <Eye size={10} /> : <EyeOff size={10} />}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )
+              })
             )}
           </div>
 

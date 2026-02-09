@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"central_server_go/internal/db"
@@ -45,8 +46,14 @@ func (s *Server) RegisterCapabilities(w http.ResponseWriter, r *http.Request) {
 	// Convert request to DB models
 	capabilities := make([]db.AgentCapability, len(req.Capabilities))
 	for i, cap := range req.Capabilities {
+		capabilityKind := normalizeCapabilityKind(cap.CapabilityKind)
+		isLifecycleNode := false
+		if cap.IsLifecycleNode != nil {
+			isLifecycleNode = *cap.IsLifecycleNode
+		}
+
 		// Generate unique ID from agent_id + action_type
-		idHash := md5.Sum([]byte(agentID + ":" + cap.ActionType))
+		idHash := md5.Sum([]byte(agentID + ":" + capabilityKind + ":" + cap.ActionType + ":" + cap.ActionServer))
 		capID := hex.EncodeToString(idHash[:])
 
 		var goalSchema, resultSchema, feedbackSchema, successCriteria []byte
@@ -78,8 +85,11 @@ func (s *Server) RegisterCapabilities(w http.ResponseWriter, r *http.Request) {
 		capabilities[i] = db.AgentCapability{
 			ID:              capID,
 			AgentID:         agentID,
+			CapabilityKind:  capabilityKind,
 			ActionType:      cap.ActionType,
 			ActionServer:    cap.ActionServer,
+			NodeName:        cap.NodeName,
+			IsLifecycleNode: isLifecycleNode,
 			GoalSchema:      goalSchema,
 			ResultSchema:    resultSchema,
 			FeedbackSchema:  feedbackSchema,
@@ -154,8 +164,11 @@ func (s *Server) GetRobotCapabilities(w http.ResponseWriter, r *http.Request) {
 		}
 
 		response.Capabilities[i] = CapabilityResponse{
+			CapabilityKind:  normalizeCapabilityKind(cap.CapabilityKind),
 			ActionType:      cap.ActionType,
 			ActionServer:    cap.ActionServer,
+			NodeName:        cap.NodeName,
+			IsLifecycleNode: cap.IsLifecycleNode,
 			GoalSchema:      goalSchema,
 			ResultSchema:    resultSchema,
 			FeedbackSchema:  feedbackSchema,
@@ -246,8 +259,31 @@ func (s *Server) ListAllCapabilities(w http.ResponseWriter, r *http.Request) {
 	// Deduplicate action servers by action_type (keep first available, or first if none available)
 	// This prevents showing duplicate actions when multiple agents have the same capability
 	actionServerMap := make(map[string]ActionServerInfo)
+	serviceServerMap := make(map[string]ServiceServerInfo)
 
 	for _, cap := range allCaps {
+		capabilityKind := normalizeCapabilityKind(cap.CapabilityKind)
+
+		if capabilityKind == "service" {
+			dedupeKey := cap.ActionType + "|" + cap.ActionServer
+			existing, hasExisting := serviceServerMap[dedupeKey]
+			shouldAdd := !hasExisting || (!existing.IsAvailable && cap.IsAvailable)
+			if shouldAdd {
+				serviceServerMap[dedupeKey] = ServiceServerInfo{
+					ServiceType:     cap.ActionType,
+					ServiceName:     cap.ActionServer,
+					AgentID:         cap.AgentID,
+					AgentName:       agentNameMap[cap.AgentID],
+					NodeName:        cap.NodeName,
+					IsLifecycleNode: cap.IsLifecycleNode,
+					IsAvailable:     cap.IsAvailable,
+					LifecycleState:  cap.LifecycleState,
+					Status:          cap.Status,
+				}
+			}
+			continue
+		}
+
 		// Group by action type (existing behavior)
 		info, exists := actionTypeMap[cap.ActionType]
 		if !exists {
@@ -270,13 +306,15 @@ func (s *Server) ListAllCapabilities(w http.ResponseWriter, r *http.Request) {
 		shouldAdd := !hasExisting || (!existing.IsAvailable && cap.IsAvailable)
 		if shouldAdd {
 			actionServerMap[dedupeKey] = ActionServerInfo{
-				ActionType:     cap.ActionType,
-				ActionServer:   cap.ActionServer,
-				AgentID:        cap.AgentID,
-				AgentName:      agentNameMap[cap.AgentID],
-				IsAvailable:    cap.IsAvailable,
-				LifecycleState: cap.LifecycleState,
-				Status:         cap.Status,
+				ActionType:      cap.ActionType,
+				ActionServer:    cap.ActionServer,
+				AgentID:         cap.AgentID,
+				AgentName:       agentNameMap[cap.AgentID],
+				NodeName:        cap.NodeName,
+				IsLifecycleNode: cap.IsLifecycleNode,
+				IsAvailable:     cap.IsAvailable,
+				LifecycleState:  cap.LifecycleState,
+				Status:          cap.Status,
 			}
 		}
 	}
@@ -286,6 +324,10 @@ func (s *Server) ListAllCapabilities(w http.ResponseWriter, r *http.Request) {
 	for _, info := range actionServerMap {
 		actionServers = append(actionServers, info)
 	}
+	serviceServers := make([]ServiceServerInfo, 0, len(serviceServerMap))
+	for _, info := range serviceServerMap {
+		serviceServers = append(serviceServers, info)
+	}
 
 	actionTypeInfos := make([]ActionTypeInfo, 0, len(actionTypeMap))
 	for _, info := range actionTypeMap {
@@ -293,9 +335,10 @@ func (s *Server) ListAllCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, AllCapabilitiesResponse{
-		ActionTypes:   actionTypeInfos,
-		ActionServers: actionServers,
-		TotalAgents:   len(agents),
+		ActionTypes:    actionTypeInfos,
+		ActionServers:  actionServers,
+		ServiceServers: serviceServers,
+		TotalAgents:    len(agents),
 	})
 }
 
@@ -325,7 +368,7 @@ func (s *Server) GetCapabilitiesByActionType(w http.ResponseWriter, r *http.Requ
 	// Filter by action type
 	var caps []db.AgentCapability
 	for _, cap := range allCaps {
-		if cap.ActionType == actionType {
+		if normalizeCapabilityKind(cap.CapabilityKind) == "action" && cap.ActionType == actionType {
 			caps = append(caps, cap)
 		}
 	}
@@ -442,7 +485,13 @@ func (s *Server) RegisterRobot(w http.ResponseWriter, r *http.Request) {
 	if len(req.Capabilities) > 0 {
 		capabilities := make([]db.AgentCapability, len(req.Capabilities))
 		for i, cap := range req.Capabilities {
-			idHash := md5.Sum([]byte(agentID + ":" + cap.ActionType))
+			capabilityKind := normalizeCapabilityKind(cap.CapabilityKind)
+			isLifecycleNode := false
+			if cap.IsLifecycleNode != nil {
+				isLifecycleNode = *cap.IsLifecycleNode
+			}
+
+			idHash := md5.Sum([]byte(agentID + ":" + capabilityKind + ":" + cap.ActionType + ":" + cap.ActionServer))
 			capID := hex.EncodeToString(idHash[:])
 
 			var goalSchema, resultSchema, feedbackSchema, successCriteria []byte
@@ -474,8 +523,11 @@ func (s *Server) RegisterRobot(w http.ResponseWriter, r *http.Request) {
 			capabilities[i] = db.AgentCapability{
 				ID:              capID,
 				AgentID:         agentID,
+				CapabilityKind:  capabilityKind,
 				ActionType:      cap.ActionType,
 				ActionServer:    cap.ActionServer,
+				NodeName:        cap.NodeName,
+				IsLifecycleNode: isLifecycleNode,
 				GoalSchema:      goalSchema,
 				ResultSchema:    resultSchema,
 				FeedbackSchema:  feedbackSchema,
@@ -544,8 +596,11 @@ func (s *Server) GetAgentCapabilities(w http.ResponseWriter, r *http.Request) {
 		}
 
 		capabilities[i] = CapabilityResponse{
+			CapabilityKind:  normalizeCapabilityKind(cap.CapabilityKind),
 			ActionType:      cap.ActionType,
 			ActionServer:    cap.ActionServer,
+			NodeName:        cap.NodeName,
+			IsLifecycleNode: cap.IsLifecycleNode,
 			GoalSchema:      goalSchema,
 			ResultSchema:    resultSchema,
 			FeedbackSchema:  feedbackSchema,
@@ -753,17 +808,17 @@ func (s *Server) GetCapabilitiesChangedSince(w http.ResponseWriter, r *http.Requ
 		}
 
 		changes[i] = CapabilityChangeInfo{
-			ChangeType:  changeType,
-			ChangedAt:   cap.UpdatedAt,
-			Capability:  capabilityToDetailResponse(&cap, agentNameMap[cap.AgentID]),
+			ChangeType: changeType,
+			ChangedAt:  cap.UpdatedAt,
+			Capability: capabilityToDetailResponse(&cap, agentNameMap[cap.AgentID]),
 		}
 	}
 
 	writeJSON(w, http.StatusOK, CapabilitiesChangedResponse{
-		Since:       since,
-		Changes:     changes,
-		TotalCount:  len(changes),
-		ServerTime:  time.Now().UTC(),
+		Since:      since,
+		Changes:    changes,
+		TotalCount: len(changes),
+		ServerTime: time.Now().UTC(),
 	})
 }
 
@@ -817,8 +872,11 @@ func capabilityToDetailResponse(cap *db.AgentCapability, agentName string) Capab
 		ID:              cap.ID,
 		AgentID:         cap.AgentID,
 		AgentName:       agentName,
+		CapabilityKind:  normalizeCapabilityKind(cap.CapabilityKind),
 		ActionType:      cap.ActionType,
 		ActionServer:    cap.ActionServer,
+		NodeName:        cap.NodeName,
+		IsLifecycleNode: cap.IsLifecycleNode,
 		GoalSchema:      goalSchema,
 		ResultSchema:    resultSchema,
 		FeedbackSchema:  feedbackSchema,
@@ -846,4 +904,15 @@ func capabilityToDetailResponse(cap *db.AgentCapability, agentName string) Capab
 	}
 
 	return resp
+}
+
+func normalizeCapabilityKind(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "", "action":
+		return "action"
+	case "service":
+		return "service"
+	default:
+		return "action"
+	}
 }

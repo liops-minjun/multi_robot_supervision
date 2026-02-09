@@ -1007,8 +1007,11 @@ export interface TaskMonitorData {
 
 // Agent capability info (direct from agent_capabilities table)
 export interface AgentCapabilityInfo {
+  capability_kind?: 'action' | 'service'
   action_type: string
   action_server: string
+  node_name?: string
+  is_lifecycle_node?: boolean
   goal_schema?: Record<string, unknown>
   result_schema?: Record<string, unknown>
   feedback_schema?: Record<string, unknown>
@@ -1040,6 +1043,21 @@ export interface ActionServerInfo {
   action_server: string  // e.g., "/test_A_action"
   agent_id: string
   agent_name?: string
+  node_name?: string
+  is_lifecycle_node?: boolean
+  is_available: boolean
+  lifecycle_state: LifecycleState  // ROS2 lifecycle state
+  status: string
+}
+
+// Individual service server info (not grouped by type)
+export interface ServiceServerInfo {
+  service_type: string    // e.g., "std_srvs/srv/Trigger"
+  service_name: string    // e.g., "/reset_pose"
+  agent_id: string
+  agent_name?: string
+  node_name?: string
+  is_lifecycle_node?: boolean
   is_available: boolean
   lifecycle_state: LifecycleState  // ROS2 lifecycle state
   status: string

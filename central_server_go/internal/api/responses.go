@@ -25,17 +25,17 @@ func writeError(w http.ResponseWriter, status int, message string) {
 // ============================================================
 
 type RobotResponse struct {
-	ID            string                 `json:"id"`
-	Name          string                 `json:"name"`
-	Namespace     string                 `json:"namespace,omitempty"`
-	AgentID       string                 `json:"agent_id,omitempty"`
-	IPAddress     string                 `json:"ip_address,omitempty"`
-	Tags          []string               `json:"tags,omitempty"`
-	LastSeen      *time.Time             `json:"last_seen,omitempty"`
-	CurrentState  string                 `json:"current_state"`
-	IsOnline      bool                   `json:"is_online"`
-	StalenessSec  float64                `json:"staleness_sec"`
-	CreatedAt     time.Time              `json:"created_at"`
+	ID           string     `json:"id"`
+	Name         string     `json:"name"`
+	Namespace    string     `json:"namespace,omitempty"`
+	AgentID      string     `json:"agent_id,omitempty"`
+	IPAddress    string     `json:"ip_address,omitempty"`
+	Tags         []string   `json:"tags,omitempty"`
+	LastSeen     *time.Time `json:"last_seen,omitempty"`
+	CurrentState string     `json:"current_state"`
+	IsOnline     bool       `json:"is_online"`
+	StalenessSec float64    `json:"staleness_sec"`
+	CreatedAt    time.Time  `json:"created_at"`
 }
 
 type RobotDetailResponse struct {
@@ -230,19 +230,19 @@ type DeploymentLogResponse struct {
 // ============================================================
 
 type TaskResponse struct {
-	ID                string                   `json:"id"`
-	BehaviorTreeID    string                   `json:"behavior_tree_id,omitempty"`
-	BehaviorTreeName  string                   `json:"behavior_tree_name,omitempty"`
-	AgentID           string                   `json:"agent_id,omitempty"`
-	AgentName         string                   `json:"agent_name,omitempty"`
-	Status            string                   `json:"status"`
-	CurrentStepID     string                   `json:"current_step_id,omitempty"`
-	CurrentStepIndex  int                      `json:"current_step_index"`
-	StepResults       []map[string]interface{} `json:"step_results,omitempty"`
-	ErrorMessage      string                   `json:"error_message,omitempty"`
-	CreatedAt         time.Time                `json:"created_at"`
-	StartedAt         *time.Time               `json:"started_at,omitempty"`
-	CompletedAt       *time.Time               `json:"completed_at,omitempty"`
+	ID               string                   `json:"id"`
+	BehaviorTreeID   string                   `json:"behavior_tree_id,omitempty"`
+	BehaviorTreeName string                   `json:"behavior_tree_name,omitempty"`
+	AgentID          string                   `json:"agent_id,omitempty"`
+	AgentName        string                   `json:"agent_name,omitempty"`
+	Status           string                   `json:"status"`
+	CurrentStepID    string                   `json:"current_step_id,omitempty"`
+	CurrentStepIndex int                      `json:"current_step_index"`
+	StepResults      []map[string]interface{} `json:"step_results,omitempty"`
+	ErrorMessage     string                   `json:"error_message,omitempty"`
+	CreatedAt        time.Time                `json:"created_at"`
+	StartedAt        *time.Time               `json:"started_at,omitempty"`
+	CompletedAt      *time.Time               `json:"completed_at,omitempty"`
 
 	// Precondition waiting status
 	IsWaitingForPrecondition    bool                            `json:"is_waiting_for_precondition,omitempty"`
@@ -383,8 +383,11 @@ type CommandResultRequest struct {
 
 // CapabilityResponse represents a single robot capability
 type CapabilityResponse struct {
+	CapabilityKind  string                 `json:"capability_kind,omitempty"` // action, service
 	ActionType      string                 `json:"action_type"`
 	ActionServer    string                 `json:"action_server"`
+	NodeName        string                 `json:"node_name,omitempty"`
+	IsLifecycleNode bool                   `json:"is_lifecycle_node,omitempty"`
 	GoalSchema      map[string]interface{} `json:"goal_schema,omitempty"`
 	ResultSchema    map[string]interface{} `json:"result_schema,omitempty"`
 	FeedbackSchema  map[string]interface{} `json:"feedback_schema,omitempty"`
@@ -413,14 +416,17 @@ type CapabilityRegisterRequest struct {
 
 // CapabilityRegisterItem represents a single capability to register
 type CapabilityRegisterItem struct {
+	CapabilityKind  string                 `json:"capability_kind,omitempty"` // action, service
 	ActionType      string                 `json:"action_type"`
 	ActionServer    string                 `json:"action_server"`
+	NodeName        string                 `json:"node_name,omitempty"`
+	IsLifecycleNode *bool                  `json:"is_lifecycle_node,omitempty"`
 	GoalSchema      map[string]interface{} `json:"goal_schema,omitempty"`
 	ResultSchema    map[string]interface{} `json:"result_schema,omitempty"`
 	FeedbackSchema  map[string]interface{} `json:"feedback_schema,omitempty"`
 	SuccessCriteria map[string]interface{} `json:"success_criteria,omitempty"`
-	IsAvailable     *bool                  `json:"is_available,omitempty"`     // Optional: defaults to true if not specified
-	LifecycleState  string                 `json:"lifecycle_state,omitempty"`  // unknown, unconfigured, inactive, active, finalized
+	IsAvailable     *bool                  `json:"is_available,omitempty"`    // Optional: defaults to true if not specified
+	LifecycleState  string                 `json:"lifecycle_state,omitempty"` // unknown, unconfigured, inactive, active, finalized
 }
 
 // CapabilityStatusUpdateRequest represents a request to update capability status
@@ -439,9 +445,10 @@ type CapabilityStatus struct {
 
 // AllCapabilitiesResponse represents capabilities aggregated across all agents
 type AllCapabilitiesResponse struct {
-	ActionTypes   []ActionTypeInfo   `json:"action_types"`
-	ActionServers []ActionServerInfo `json:"action_servers"` // Individual action servers (not grouped)
-	TotalAgents   int                `json:"total_agents"`
+	ActionTypes    []ActionTypeInfo    `json:"action_types"`
+	ActionServers  []ActionServerInfo  `json:"action_servers"` // Individual action servers (not grouped)
+	ServiceServers []ServiceServerInfo `json:"service_servers"`
+	TotalAgents    int                 `json:"total_agents"`
 }
 
 // ActionTypeInfo represents info about a specific action type across agents
@@ -454,13 +461,28 @@ type ActionTypeInfo struct {
 
 // ActionServerInfo represents an individual action server (not grouped by type)
 type ActionServerInfo struct {
-	ActionType     string `json:"action_type"`   // e.g., "test_msgs/TestAction"
-	ActionServer   string `json:"action_server"` // e.g., "/test_A_action"
-	AgentID        string `json:"agent_id"`
-	AgentName      string `json:"agent_name,omitempty"`
-	IsAvailable    bool   `json:"is_available"`
-	LifecycleState string `json:"lifecycle_state"` // unknown, unconfigured, inactive, active, finalized
-	Status         string `json:"status"`
+	ActionType      string `json:"action_type"`   // e.g., "test_msgs/TestAction"
+	ActionServer    string `json:"action_server"` // e.g., "/test_A_action"
+	AgentID         string `json:"agent_id"`
+	AgentName       string `json:"agent_name,omitempty"`
+	NodeName        string `json:"node_name,omitempty"`
+	IsLifecycleNode bool   `json:"is_lifecycle_node"`
+	IsAvailable     bool   `json:"is_available"`
+	LifecycleState  string `json:"lifecycle_state"` // unknown, unconfigured, inactive, active, finalized
+	Status          string `json:"status"`
+}
+
+// ServiceServerInfo represents an individual ROS2 service provider
+type ServiceServerInfo struct {
+	ServiceType     string `json:"service_type"` // e.g., "std_srvs/srv/Trigger"
+	ServiceName     string `json:"service_name"` // e.g., "/reset_pose"
+	AgentID         string `json:"agent_id"`
+	AgentName       string `json:"agent_name,omitempty"`
+	NodeName        string `json:"node_name,omitempty"`
+	IsLifecycleNode bool   `json:"is_lifecycle_node"`
+	IsAvailable     bool   `json:"is_available"`
+	LifecycleState  string `json:"lifecycle_state"` // unknown, unconfigured, inactive, active, finalized
+	Status          string `json:"status"`
 }
 
 // ============================================================
@@ -472,8 +494,11 @@ type CapabilityDetailResponse struct {
 	ID              string                 `json:"id"`
 	AgentID         string                 `json:"agent_id"`
 	AgentName       string                 `json:"agent_name,omitempty"`
+	CapabilityKind  string                 `json:"capability_kind,omitempty"` // action, service
 	ActionType      string                 `json:"action_type"`
 	ActionServer    string                 `json:"action_server"`
+	NodeName        string                 `json:"node_name,omitempty"`
+	IsLifecycleNode bool                   `json:"is_lifecycle_node,omitempty"`
 	GoalSchema      map[string]interface{} `json:"goal_schema,omitempty"`
 	ResultSchema    map[string]interface{} `json:"result_schema,omitempty"`
 	FeedbackSchema  map[string]interface{} `json:"feedback_schema,omitempty"`
