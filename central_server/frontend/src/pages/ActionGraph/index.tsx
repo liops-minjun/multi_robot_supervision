@@ -96,6 +96,8 @@ const getActionColor = (actionType: string): string => {
 }
 
 const HIDDEN_DISCOVERED_ACTIONS_STORAGE_KEY = 'action-graph.hidden-discovered-actions.v1'
+const HIDDEN_DISCOVERED_SERVICES_STORAGE_KEY = 'action-graph.hidden-discovered-services.v1'
+const SHOWN_DEFAULT_HIDDEN_DISCOVERED_SERVICES_STORAGE_KEY = 'action-graph.shown-default-hidden-discovered-services.v1'
 const LAST_OPENED_TASK_STORAGE_KEY = 'action-graph.last-opened-task.v1'
 
 type DiscoveryTab = 'visible' | 'hidden'
@@ -117,6 +119,7 @@ type PaletteItem = {
   lifecycleState?: LifecycleState
   hideKey?: string
   isHidden?: boolean
+  isDefaultHidden?: boolean
   isDraggable?: boolean
 }
 
@@ -144,15 +147,66 @@ const getServerLeafName = (serverName?: string): string => {
   return parts[parts.length - 1] || serverName
 }
 
+const formatTaskManagerName = (value?: string | null): string => {
+  const raw = (value || '').trim()
+  if (!raw) return ''
+  return raw.replace(/^agent(?=[\s_-]|$)/i, 'Task Manager')
+}
+
 const getDiscoveredActionHideKey = (actionType: string, actionServerName: string): string => {
   return `${actionType}|${actionServerName}`
 }
 
-const loadHiddenDiscoveredActionKeys = (): string[] => {
+const getDiscoveredServiceHideKey = (serviceType: string, serviceName: string): string => {
+  return `${serviceType}|${serviceName}`
+}
+
+const DEFAULT_HIDDEN_SERVICE_NAME_SUFFIXES = [
+  '/change_state',
+  '/get_state',
+  '/get_available_states',
+  '/get_available_transitions',
+  '/describe_parameters',
+  '/get_parameter_types',
+  '/get_parameters',
+  '/list_parameters',
+  '/set_parameters',
+  '/set_parameters_atomically',
+]
+
+const DEFAULT_HIDDEN_SERVICE_TYPE_NAMES = new Set([
+  'getstate',
+  'changestate',
+  'getavailablestates',
+  'getavailabletransitions',
+  'describeparameters',
+  'getparametertypes',
+  'getparameters',
+  'listparameters',
+  'setparameters',
+  'setparametersatomically',
+])
+
+const shouldDefaultHideDiscoveredService = (serviceType: string, serviceName: string): boolean => {
+  const normalizedServiceName = (serviceName || '').toLowerCase()
+  if (DEFAULT_HIDDEN_SERVICE_NAME_SUFFIXES.some((suffix) => normalizedServiceName.endsWith(suffix))) {
+    return true
+  }
+
+  const normalizedTypeLeaf = (serviceType || '')
+    .split('/')
+    .pop()
+    ?.toLowerCase()
+    .replace(/_/g, '') || ''
+
+  return DEFAULT_HIDDEN_SERVICE_TYPE_NAMES.has(normalizedTypeLeaf)
+}
+
+const loadStoredStringArray = (storageKey: string): string[] => {
   if (typeof window === 'undefined') return []
 
   try {
-    const raw = window.localStorage.getItem(HIDDEN_DISCOVERED_ACTIONS_STORAGE_KEY)
+    const raw = window.localStorage.getItem(storageKey)
     if (!raw) return []
 
     const parsed = JSON.parse(raw)
@@ -162,6 +216,18 @@ const loadHiddenDiscoveredActionKeys = (): string[] => {
   } catch {
     return []
   }
+}
+
+const loadHiddenDiscoveredActionKeys = (): string[] => {
+  return loadStoredStringArray(HIDDEN_DISCOVERED_ACTIONS_STORAGE_KEY)
+}
+
+const loadHiddenDiscoveredServiceKeys = (): string[] => {
+  return loadStoredStringArray(HIDDEN_DISCOVERED_SERVICES_STORAGE_KEY)
+}
+
+const loadShownDefaultHiddenDiscoveredServiceKeys = (): string[] => {
+  return loadStoredStringArray(SHOWN_DEFAULT_HIDDEN_DISCOVERED_SERVICES_STORAGE_KEY)
 }
 
 const loadLastOpenedTaskId = (): string | null => {
@@ -448,7 +514,10 @@ function ActionGraphEditor() {
   ])
   const [nodeSearchQuery, setNodeSearchQuery] = useState('')
   const [discoveredActionTab, setDiscoveredActionTab] = useState<DiscoveryTab>('visible')
+  const [discoveredServiceTab, setDiscoveredServiceTab] = useState<DiscoveryTab>('visible')
   const [hiddenDiscoveredActionKeys, setHiddenDiscoveredActionKeys] = useState<string[]>(() => loadHiddenDiscoveredActionKeys())
+  const [hiddenDiscoveredServiceKeys, setHiddenDiscoveredServiceKeys] = useState<string[]>(() => loadHiddenDiscoveredServiceKeys())
+  const [shownDefaultHiddenDiscoveredServiceKeys, setShownDefaultHiddenDiscoveredServiceKeys] = useState<string[]>(() => loadShownDefaultHiddenDiscoveredServiceKeys())
 
 
   // Validation state
@@ -569,6 +638,24 @@ function ActionGraphEditor() {
       JSON.stringify(hiddenDiscoveredActionKeys)
     )
   }, [hiddenDiscoveredActionKeys])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    window.localStorage.setItem(
+      HIDDEN_DISCOVERED_SERVICES_STORAGE_KEY,
+      JSON.stringify(hiddenDiscoveredServiceKeys)
+    )
+  }, [hiddenDiscoveredServiceKeys])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    window.localStorage.setItem(
+      SHOWN_DEFAULT_HIDDEN_DISCOVERED_SERVICES_STORAGE_KEY,
+      JSON.stringify(shownDefaultHiddenDiscoveredServiceKeys)
+    )
+  }, [shownDefaultHiddenDiscoveredServiceKeys])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -725,6 +812,14 @@ function ActionGraphEditor() {
     () => new Set(hiddenDiscoveredActionKeys),
     [hiddenDiscoveredActionKeys]
   )
+  const hiddenDiscoveredServiceKeySet = useMemo(
+    () => new Set(hiddenDiscoveredServiceKeys),
+    [hiddenDiscoveredServiceKeys]
+  )
+  const shownDefaultHiddenDiscoveredServiceKeySet = useMemo(
+    () => new Set(shownDefaultHiddenDiscoveredServiceKeys),
+    [shownDefaultHiddenDiscoveredServiceKeys]
+  )
 
   // Build node palette
   const nodePalette = useMemo(() => {
@@ -789,6 +884,12 @@ function ActionGraphEditor() {
         items: Array.from(serviceMap.values()).map((srv) => {
           const serviceServerName = getServerLeafName(srv.service_name)
           const namespaceServer = `{namespace}/${serviceServerName}`
+          const hideKey = getDiscoveredServiceHideKey(srv.service_type, srv.service_name)
+          const isDefaultHidden = shouldDefaultHideDiscoveredService(srv.service_type, srv.service_name)
+          const isExplicitShown = shownDefaultHiddenDiscoveredServiceKeySet.has(hideKey)
+          const isHidden = isExplicitShown
+            ? false
+            : (hiddenDiscoveredServiceKeySet.has(hideKey) || isDefaultHidden)
 
           return {
             type: 'service',
@@ -803,6 +904,9 @@ function ActionGraphEditor() {
             providerNode: srv.node_name,
             isLifecycleNode: srv.is_lifecycle_node,
             lifecycleState: srv.lifecycle_state,
+            hideKey,
+            isHidden,
+            isDefaultHidden,
             isDraggable: true,
           }
         }),
@@ -851,7 +955,13 @@ function ActionGraphEditor() {
     })
 
     return palette
-  }, [selectedStateDef, fleetCapabilities, hiddenDiscoveredActionKeySet])
+  }, [
+    selectedStateDef,
+    fleetCapabilities,
+    hiddenDiscoveredActionKeySet,
+    hiddenDiscoveredServiceKeySet,
+    shownDefaultHiddenDiscoveredServiceKeySet,
+  ])
 
   // Convert template to graph
   const { initialNodes, initialEdges } = useMemo(() => {
@@ -1735,6 +1845,33 @@ function ActionGraphEditor() {
     })
   }, [])
 
+  const toggleDiscoveredServiceHidden = useCallback(
+    (hideKey: string, isDefaultHidden: boolean, hide: boolean) => {
+      setHiddenDiscoveredServiceKeys((prev) => {
+        const next = new Set(prev)
+        if (hide) {
+          next.add(hideKey)
+        } else {
+          next.delete(hideKey)
+        }
+        return Array.from(next)
+      })
+
+      setShownDefaultHiddenDiscoveredServiceKeys((prev) => {
+        const next = new Set(prev)
+        if (hide) {
+          next.delete(hideKey)
+        } else if (isDefaultHidden) {
+          next.add(hideKey)
+        } else {
+          next.delete(hideKey)
+        }
+        return Array.from(next)
+      })
+    },
+    []
+  )
+
   const handleOpenTask = useCallback((taskId: string) => {
     setSelectedTemplateId(taskId)
     setBottomPanelTab(null)
@@ -1848,7 +1985,7 @@ function ActionGraphEditor() {
                 <div className="flex flex-wrap gap-1">
                   {templateAssignments.slice(0, 3).map(a => (
                     <span key={a.id} className="text-[10px] px-1.5 py-0.5 bg-green-500/20 text-green-400 rounded">
-                      {a.agent_name}
+                      {formatTaskManagerName(a.agent_name) || formatTaskManagerName(a.agent_id) || a.agent_id}
                     </span>
                   ))}
                   {templateAssignments.length > 3 && (
@@ -1938,7 +2075,7 @@ function ActionGraphEditor() {
               <option value="">All RTMs</option>
               {agents?.map((agent) => (
                 <option key={agent.id} value={agent.id}>
-                  {agent.name || agent.id}
+                  {formatTaskManagerName(agent.name) || formatTaskManagerName(agent.id) || agent.id}
                 </option>
               ))}
             </select>
@@ -1987,7 +2124,7 @@ function ActionGraphEditor() {
                           <div className={`w-1.5 h-1.5 rounded-full ${
                             agent.status === 'online' ? 'bg-green-400' : 'bg-gray-500'
                           }`} />
-                          {agent.agent_name}
+                          {formatTaskManagerName(agent.agent_name) || formatTaskManagerName(agent.agent_id) || agent.agent_id}
                           {isAssigned && (
                             <Check size={10} className="text-blue-400" />
                           )}
@@ -2001,7 +2138,7 @@ function ActionGraphEditor() {
                         className="flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium bg-blue-500/20 text-blue-300 border border-blue-500/40"
                       >
                         <div className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-                        {agent.agent_name}
+                        {formatTaskManagerName(agent.agent_name) || formatTaskManagerName(agent.agent_id) || agent.agent_id}
                         <Check size={10} className="text-blue-400" />
                       </div>
                     ))}
@@ -2060,10 +2197,13 @@ function ActionGraphEditor() {
               nodePalette.map(category => {
                 const normalizedSearchQuery = nodeSearchQuery.trim().toLowerCase()
                 const isDiscoveredActionsCategory = category.category === 'Discovered Actions'
+                const isDiscoveredServicesCategory = category.category === 'Discovered Services'
+                const isDiscoveredCategory = isDiscoveredActionsCategory || isDiscoveredServicesCategory
+                const discoveryTab = isDiscoveredActionsCategory ? discoveredActionTab : discoveredServiceTab
                 const visibleDiscoveredCount = category.items.filter((item) => !item.isHidden).length
                 const hiddenDiscoveredCount = category.items.filter((item) => item.isHidden).length
-                const baseCategoryItems = isDiscoveredActionsCategory
-                  ? category.items.filter((item) => discoveredActionTab === 'hidden' ? item.isHidden : !item.isHidden)
+                const baseCategoryItems = isDiscoveredCategory
+                  ? category.items.filter((item) => discoveryTab === 'hidden' ? item.isHidden : !item.isHidden)
                   : category.items
                 const categoryItems = normalizedSearchQuery
                   ? baseCategoryItems.filter((item) => matchesPaletteSearch(item, normalizedSearchQuery))
@@ -2093,13 +2233,17 @@ function ActionGraphEditor() {
                     </button>
                     {expandedCategories.includes(category.category) && (
                       <div className="px-2 pb-2 space-y-0.5">
-                        {isDiscoveredActionsCategory && (
+                        {isDiscoveredCategory && (
                           <div className="px-1 pt-1 pb-1.5">
                             <div className="inline-flex rounded-md border border-primary overflow-hidden">
                               <button
-                                onClick={() => setDiscoveredActionTab('visible')}
+                                onClick={() => (
+                                  isDiscoveredActionsCategory
+                                    ? setDiscoveredActionTab('visible')
+                                    : setDiscoveredServiceTab('visible')
+                                )}
                                 className={`px-2 py-1 text-[10px] transition-colors ${
-                                  discoveredActionTab === 'visible'
+                                  discoveryTab === 'visible'
                                     ? 'bg-blue-600/25 text-blue-300'
                                     : 'bg-elevated text-secondary hover:text-primary'
                                 }`}
@@ -2107,9 +2251,13 @@ function ActionGraphEditor() {
                                 Visible ({visibleDiscoveredCount})
                               </button>
                               <button
-                                onClick={() => setDiscoveredActionTab('hidden')}
+                                onClick={() => (
+                                  isDiscoveredActionsCategory
+                                    ? setDiscoveredActionTab('hidden')
+                                    : setDiscoveredServiceTab('hidden')
+                                )}
                                 className={`px-2 py-1 text-[10px] transition-colors border-l border-primary ${
-                                  discoveredActionTab === 'hidden'
+                                  discoveryTab === 'hidden'
                                     ? 'bg-yellow-600/25 text-yellow-300'
                                     : 'bg-elevated text-secondary hover:text-primary'
                                 }`}
@@ -2124,13 +2272,13 @@ function ActionGraphEditor() {
                           <div className="px-2 py-2 text-[10px] text-muted italic">
                             {normalizedSearchQuery
                               ? '검색 결과가 없습니다.'
-                              : isDiscoveredActionsCategory && discoveredActionTab === 'hidden'
-                              ? '숨겨진 action이 없습니다.'
+                              : isDiscoveredCategory && discoveryTab === 'hidden'
+                              ? (isDiscoveredServicesCategory ? '숨겨진 service가 없습니다.' : '숨겨진 action이 없습니다.')
                               : '표시할 항목이 없습니다.'}
                           </div>
                         ) : categoryItems.map((item, idx) => {
                           const canDrag = isEditing && item.isDraggable !== false
-                          const isDiscoveredActionItem = isDiscoveredActionsCategory && !!item.hideKey
+                          const isDiscoveredItem = isDiscoveredCategory && !!item.hideKey
 
                           return (
                             <div
@@ -2200,15 +2348,27 @@ function ActionGraphEditor() {
                                     {item.capabilityKind === 'service' ? 'down' : 'busy'}
                                   </span>
                                 )}
-                                {isDiscoveredActionItem && item.hideKey && (
+                                {isDiscoveredItem && item.hideKey && (
                                   <button
                                     type="button"
                                     onClick={(e) => {
                                       e.stopPropagation()
-                                      toggleDiscoveredActionHidden(item.hideKey!, !item.isHidden)
+                                      if (isDiscoveredActionsCategory) {
+                                        toggleDiscoveredActionHidden(item.hideKey!, !item.isHidden)
+                                      } else {
+                                        toggleDiscoveredServiceHidden(
+                                          item.hideKey!,
+                                          !!item.isDefaultHidden,
+                                          !item.isHidden
+                                        )
+                                      }
                                     }}
                                     className="p-0.5 text-muted hover:text-primary hover:bg-elevated rounded"
-                                    title={item.isHidden ? 'Show action' : 'Hide action'}
+                                    title={
+                                      isDiscoveredServicesCategory
+                                        ? (item.isHidden ? 'Show service' : 'Hide service')
+                                        : (item.isHidden ? 'Show action' : 'Hide action')
+                                    }
                                   >
                                     {item.isHidden ? <Eye size={10} /> : <EyeOff size={10} />}
                                   </button>
@@ -2520,7 +2680,9 @@ function ActionGraphEditor() {
                               <div key={a.id} className="flex items-center justify-between p-2 bg-elevated rounded-lg">
                                 <div className="flex items-center gap-2">
                                   <Cpu size={12} className="text-green-400" />
-                                  <span className="text-xs text-primary">{a.agent_name}</span>
+                                  <span className="text-xs text-primary">
+                                    {formatTaskManagerName(a.agent_name) || formatTaskManagerName(a.agent_id) || a.agent_id}
+                                  </span>
                                 </div>
                                 <button
                                   onClick={() => unassignTemplate.mutate({ templateId: selectedTemplate.id, agentId: a.agent_id })}
@@ -2546,7 +2708,9 @@ function ActionGraphEditor() {
                                 <div key={a.agent_id} className="flex items-center justify-between p-2 bg-elevated rounded-lg">
                                   <div className="flex items-center gap-2">
                                     <Cpu size={12} className="text-purple-400" />
-                                    <span className="text-xs text-primary">{a.agent_name}</span>
+                                    <span className="text-xs text-primary">
+                                      {formatTaskManagerName(a.agent_name) || formatTaskManagerName(a.agent_id) || a.agent_id}
+                                    </span>
                                   </div>
                                   <button
                                     onClick={() => assignTemplate.mutate({ templateId: selectedTemplate.id, agentId: a.agent_id })}
@@ -3025,7 +3189,7 @@ function AssignTemplateModal({
     if (aAssigned !== bAssigned) {
       return aAssigned ? -1 : 1
     }
-    return a.agent_name.localeCompare(b.agent_name)
+    return formatTaskManagerName(a.agent_name).localeCompare(formatTaskManagerName(b.agent_name))
   })
 
   return (
@@ -3103,7 +3267,9 @@ function AssignTemplateModal({
                         }`} />
                         <div>
                           <div className="flex items-center gap-2">
-                            <span className="text-sm text-primary font-medium">{agent.agent_name}</span>
+                            <span className="text-sm text-primary font-medium">
+                              {formatTaskManagerName(agent.agent_name) || formatTaskManagerName(agent.agent_id) || agent.agent_id}
+                            </span>
                             {isCompatible ? (
                               <span className="text-[9px] px-1.5 py-0.5 bg-green-500/20 text-green-400 rounded flex items-center gap-1">
                                 <Check size={10} />

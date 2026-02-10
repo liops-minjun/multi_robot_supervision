@@ -11,6 +11,7 @@ import (
 	"log"
 	"math"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1706,23 +1707,30 @@ func (h *RawQUICHandler) handleRegisterAgent(
 	}
 
 	// Step 3: Determine effective agent name
-	// Server generates name if agent provides empty or generic name like "Fleet Agent"
+	// Server generates name if agent provides empty or generic placeholder name.
 	effectiveName := req.Name
-	if effectiveName == "" || effectiveName == "Fleet Agent" {
+	if isAutoAssignedAgentName(effectiveName) {
 		// Check if existing agent has a name
 		existingAgent, _ := h.repo.GetAgent(effectiveAgentID)
-		if existingAgent != nil && existingAgent.Name != "" && existingAgent.Name != "Fleet Agent" {
-			// Reuse existing name
-			effectiveName = existingAgent.Name
-			log.Printf("[RawQUIC] Reusing existing agent name: %s", effectiveName)
-		} else {
+		if existingAgent != nil {
+			if seq, ok := extractAutoAssignedSequence(existingAgent.Name); ok {
+				effectiveName = formatTaskManagerName(seq)
+				log.Printf("[RawQUIC] Normalized existing auto-assigned name to: %s", effectiveName)
+			} else if !isAutoAssignedAgentName(existingAgent.Name) {
+				// Reuse existing custom name
+				effectiveName = existingAgent.Name
+				log.Printf("[RawQUIC] Reusing existing agent name: %s", effectiveName)
+			}
+		}
+
+		if isGenericPlaceholderName(effectiveName) {
 			// Generate new sequential name
 			nextNum, err := h.repo.GetNextAgentNumber()
 			if err != nil {
 				log.Printf("[RawQUIC] Warning: failed to get next agent number: %v, using fallback", err)
 				nextNum = 1
 			}
-			effectiveName = fmt.Sprintf("Agent-%03d", nextNum)
+			effectiveName = formatTaskManagerName(nextNum)
 			log.Printf("[RawQUIC] Generated new agent name: %s", effectiveName)
 		}
 	}
@@ -1784,8 +1792,8 @@ func (h *RawQUICHandler) handleRegisterAgent(
 		if req.HardwareFingerprint != "" {
 			agent.HardwareFingerprint = sql.NullString{String: req.HardwareFingerprint, Valid: true}
 		}
-		// Update name if it was generic "Fleet Agent"
-		if agent.Name == "Fleet Agent" || agent.Name == "" {
+		// Update name if existing name is a generic placeholder.
+		if isAutoAssignedAgentName(agent.Name) {
 			agent.Name = effectiveName
 		}
 		h.repo.CreateOrUpdateAgent(agent)
@@ -1801,6 +1809,50 @@ func (h *RawQUICHandler) handleRegisterAgent(
 	h.sendRegisterResponse(stream, true, "", effectiveAgentID, idWasAssigned)
 
 	log.Printf("[RawQUIC] Agent %s registered (1:1 model, assigned=%v)", effectiveAgentID, idWasAssigned)
+}
+
+func isAutoAssignedAgentName(name string) bool {
+	if isGenericPlaceholderName(name) {
+		return true
+	}
+	_, ok := extractAutoAssignedSequence(name)
+	return ok
+}
+
+func isGenericPlaceholderName(name string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	switch normalized {
+	case "", "fleet agent", "robot agent", "agent", "task manager":
+		return true
+	default:
+		return false
+	}
+}
+
+func extractAutoAssignedSequence(name string) (int, bool) {
+	trimmed := strings.TrimSpace(name)
+	for _, prefix := range []string{"Task Manager-", "Agent-"} {
+		if !strings.HasPrefix(trimmed, prefix) {
+			continue
+		}
+		seqText := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+		if seqText == "" {
+			return 0, false
+		}
+		seq, err := strconv.Atoi(seqText)
+		if err != nil {
+			return 0, false
+		}
+		return seq, true
+	}
+	return 0, false
+}
+
+func formatTaskManagerName(sequence int) string {
+	if sequence < 1 {
+		sequence = 1
+	}
+	return fmt.Sprintf("Task Manager-%03d", sequence)
 }
 
 // sendRegisterResponse sends a RegisterAgentResponse protobuf

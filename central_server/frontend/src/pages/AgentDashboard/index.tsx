@@ -38,6 +38,12 @@ import { getLifecycleStateInfo } from '../../types'
 import { ActionGraphViewer } from '../../components/BehaviorTreeViewer'
 import { useTranslation } from '../../i18n'
 
+const capabilityKindOf = (capability: AgentCapabilityInfo): 'action' | 'service' => {
+  if (capability.capability_kind === 'service') return 'service'
+  if (capability.capability_kind === 'action') return 'action'
+  return capability.action_type.toLowerCase().includes('/srv/') ? 'service' : 'action'
+}
+
 // Status badge component
 function StatusBadge({ status, t }: { status: string; t: (key: 'agent.online' | 'agent.offline' | 'agent.warning') => string }) {
   const config: Record<string, { bg: string; text: string; dot: string; labelKey: 'agent.online' | 'agent.offline' | 'agent.warning' }> = {
@@ -218,6 +224,9 @@ function CapabilityCard({
   const serverName = capability.action_server.replace(/^\//, '')
   // action_type에서 짧은 이름 추출 (예: test_msgs/TestAction -> TestAction)
   const typeName = capability.action_type.split('/').pop() || capability.action_type
+  const capabilityKind = capabilityKindOf(capability)
+  const isService = capabilityKind === 'service'
+  const serverLabel = isService ? 'Service Server' : t('agent.actionServer')
 
   return (
     <div className="bg-elevated rounded-lg border border-primary overflow-hidden">
@@ -226,7 +235,11 @@ function CapabilityCard({
         className="w-full p-4 flex items-center justify-between hover:bg-surface transition-colors"
       >
         <div className="flex items-center gap-3">
-          <Zap className="w-4 h-4 text-purple-400" />
+          {isService ? (
+            <Server className="w-4 h-4 text-cyan-400" />
+          ) : (
+            <Zap className="w-4 h-4 text-purple-400" />
+          )}
           <div className="flex flex-col items-start">
             <span className="text-primary font-medium font-mono">{serverName}</span>
             <span className="text-[10px] text-muted">{typeName}</span>
@@ -281,9 +294,13 @@ function CapabilityCard({
           <div className="space-y-3 pt-3">
             {/* Action Server (전체 경로) */}
             <div>
-              <div className="text-xs text-secondary uppercase tracking-wider mb-1">{t('agent.actionServer')}</div>
+              <div className="text-xs text-secondary uppercase tracking-wider mb-1">{serverLabel}</div>
               <div className="flex items-center gap-2 px-3 py-2 bg-surface rounded-lg">
-                <Activity className="w-3 h-3 text-blue-400" />
+                {isService ? (
+                  <Server className="w-3 h-3 text-cyan-400" />
+                ) : (
+                  <Activity className="w-3 h-3 text-blue-400" />
+                )}
                 <span className="text-sm text-primary font-mono">{capability.action_server}</span>
               </div>
             </div>
@@ -892,6 +909,14 @@ export default function AgentDashboard() {
 
   const selectedAgent = agents.find((a) => a.id === selectedAgentId)
   const selectedAgentConnection = selectedAgentId ? connectionStatusMap[selectedAgentId] : undefined
+  const actionCapabilities = useMemo(
+    () => (agentCapabilities?.capabilities || []).filter((cap) => capabilityKindOf(cap) === 'action'),
+    [agentCapabilities?.capabilities]
+  )
+  const serviceCapabilities = useMemo(
+    () => (agentCapabilities?.capabilities || []).filter((cap) => capabilityKindOf(cap) === 'service'),
+    [agentCapabilities?.capabilities]
+  )
   const pingLatencyText = (() => {
     const latencyUs = selectedAgentConnection?.ping_latency_us
     if (latencyUs != null) {
@@ -1362,14 +1387,23 @@ export default function AgentDashboard() {
               </div>
 
               {/* Stats */}
-              <div className="grid grid-cols-4 gap-4 mt-6">
+              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 mt-6">
                 <div className="bg-elevated rounded-lg p-4">
                   <div className="flex items-center gap-2 text-secondary text-sm mb-1">
                     <Zap className="w-4 h-4" />
                     {t('agent.actionServers')}
                   </div>
                   <div className="text-2xl font-bold text-primary">
-                    {agentCapabilities?.total || 0}
+                    {actionCapabilities.length}
+                  </div>
+                </div>
+                <div className="bg-elevated rounded-lg p-4">
+                  <div className="flex items-center gap-2 text-secondary text-sm mb-1">
+                    <Server className="w-4 h-4 text-cyan-400" />
+                    Service 서버
+                  </div>
+                  <div className="text-2xl font-bold text-primary">
+                    {serviceCapabilities.length}
                   </div>
                 </div>
                 <div className="bg-elevated rounded-lg p-4">
@@ -1424,13 +1458,13 @@ export default function AgentDashboard() {
                   <Activity className="w-5 h-5 text-purple-400" />
                   <h3 className="text-lg font-semibold text-primary">{t('agent.detectedActionServers')}</h3>
                   <span className="text-sm text-muted">
-                    ({agentCapabilities?.capabilities?.length || 0} {t('agent.actionTypes')})
+                    ({actionCapabilities.length} {t('agent.actionTypes')})
                   </span>
                 </div>
 
                 {capabilitiesLoading ? (
                   <div className="text-center py-8 text-muted">{t('agent.loadingActionServers')}</div>
-                ) : !agentCapabilities?.capabilities?.length ? (
+                ) : !actionCapabilities.length ? (
                   <div className="text-center py-8">
                     <Activity className="w-10 h-10 mx-auto mb-3 text-muted" />
                     <p className="text-muted text-sm">{t('agent.noActionServers')}</p>
@@ -1440,7 +1474,7 @@ export default function AgentDashboard() {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {agentCapabilities.capabilities.map((capability) => {
+                    {actionCapabilities.map((capability) => {
                       // Find if this capability is currently in use by a step
                       // Match by action_server (unique identifier) only
                       let inUseByStep: { id: string; name: string } | null = null
@@ -1456,15 +1490,50 @@ export default function AgentDashboard() {
                       }
                       return (
                         <CapabilityCard
-                          key={capability.action_server}
+                          key={`action:${capability.action_server}`}
                           capability={capability}
-                          expanded={expandedCapabilities.includes(capability.action_server)}
-                          onToggle={() => toggleCapability(capability.action_server)}
+                          expanded={expandedCapabilities.includes(`action:${capability.action_server}`)}
+                          onToggle={() => toggleCapability(`action:${capability.action_server}`)}
                           inUseByStep={inUseByStep}
                           t={t}
                         />
                       )
                     })}
+                  </div>
+                )}
+              </div>
+
+              {/* ROS2 Service Servers */}
+              <div>
+                <div className="flex items-center gap-2 mb-4">
+                  <Server className="w-5 h-5 text-cyan-400" />
+                  <h3 className="text-lg font-semibold text-primary">감지된 ROS2 Service 서버</h3>
+                  <span className="text-sm text-muted">
+                    ({serviceCapabilities.length} service 유형)
+                  </span>
+                </div>
+
+                {capabilitiesLoading ? (
+                  <div className="text-center py-8 text-muted">Service 서버 로딩 중...</div>
+                ) : !serviceCapabilities.length ? (
+                  <div className="text-center py-8">
+                    <Server className="w-10 h-10 mx-auto mb-3 text-muted" />
+                    <p className="text-muted text-sm">감지된 Service 서버 없음</p>
+                    <p className="text-xs text-muted mt-1">
+                      ROS2 service 서버가 발견되면 여기에 표시됩니다
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {serviceCapabilities.map((capability) => (
+                      <CapabilityCard
+                        key={`service:${capability.action_server}`}
+                        capability={capability}
+                        expanded={expandedCapabilities.includes(`service:${capability.action_server}`)}
+                        onToggle={() => toggleCapability(`service:${capability.action_server}`)}
+                        t={t}
+                      />
+                    ))}
                   </div>
                 )}
               </div>

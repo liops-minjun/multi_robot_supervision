@@ -398,16 +398,21 @@ func (r *Repository) CountAgents() (int64, error) {
 	return result.(int64), nil
 }
 
-// GetNextAgentNumber returns the next sequential number for agent naming
-// It finds the highest existing "Agent-NNN" number and returns N+1
+// GetNextAgentNumber returns the next sequential number for auto-assigned agent naming.
+// It checks both legacy "Agent-NNN" and current "Task Manager-NNN" names,
+// then returns max(N)+1.
 func (r *Repository) GetNextAgentNumber() (int, error) {
 	ctx := context.Background()
 	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
-		// Find the maximum number from names like "Agent-001", "Agent-123", etc.
+		// Keep a single sequence across legacy and current prefixes.
 		res, err := tx.Run(ctx, `
 			MATCH (a:Agent)
-			WHERE a.name =~ 'Agent-[0-9]+'
-			WITH a, toInteger(substring(a.name, 6)) AS num
+			WITH CASE
+				WHEN a.name =~ 'Task Manager-[0-9]+' THEN toInteger(substring(a.name, 13))
+				WHEN a.name =~ 'Agent-[0-9]+' THEN toInteger(substring(a.name, 6))
+				ELSE null
+			END AS num
+			WHERE num IS NOT NULL
 			RETURN max(num) AS maxNum
 		`, nil)
 		if err != nil {
