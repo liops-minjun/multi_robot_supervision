@@ -25,6 +25,7 @@ export interface StateActionNodeData {
   availableStates?: string[]
   availableAgents?: Array<{ id: string; name: string }>
   availableWaypoints?: Array<{ id: string; name: string }>
+  isEditing?: boolean
 }
 
 export type NormalizedDuringStateTarget = {

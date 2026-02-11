@@ -1,9 +1,9 @@
 import { memo, useCallback } from 'react'
-import { Code, Radio, Crosshair } from 'lucide-react'
+import { Code, Radio, Crosshair, Plus, Trash2 } from 'lucide-react'
 import PoseEditor from './PoseEditor'
 import JointArrayEditor from './JointArrayEditor'
 import TelemetryPreview from './TelemetryPreview'
-import { type RobotTelemetryData, getEditorType } from './types'
+import { type RobotTelemetryData, getEditorType, getStdPrimitiveWrapperType } from './types'
 import ParameterSourceSelector from '../../../../../components/ParameterSourceSelector'
 import type { ParameterFieldSource } from '../../../../../types'
 import type { AvailableStep } from '../../types'
@@ -154,6 +154,21 @@ const ParameterEditorFactory = memo(({
     )
   }
 
+  // std_msgs primitive wrappers (std_msgs/msg/String, std_msgs/msg/Bool, ...)
+  if (editorType === 'std_primitive_msg') {
+    return (
+      <StdPrimitiveMessageEditor
+        fieldName={fieldName}
+        fieldType={fieldType}
+        value={value}
+        onChange={onChange}
+        fieldSource={fieldSource}
+        availableSteps={availableSteps}
+        onFieldSourceChange={onFieldSourceChange}
+      />
+    )
+  }
+
   // Twist type
   if (editorType === 'twist') {
     return (
@@ -226,6 +241,78 @@ const PrimitiveEditor = memo(({
       onConstantChange={onChange}
       inputType={inputType}
     />
+  )
+})
+
+// std_msgs primitive wrapper editor (e.g. std_msgs/msg/String -> { data: "..." })
+const StdPrimitiveMessageEditor = memo(({
+  fieldName,
+  fieldType,
+  value,
+  onChange,
+  fieldSource,
+  availableSteps,
+  onFieldSourceChange,
+}: {
+  fieldName: string
+  fieldType: string
+  value: unknown
+  onChange: (value: unknown) => void
+  fieldSource?: ParameterFieldSource
+  availableSteps?: AvailableStep[]
+  onFieldSourceChange?: (source: ParameterFieldSource | undefined) => void
+}) => {
+  const wrapperType = getStdPrimitiveWrapperType(fieldType)
+
+  const normalizeWrappedValue = useCallback((nextValue: unknown): { data: unknown } => {
+    if (nextValue && typeof nextValue === 'object' && !Array.isArray(nextValue) && 'data' in (nextValue as Record<string, unknown>)) {
+      return { data: (nextValue as Record<string, unknown>).data }
+    }
+
+    return { data: nextValue }
+  }, [])
+
+  const getDefaultValue = useCallback((): unknown => {
+    if (wrapperType === 'boolean') return false
+    if (wrapperType === 'number') return 0
+    return ''
+  }, [wrapperType])
+
+  const wrapped = normalizeWrappedValue(value)
+  const constantValue = wrapped.data ?? getDefaultValue()
+  const inputType = wrapperType === 'boolean' ? 'checkbox' : wrapperType === 'number' ? 'number' : 'text'
+
+  const handleConstantChange = useCallback((nextValue: unknown) => {
+    if (wrapperType === 'boolean') {
+      onChange({ data: Boolean(nextValue) })
+      return
+    }
+
+    if (wrapperType === 'number') {
+      const normalizedNumber = typeof nextValue === 'number' ? nextValue : parseFloat(String(nextValue))
+      onChange({ data: Number.isFinite(normalizedNumber) ? normalizedNumber : 0 })
+      return
+    }
+
+    onChange({ data: String(nextValue ?? '') })
+  }, [onChange, wrapperType])
+
+  return (
+    <div className="space-y-1.5">
+      <ParameterSourceSelector
+        fieldSource={fieldSource}
+        availableSteps={availableSteps || []}
+        onChange={onFieldSourceChange || (() => {})}
+        targetFieldType={fieldType}
+        targetFieldName={fieldName}
+        constantValue={constantValue}
+        onConstantChange={handleConstantChange}
+        inputType={inputType}
+      />
+      <div className="text-[9px] text-muted">
+        저장 형식: <code className="text-[9px] text-purple-300">{'{'}"data": ...{'}'}</code>
+      </div>
+    </div>
   )
 })
 
@@ -753,7 +840,20 @@ const JointStateEditor = memo(({
     effort?: number[]
   } | null
 
-  const hasValue = jointStateValue && jointStateValue.name && jointStateValue.name.length > 0
+  const jointNames = jointStateValue?.name ?? []
+  const jointPositions = jointStateValue?.position ?? []
+  const hasValue = jointNames.length > 0
+
+  const normalizeCurrentJointState = useCallback(() => {
+    const names = [...jointNames]
+    const positions = [...jointPositions]
+    const maxLen = Math.max(names.length, positions.length)
+
+    while (names.length < maxLen) names.push(`joint_${names.length + 1}`)
+    while (positions.length < maxLen) positions.push(0)
+
+    return { name: names, position: positions }
+  }, [jointNames, jointPositions])
 
   // Capture current telemetry (only name and position - what planners actually use)
   const handleCapture = useCallback(() => {
@@ -764,6 +864,53 @@ const JointStateEditor = memo(({
       position: [...liveJointState.position],
     })
   }, [liveJointState, onChange])
+
+  const startManualInput = useCallback(() => {
+    if (hasValue) return
+    onChange({
+      name: ['joint_1'],
+      position: [0],
+    })
+  }, [hasValue, onChange])
+
+  const addManualJoint = useCallback(() => {
+    const current = normalizeCurrentJointState()
+    const nextIndex = current.name.length + 1
+    onChange({
+      ...current,
+      name: [...current.name, `joint_${nextIndex}`],
+      position: [...current.position, 0],
+    })
+  }, [normalizeCurrentJointState, onChange])
+
+  const removeManualJoint = useCallback((index: number) => {
+    const current = normalizeCurrentJointState()
+    onChange({
+      ...current,
+      name: current.name.filter((_, i) => i !== index),
+      position: current.position.filter((_, i) => i !== index),
+    })
+  }, [normalizeCurrentJointState, onChange])
+
+  const updateManualJointName = useCallback((index: number, nextName: string) => {
+    const current = normalizeCurrentJointState()
+    const next = [...current.name]
+    next[index] = nextName
+    onChange({
+      ...current,
+      name: next,
+    })
+  }, [normalizeCurrentJointState, onChange])
+
+  const updateManualJointPosition = useCallback((index: number, nextPosition: number) => {
+    const current = normalizeCurrentJointState()
+    const next = [...current.position]
+    next[index] = nextPosition
+    onChange({
+      ...current,
+      position: next,
+    })
+  }, [normalizeCurrentJointState, onChange])
 
   // Check if there are any steps with result fields (for enabling binding)
   const hasBindableSteps = availableSteps?.some(s => s.resultFields && s.resultFields.length > 0) || false
@@ -811,33 +958,70 @@ const JointStateEditor = memo(({
         </div>
       )}
 
-      {/* Saved Value - User-friendly display */}
-      {hasValue && (
+      {/* Saved/Manual Value */}
+      {hasValue ? (
         <div className="p-2 bg-amber-500/10 rounded border border-amber-500/30">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] text-amber-400 font-medium">저장된 값</span>
-            <span className="text-[9px] text-amber-300">{jointStateValue!.name!.length}개 관절</span>
+            <span className="text-[10px] text-amber-400 font-medium">저장된 값 (수동 수정 가능)</span>
+            <span className="text-[9px] text-amber-300">{jointNames.length}개 관절</span>
           </div>
-          <div className="max-h-32 overflow-y-auto bg-sunken rounded p-1.5">
-            <div className="grid grid-cols-2 gap-2 text-[8px] text-muted font-semibold mb-1">
+          <div className="max-h-40 overflow-y-auto bg-sunken rounded p-1.5">
+            <div className="grid grid-cols-[1fr_1fr_auto] gap-2 text-[8px] text-muted font-semibold mb-1">
               <span>Joint</span>
-              <span>Position</span>
+              <span>Position (rad)</span>
+              <span />
             </div>
-            {jointStateValue!.name!.map((name, idx) => (
-              <div key={name} className="grid grid-cols-2 gap-2 text-[9px] font-mono py-0.5">
-                <span className="text-secondary truncate" title={name}>{name}</span>
-                <span className="text-amber-400">{jointStateValue!.position?.[idx]?.toFixed(4) || '0'}</span>
+            {jointNames.map((name, idx) => (
+              <div key={`${name}-${idx}`} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center py-0.5">
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => { e.stopPropagation(); updateManualJointName(idx, e.target.value) }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="px-1.5 py-1 bg-elevated border border-primary rounded text-[9px] text-primary font-mono focus:outline-none focus:border-amber-500"
+                />
+                <input
+                  type="number"
+                  value={jointPositions[idx] ?? 0}
+                  onChange={(e) => { e.stopPropagation(); updateManualJointPosition(idx, parseFloat(e.target.value) || 0) }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="px-1.5 py-1 bg-elevated border border-primary rounded text-[9px] text-amber-300 font-mono focus:outline-none focus:border-amber-500"
+                  step="0.001"
+                />
+                <button
+                  onClick={(e) => { e.stopPropagation(); removeManualJoint(idx) }}
+                  className="p-1 text-muted hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+                  title="관절 삭제"
+                >
+                  <Trash2 size={11} />
+                </button>
               </div>
             ))}
           </div>
-          {/* Clear button */}
-          <button
-            onClick={(e) => { e.stopPropagation(); onChange(null) }}
-            className="w-full mt-2 py-1 text-[9px] text-muted hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
-          >
-            값 초기화
-          </button>
+          <div className="flex items-center gap-2 mt-2">
+            <button
+              onClick={(e) => { e.stopPropagation(); addManualJoint() }}
+              className="flex-1 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 rounded text-[9px] text-amber-300 flex items-center justify-center gap-1"
+            >
+              <Plus size={11} />
+              관절 추가
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); onChange(null) }}
+              className="flex-1 py-1.5 text-[9px] text-muted hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+            >
+              값 초기화
+            </button>
+          </div>
         </div>
+      ) : (
+        <button
+          onClick={(e) => { e.stopPropagation(); startManualInput() }}
+          className="w-full py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded text-[10px] text-amber-300 flex items-center justify-center gap-1"
+        >
+          <Plus size={12} />
+          수동 입력 시작
+        </button>
       )}
 
       {/* Binding option */}
@@ -914,6 +1098,7 @@ const JsonEditor = memo(({
 
 ParameterEditorFactory.displayName = 'ParameterEditorFactory'
 PrimitiveEditor.displayName = 'PrimitiveEditor'
+StdPrimitiveMessageEditor.displayName = 'StdPrimitiveMessageEditor'
 JointStateEditor.displayName = 'JointStateEditor'
 NumericArrayEditor.displayName = 'NumericArrayEditor'
 StringArrayEditor.displayName = 'StringArrayEditor'

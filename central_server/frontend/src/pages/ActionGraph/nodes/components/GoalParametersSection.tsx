@@ -92,8 +92,18 @@ const GoalParametersSection = memo(({
     }
   }, [telemetry, setLiveTelemetry])
 
-  const editorTelemetry = toEditorTelemetry(liveTelemetry || telemetry)
-  const hasTelemetry = !!(liveTelemetry?.joint_state || liveTelemetry?.odometry || telemetry?.joint_state || telemetry?.odometry)
+  const mergedTelemetry: RobotTelemetry | null = (liveTelemetry || telemetry)
+    ? {
+        ...(telemetry || {}),
+        ...(liveTelemetry || {}),
+        joint_state: liveTelemetry?.joint_state || telemetry?.joint_state,
+        odometry: liveTelemetry?.odometry || telemetry?.odometry,
+        updated_at: liveTelemetry?.updated_at || telemetry?.updated_at || new Date().toISOString(),
+      }
+    : null
+
+  const editorTelemetry = toEditorTelemetry(mergedTelemetry)
+  const hasTelemetry = !!(mergedTelemetry?.joint_state || mergedTelemetry?.odometry)
 
   return (
     <div className="border-b border-primary">
@@ -149,9 +159,9 @@ const GoalParametersSection = memo(({
             {hasTelemetry && (
               <span className="text-[8px] text-green-400 bg-green-500/20 px-1.5 py-0.5 rounded">LIVE</span>
             )}
-            {(liveTelemetry?.joint_state || telemetry?.joint_state) && (
+            {mergedTelemetry?.joint_state && (
               <span className="text-[8px] text-yellow-400 bg-yellow-500/10 px-1.5 py-0.5 rounded">
-                {(liveTelemetry?.joint_state || telemetry?.joint_state)?.name.length}개 관절
+                {mergedTelemetry.joint_state.name.length}개 관절
               </span>
             )}
           </div>

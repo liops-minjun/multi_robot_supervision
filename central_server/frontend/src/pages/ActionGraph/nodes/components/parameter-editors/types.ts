@@ -72,6 +72,7 @@ export type EditorType =
   | 'numeric_array'  // Other numeric arrays
   | 'string_array'   // string[]
   | 'joint_state'    // Full JointState message
+  | 'std_primitive_msg' // std_msgs/{String,Bool,Int*,UInt*,Float*,Double}
   | 'header'         // std_msgs/Header
   | 'primitive'      // bool, number, string
   | 'json'           // Unknown complex types
@@ -128,6 +129,7 @@ export function eulerToQuaternion(euler: { roll: number; pitch: number; yaw: num
 // Determine editor type from ROS2 type string
 export function getEditorType(rosType: string, isArray: boolean): EditorType {
   const lower = rosType.toLowerCase()
+  const stdPrimitive = getStdPrimitiveWrapperType(rosType)
 
   // IMPORTANT: Check for arrays FIRST before primitives!
   // Otherwise "string" with isArray=true would match primitive check
@@ -152,6 +154,11 @@ export function getEditorType(rosType: string, isArray: boolean): EditorType {
 
   // Check for known ROS2 message types
   if (lower.includes('/')) {
+    // std_msgs primitive wrappers (String/Bool/Int*/Float*)
+    if (stdPrimitive) {
+      return 'std_primitive_msg'
+    }
+
     // Pose types
     if (lower.includes('posestamped') || lower.includes('posewithcovariance')) {
       return 'pose'
@@ -210,6 +217,28 @@ export function getEditorType(rosType: string, isArray: boolean): EditorType {
   }
 
   return 'primitive'
+}
+
+export type StdPrimitiveWrapperType = 'string' | 'boolean' | 'number'
+
+export function getStdPrimitiveWrapperType(rosType: string): StdPrimitiveWrapperType | null {
+  const lower = rosType.toLowerCase()
+  const normalized = lower.replace('std_msgs/', 'std_msgs/msg/')
+
+  if (normalized === 'std_msgs/msg/string') return 'string'
+  if (normalized === 'std_msgs/msg/bool') return 'boolean'
+
+  const numericNames = [
+    'int8', 'int16', 'int32', 'int64',
+    'uint8', 'uint16', 'uint32', 'uint64',
+    'float32', 'float64', 'float', 'double',
+  ]
+
+  if (numericNames.some((name) => normalized === `std_msgs/msg/${name}`)) {
+    return 'number'
+  }
+
+  return null
 }
 
 // Format number for display

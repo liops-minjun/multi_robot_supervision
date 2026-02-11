@@ -153,6 +153,11 @@ const formatTaskManagerName = (value?: string | null): string => {
   return raw.replace(/^agent(?=[\s_-]|$)/i, 'Task Manager')
 }
 
+const getDefaultJobNameTemplate = (serverName?: string, fallbackLabel?: string): string => {
+  const base = (getServerLeafName(serverName) || fallbackLabel || 'action').trim()
+  return base ? `${base}/` : 'action/'
+}
+
 const getDiscoveredActionHideKey = (actionType: string, actionServerName: string): string => {
   return `${actionType}|${actionServerName}`
 }
@@ -1032,9 +1037,75 @@ function ActionGraphEditor() {
     }))
   }, [edges, deleteEdge])
 
+  const deleteSelectedElements = useCallback(() => {
+    if (!isEditing) return
+
+    const selectedNodeIds = new Set(
+      nodes
+        .filter(node => node.selected && node.id !== START_NODE_ID)
+        .map(node => node.id)
+    )
+    const selectedEdgeIds = new Set(
+      edges
+        .filter(edge => edge.selected)
+        .map(edge => edge.id)
+    )
+
+    if (selectedNodeIds.size === 0 && selectedEdgeIds.size === 0) {
+      return
+    }
+
+    setNodes((nds) => nds.filter((node) => !selectedNodeIds.has(node.id)))
+    setEdges((eds) => eds.filter((edge) => {
+      if (selectedEdgeIds.has(edge.id)) return false
+      if (selectedNodeIds.has(edge.source) || selectedNodeIds.has(edge.target)) return false
+      return true
+    }))
+  }, [edges, isEditing, nodes, setEdges, setNodes])
+
+  // Allow Del/Backspace node deletion from keyboard.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!isEditing) return
+      if (event.key !== 'Delete' && event.key !== 'Backspace') return
+
+      const target = event.target as HTMLElement | null
+      if (target) {
+        const tag = target.tagName
+        const isTextInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable
+        if (isTextInput) return
+      }
+
+      const hasSelection = nodes.some((node) => node.selected && node.id !== START_NODE_ID) || edges.some((edge) => edge.selected)
+      if (!hasSelection) return
+
+      event.preventDefault()
+      deleteSelectedElements()
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [deleteSelectedElements, edges, isEditing, nodes])
+
   // Only reset graph when template changes (by ID), not when state definition loads
   // This prevents newly added nodes from being lost when async data loads
   const templateId = selectedTemplate?.id
+
+  // Keep editability flag inside node data for node-local controls (e.g. delete button).
+  useEffect(() => {
+    setNodes((nds) => nds.map((node) => {
+      if ((node.data as { isEditing?: boolean })?.isEditing === isEditing) {
+        return node
+      }
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          isEditing,
+        },
+      }
+    }))
+  }, [isEditing, setNodes])
 
   // Clear canvas immediately when switching to a different template
   // This prevents showing stale data from the previous template
@@ -1768,6 +1839,9 @@ function ActionGraphEditor() {
         { id: 'aborted', state: defaultFailureState, label: 'Aborted', outcome: 'aborted' as const, color: '#ef4444' },
         { id: 'cancelled', state: defaultFailureState, label: 'Cancelled', outcome: 'cancelled' as const, color: '#6b7280' },
       ]
+      const defaultJobName = data.type === 'action'
+        ? getDefaultJobNameTemplate(data.server || data.subtype, data.label)
+        : (data.label || data.subtype || '')
 
       const newNode: Node = {
         id: getNodeId(),
@@ -1799,11 +1873,13 @@ function ActionGraphEditor() {
           availableAgents,
           preconditions: [],
           params: {},
+          jobName: defaultJobName,
           // Auto-generate states feature (enabled by default)
           autoGenerateStates: true,
           generatedStates: [],
           // Default end states for handle rendering
           endStates: defaultEndStates,
+          isEditing,
         },
       }
 
@@ -1815,7 +1891,7 @@ function ActionGraphEditor() {
         return newNodes
       })
     },
-    [screenToFlowPosition, setNodes, availableStates, availableAgents]
+    [screenToFlowPosition, setNodes, availableStates, availableAgents, isEditing]
   )
 
   const onDragStart = (event: React.DragEvent<HTMLDivElement>, item: PaletteItem) => {
@@ -2820,6 +2896,7 @@ function convertActionGraphToGraph(
       initialState: defaultState,
       availableStates,
       availableAgents,
+      isEditing: false,
     },
     draggable: false,
     selectable: false,
@@ -2909,12 +2986,13 @@ function convertActionGraphToGraph(
         params: step.action?.params?.data || {},
         fieldSources: step.action?.params?.field_sources,
         waypointId: step.action?.params?.waypoint_id,
-        jobName: step.job_name || '',
+        jobName: step.job_name || (isTerminal ? '' : getDefaultJobNameTemplate(step.action?.server, step.name || step.id)),
         autoGenerateStates: step.auto_generate_states ?? true,
         finalState: isTerminal ? (step.terminal_type === 'success' ? defaultState : errorState) : undefined,
         preconditions: [],
         availableStates,
         availableAgents,
+        isEditing: false,
       },
     })
 
