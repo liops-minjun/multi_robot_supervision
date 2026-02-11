@@ -31,7 +31,6 @@ func (s *Server) ListAgents(w http.ResponseWriter, r *http.Request) {
 
 	needsAssignmentLookup := offlineMode == "template_only" || cleanupStale
 	assignedAgentIDs := make(map[string]struct{})
-	capabilityTemplateAgentIDs := make(map[string]struct{})
 	if needsAssignmentLookup {
 		assignments, err := s.repo.GetAllAgentBehaviorTrees()
 		if err != nil {
@@ -71,20 +70,6 @@ func (s *Server) ListAgents(w http.ResponseWriter, r *http.Request) {
 			}
 			assignedAgentIDs[agentID] = struct{}{}
 		}
-
-		// Capability snapshots are treated as RTM templates for offline editing.
-		allCaps, err := s.repo.GetAllAgentCapabilities()
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		for _, cap := range allCaps {
-			agentID := strings.TrimSpace(cap.AgentID)
-			if agentID == "" {
-				continue
-			}
-			capabilityTemplateAgentIDs[agentID] = struct{}{}
-		}
 	}
 
 	responses := make([]AgentResponse, 0, len(agents))
@@ -93,8 +78,7 @@ func (s *Server) ListAgents(w http.ResponseWriter, r *http.Request) {
 		response := agentToResponse(&agent, s.stateManager)
 		isOnline := response.Status == "online"
 		_, hasAssignedTemplate := assignedAgentIDs[agent.ID]
-		_, hasCapabilityTemplate := capabilityTemplateAgentIDs[agent.ID]
-		hasTemplate := hasAssignedTemplate || hasCapabilityTemplate
+		hasTemplate := hasAssignedTemplate || response.HasCapabilityTemplate
 
 		include := true
 		switch offlineMode {
@@ -259,6 +243,45 @@ func (s *Server) DeleteAgent(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"message": "Agent deleted",
+	})
+}
+
+// SaveAgentCapabilityTemplate persists current capabilities as an offline RTM template snapshot.
+func (s *Server) SaveAgentCapabilityTemplate(w http.ResponseWriter, r *http.Request) {
+	agentID := chi.URLParam(r, "agentID")
+
+	agent, err := s.repo.GetAgent(agentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if agent == nil {
+		writeError(w, http.StatusNotFound, "Agent not found")
+		return
+	}
+
+	capabilityCount, err := s.repo.SaveAgentCapabilityTemplate(agentID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	updatedAgent, err := s.repo.GetAgent(agentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if updatedAgent == nil {
+		writeError(w, http.StatusNotFound, "Agent not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success":          true,
+		"agent_id":         agentID,
+		"capability_count": capabilityCount,
+		"saved_at":         time.Now().UTC(),
+		"agent":            agentToResponse(updatedAgent, s.stateManager),
 	})
 }
 
@@ -1077,6 +1100,8 @@ func agentToResponse(agent *db.Agent, sm *state.GlobalStateManager) AgentRespons
 		Status:     agent.Status,
 		RobotCount: 1, // 1 Agent = 1 Robot in this architecture
 		CreatedAt:  agent.CreatedAt,
+		HasCapabilityTemplate:         agent.CapabilityTemplateSavedAt.Valid,
+		CapabilityTemplateCapabilityCount: agent.CapabilityTemplateCapabilityCount,
 	}
 
 	if agent.IPAddress.Valid {
@@ -1084,6 +1109,9 @@ func agentToResponse(agent *db.Agent, sm *state.GlobalStateManager) AgentRespons
 	}
 	if agent.LastSeen.Valid {
 		response.LastSeen = &agent.LastSeen.Time
+	}
+	if agent.CapabilityTemplateSavedAt.Valid {
+		response.CapabilityTemplateSavedAt = &agent.CapabilityTemplateSavedAt.Time
 	}
 
 	// In 1:1 model, agent ID is also the robot ID

@@ -56,10 +56,10 @@ const START_NODE_COLOR = '#22c55e'
 
 // Color palette for different action types
 const ACTION_COLORS: Record<string, string> = {
-  'nav2_msgs/NavigateToPose': '#3b82f6',
-  'control_msgs/FollowJointTrajectory': '#8b5cf6',
-  'control_msgs/GripperCommand': '#f59e0b',
-  'std_srvs/Trigger': '#06b6d4',
+  'nav2_msgs/NavigateToPose': '#fb7185',
+  'control_msgs/FollowJointTrajectory': '#f97316',
+  'control_msgs/GripperCommand': '#ef4444',
+  'std_srvs/Trigger': '#0ea5e9',
 }
 
 // State color categories
@@ -92,7 +92,7 @@ const OUTCOME_EDGE_COLORS: Record<ActionOutcome, string> = {
 }
 
 const getActionColor = (actionType: string): string => {
-  return ACTION_COLORS[actionType] || '#6b7280'
+  return ACTION_COLORS[actionType] || '#f87171'
 }
 
 const HIDDEN_DISCOVERED_ACTIONS_STORAGE_KEY = 'action-graph.hidden-discovered-actions.v1'
@@ -520,6 +520,8 @@ function ActionGraphEditor() {
   const [nodeSearchQuery, setNodeSearchQuery] = useState('')
   const [discoveredActionTab, setDiscoveredActionTab] = useState<DiscoveryTab>('visible')
   const [discoveredServiceTab, setDiscoveredServiceTab] = useState<DiscoveryTab>('visible')
+  const [discoveredActionLifecycleOnly, setDiscoveredActionLifecycleOnly] = useState(false)
+  const [discoveredServiceLifecycleOnly, setDiscoveredServiceLifecycleOnly] = useState(false)
   const [hiddenDiscoveredActionKeys, setHiddenDiscoveredActionKeys] = useState<string[]>(() => loadHiddenDiscoveredActionKeys())
   const [hiddenDiscoveredServiceKeys, setHiddenDiscoveredServiceKeys] = useState<string[]>(() => loadHiddenDiscoveredServiceKeys())
   const [shownDefaultHiddenDiscoveredServiceKeys, setShownDefaultHiddenDiscoveredServiceKeys] = useState<string[]>(() => loadShownDefaultHiddenDiscoveredServiceKeys())
@@ -1104,7 +1106,7 @@ function ActionGraphEditor() {
 
   const compatibleRtmTemplates = useMemo(() => {
     const templates = agents
-      .filter((agent) => capabilityTemplateByAgent.has(agent.id))
+      .filter((agent) => capabilityTemplateByAgent.has(agent.id) || agent.has_capability_template)
       .map((agent) => {
         const providedCapabilities = capabilityTemplateByAgent.get(agent.id) || new Set<string>()
         const missing = requiredCapabilityKeys.filter((required) => !providedCapabilities.has(required))
@@ -1350,6 +1352,10 @@ function ActionGraphEditor() {
             name: node.data.label,
             type: 'terminal',
             terminal_type: node.data.subtype === 'Error' ? 'failure' : 'success',
+            ui: {
+              x: node.position.x,
+              y: node.position.y,
+            },
           })
         }
         // Start nodes don't need to be saved as steps
@@ -1397,6 +1403,10 @@ function ActionGraphEditor() {
       const step: ActionGraph['steps'][0] = {
         id: node.id,
         name: node.data.label,
+        ui: {
+          x: node.position.x,
+          y: node.position.y,
+        },
         // Job name for this step (user-defined name)
         job_name: node.data.jobName || undefined,
         auto_generate_states: node.data.autoGenerateStates || undefined,
@@ -1866,7 +1876,20 @@ function ActionGraphEditor() {
         },
       }
       console.log('[onConnect] Creating edge:', newEdge)
-      setEdges((eds) => addEdge(newEdge, eds))
+      setEdges((eds) => {
+        const isSameConnection = (edge: Edge) =>
+          edge.source === params.source &&
+          edge.target === params.target &&
+          (edge.sourceHandle ?? null) === (sourceHandleId ?? null) &&
+          (edge.targetHandle ?? null) === (targetHandleId ?? null)
+
+        // Toggle behavior: connecting the exact same handles again removes the edge.
+        if (eds.some(isSameConnection)) {
+          return eds.filter(edge => !isSameConnection(edge))
+        }
+
+        return addEdge(newEdge, eds)
+      })
     },
     [nodes, setEdges]
   )
@@ -2341,14 +2364,21 @@ function ActionGraphEditor() {
                 const isDiscoveredServicesCategory = category.category === 'Discovered Services'
                 const isDiscoveredCategory = isDiscoveredActionsCategory || isDiscoveredServicesCategory
                 const discoveryTab = isDiscoveredActionsCategory ? discoveredActionTab : discoveredServiceTab
+                const lifecycleOnly = isDiscoveredActionsCategory
+                  ? discoveredActionLifecycleOnly
+                  : discoveredServiceLifecycleOnly
                 const visibleDiscoveredCount = category.items.filter((item) => !item.isHidden).length
                 const hiddenDiscoveredCount = category.items.filter((item) => item.isHidden).length
+                const lifecycleDiscoveredCount = category.items.filter((item) => item.isLifecycleNode === true).length
                 const baseCategoryItems = isDiscoveredCategory
                   ? category.items.filter((item) => discoveryTab === 'hidden' ? item.isHidden : !item.isHidden)
                   : category.items
-                const categoryItems = normalizedSearchQuery
-                  ? baseCategoryItems.filter((item) => matchesPaletteSearch(item, normalizedSearchQuery))
+                const lifecycleFilteredItems = isDiscoveredCategory && lifecycleOnly
+                  ? baseCategoryItems.filter((item) => item.isLifecycleNode === true)
                   : baseCategoryItems
+                const categoryItems = normalizedSearchQuery
+                  ? lifecycleFilteredItems.filter((item) => matchesPaletteSearch(item, normalizedSearchQuery))
+                  : lifecycleFilteredItems
 
                 return (
                   <div key={category.category}>
@@ -2376,34 +2406,52 @@ function ActionGraphEditor() {
                       <div className="px-2 pb-2 space-y-0.5">
                         {isDiscoveredCategory && (
                           <div className="px-1 pt-1 pb-1.5">
-                            <div className="inline-flex rounded-md border border-primary overflow-hidden">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="inline-flex rounded-md border border-primary overflow-hidden">
+                                <button
+                                  onClick={() => (
+                                    isDiscoveredActionsCategory
+                                      ? setDiscoveredActionTab('visible')
+                                      : setDiscoveredServiceTab('visible')
+                                  )}
+                                  className={`px-2 py-1 text-[10px] transition-colors ${
+                                    discoveryTab === 'visible'
+                                      ? 'bg-blue-600/25 text-blue-300'
+                                      : 'bg-elevated text-secondary hover:text-primary'
+                                  }`}
+                                >
+                                  Visible ({visibleDiscoveredCount})
+                                </button>
+                                <button
+                                  onClick={() => (
+                                    isDiscoveredActionsCategory
+                                      ? setDiscoveredActionTab('hidden')
+                                      : setDiscoveredServiceTab('hidden')
+                                  )}
+                                  className={`px-2 py-1 text-[10px] transition-colors border-l border-primary ${
+                                    discoveryTab === 'hidden'
+                                      ? 'bg-yellow-600/25 text-yellow-300'
+                                      : 'bg-elevated text-secondary hover:text-primary'
+                                  }`}
+                                >
+                                  Hidden ({hiddenDiscoveredCount})
+                                </button>
+                              </div>
+
                               <button
                                 onClick={() => (
                                   isDiscoveredActionsCategory
-                                    ? setDiscoveredActionTab('visible')
-                                    : setDiscoveredServiceTab('visible')
+                                    ? setDiscoveredActionLifecycleOnly((prev) => !prev)
+                                    : setDiscoveredServiceLifecycleOnly((prev) => !prev)
                                 )}
-                                className={`px-2 py-1 text-[10px] transition-colors ${
-                                  discoveryTab === 'visible'
-                                    ? 'bg-blue-600/25 text-blue-300'
-                                    : 'bg-elevated text-secondary hover:text-primary'
+                                className={`px-2 py-1 rounded-md border text-[10px] transition-colors ${
+                                  lifecycleOnly
+                                    ? 'border-amber-500/50 bg-amber-600/25 text-amber-200'
+                                    : 'border-primary bg-elevated text-secondary hover:text-primary'
                                 }`}
+                                title="Lifecycle 노드가 제공한 항목만 표시"
                               >
-                                Visible ({visibleDiscoveredCount})
-                              </button>
-                              <button
-                                onClick={() => (
-                                  isDiscoveredActionsCategory
-                                    ? setDiscoveredActionTab('hidden')
-                                    : setDiscoveredServiceTab('hidden')
-                                )}
-                                className={`px-2 py-1 text-[10px] transition-colors border-l border-primary ${
-                                  discoveryTab === 'hidden'
-                                    ? 'bg-yellow-600/25 text-yellow-300'
-                                    : 'bg-elevated text-secondary hover:text-primary'
-                                }`}
-                              >
-                                Hidden ({hiddenDiscoveredCount})
+                                Lifecycle Only ({lifecycleDiscoveredCount})
                               </button>
                             </div>
                           </div>
@@ -2477,7 +2525,7 @@ function ActionGraphEditor() {
                                 )}
                                 {item.actionType && !item.duringState && !item.robotCount && (
                                   <span className={`text-[9px] block ${
-                                    item.capabilityKind === 'service' ? 'text-sky-400' : 'text-purple-400'
+                                    item.capabilityKind === 'service' ? 'text-sky-400' : 'text-rose-400'
                                   }`}>
                                     {item.actionType.split('/').pop()}
                                   </span>
@@ -2973,12 +3021,20 @@ function convertActionGraphToGraph(
   })
 
   steps.forEach((step, index) => {
-    const x = 300 + (index % 3) * 300
-    const y = 100 + Math.floor(index / 3) * 200
+    const storedX = step.ui?.x
+    const storedY = step.ui?.y
+    const hasStoredPosition =
+      typeof storedX === 'number' &&
+      typeof storedY === 'number' &&
+      Number.isFinite(storedX) &&
+      Number.isFinite(storedY)
+
+    const x = hasStoredPosition ? storedX : 300 + (index % 3) * 300
+    const y = hasStoredPosition ? storedY : 100 + Math.floor(index / 3) * 200
 
     let subtype = step.action?.server || step.action?.type || 'Unknown'
     const capabilityKind = normalizeCapabilityKind(step.action?.capability_kind, step.action?.type)
-    let color = capabilityKind === 'service' ? '#0ea5e9' : '#6b7280'
+    let color = capabilityKind === 'service' ? '#0ea5e9' : '#f87171'
     let actionType = step.action?.type
     let duringStates: string[] = []
 

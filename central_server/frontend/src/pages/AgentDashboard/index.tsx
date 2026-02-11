@@ -31,6 +31,7 @@ import {
   Check,
   X,
   Trash2,
+  Save,
 } from 'lucide-react'
 import { agentApi, actionGraphApi, fleetApi, stateDefinitionApi, taskApi, logsApi, telemetryApi } from '../../api/client'
 import type { AgentCapabilityInfo, AgentConnectionStatus, ActionGraph, RobotStateSnapshot, StateDefinition, ExecutionPhase, TaskLogEntry, TaskLogLevel, RobotTelemetry, LifecycleState } from '../../types'
@@ -238,7 +239,7 @@ function CapabilityCard({
           {isService ? (
             <Server className="w-4 h-4 text-cyan-400" />
           ) : (
-            <Zap className="w-4 h-4 text-purple-400" />
+            <Zap className="w-4 h-4 text-rose-400" />
           )}
           <div className="flex flex-col items-start">
             <span className="text-primary font-medium font-mono">{serverName}</span>
@@ -299,7 +300,7 @@ function CapabilityCard({
                 {isService ? (
                   <Server className="w-3 h-3 text-cyan-400" />
                 ) : (
-                  <Activity className="w-3 h-3 text-blue-400" />
+                  <Activity className="w-3 h-3 text-rose-400" />
                 )}
                 <span className="text-sm text-primary font-mono">{capability.action_server}</span>
               </div>
@@ -741,7 +742,7 @@ export default function AgentDashboard() {
   // For inline editing in agent list
   const [editingAgentInList, setEditingAgentInList] = useState<string | null>(null)
   const [listEditedName, setListEditedName] = useState('')
-  const [statusFilter, setStatusFilter] = useState<'online' | 'offline'>('online')
+  const [statusFilter, setStatusFilter] = useState<'online' | 'offline' | 'saved'>('online')
   const staleCleanupDoneRef = useRef(false)
 
   // Fetch all agents
@@ -931,6 +932,13 @@ export default function AgentDashboard() {
   const selectedAgent = agents.find((a) => a.id === selectedAgentId)
   const selectedAgentOnline = selectedAgent ? isAgentAlive(selectedAgent) : false
   const selectedAgentConnection = selectedAgentId ? connectionStatusMap[selectedAgentId] : undefined
+  const selectedAgentTemplateSavedAtText = useMemo(() => {
+    const raw = selectedAgent?.capability_template_saved_at
+    if (!raw) return null
+    const date = new Date(raw)
+    if (Number.isNaN(date.getTime())) return raw
+    return date.toLocaleString()
+  }, [selectedAgent?.capability_template_saved_at])
   const actionCapabilities = useMemo(
     () => (agentCapabilities?.capabilities || []).filter((cap) => capabilityKindOf(cap) === 'action'),
     [agentCapabilities?.capabilities]
@@ -948,11 +956,16 @@ export default function AgentDashboard() {
       return
     }
     const selectedIsOnline = isAgentAlive(selected)
+    const selectedIsSaved = selected.has_capability_template === true
     if (statusFilter === 'online' && !selectedIsOnline) {
       setSelectedAgentId(null)
       return
     }
     if (statusFilter === 'offline' && selectedIsOnline) {
+      setSelectedAgentId(null)
+      return
+    }
+    if (statusFilter === 'saved' && !selectedIsSaved) {
       setSelectedAgentId(null)
     }
   }, [agents, selectedAgentId, statusFilter, connectionStatusMap])
@@ -1093,6 +1106,17 @@ export default function AgentDashboard() {
     },
   })
 
+  const saveCapabilityTemplateMutation = useMutation({
+    mutationFn: (agentId: string) => agentApi.saveCapabilityTemplate(agentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
+      queryClient.invalidateQueries({ queryKey: ['agent-capabilities', selectedAgentId] })
+    },
+    onError: (error: Error) => {
+      alert(`RTM 템플릿 저장 실패: ${error.message}`)
+    },
+  })
+
   const isExecutionLoading =
     executeGraphMutation.isPending ||
     pauseTaskMutation.isPending ||
@@ -1103,11 +1127,14 @@ export default function AgentDashboard() {
   // Summary stats
   const onlineCount = agents.filter((a) => isAgentAlive(a)).length
   const offlineCount = agents.filter((a) => !isAgentAlive(a)).length
+  const savedCount = agents.filter((a) => a.has_capability_template).length
 
   // Filtered agents list
   const filteredAgents = statusFilter === 'online'
     ? agents.filter((a) => isAgentAlive(a))
-    : agents.filter((a) => !isAgentAlive(a))
+    : statusFilter === 'offline'
+      ? agents.filter((a) => !isAgentAlive(a))
+      : agents.filter((a) => a.has_capability_template)
 
   return (
     <div className="h-screen flex bg-base">
@@ -1128,7 +1155,7 @@ export default function AgentDashboard() {
               <RefreshCw size={16} />
             </button>
           </div>
-          <div className="mt-3 grid grid-cols-2 gap-2">
+          <div className="mt-3 grid grid-cols-3 gap-2">
             <button
               onClick={() => setStatusFilter('online')}
               className={`rounded-lg border px-3 py-2 text-left transition-colors ${
@@ -1151,6 +1178,17 @@ export default function AgentDashboard() {
               <div className="text-xl font-bold text-secondary">{offlineCount}</div>
               <div className="text-[10px] uppercase text-muted">{t('agent.offline')}</div>
             </button>
+            <button
+              onClick={() => setStatusFilter('saved')}
+              className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                statusFilter === 'saved'
+                  ? 'border-emerald-500/50 bg-emerald-500/20'
+                  : 'border-primary bg-elevated hover:bg-surface'
+              }`}
+            >
+              <div className="text-xl font-bold text-emerald-300">{savedCount}</div>
+              <div className="text-[10px] uppercase text-muted">Saved RTM</div>
+            </button>
           </div>
         </div>
 
@@ -1162,7 +1200,11 @@ export default function AgentDashboard() {
             <div className="p-8 text-center">
               <Server className="w-12 h-12 mx-auto mb-3 text-muted" />
               <p className="text-muted text-sm">
-                {statusFilter === 'online' ? 'No online RTMs' : 'No offline RTMs'}
+                {statusFilter === 'online'
+                  ? 'No online RTMs'
+                  : statusFilter === 'offline'
+                    ? 'No offline RTMs'
+                    : 'No saved RTMs'}
               </p>
             </div>
           ) : (
@@ -1236,6 +1278,11 @@ export default function AgentDashboard() {
                           >
                             {agent.name}
                           </span>
+                          {agent.has_capability_template && (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                              Saved
+                            </span>
+                          )}
                           <button
                             onClick={(e) => {
                               e.stopPropagation()
@@ -1400,9 +1447,38 @@ export default function AgentDashboard() {
                         </>
                       )}
                     </div>
+                    <div className="mt-1 text-xs">
+                      {selectedAgent.has_capability_template ? (
+                        <span className="text-green-400">
+                          RTM 템플릿 저장됨
+                          {selectedAgentTemplateSavedAtText ? ` · ${selectedAgentTemplateSavedAtText}` : ''}
+                          {selectedAgent.capability_template_capability_count != null
+                            ? ` · ${selectedAgent.capability_template_capability_count}개 capability`
+                            : ''}
+                        </span>
+                      ) : (
+                        <span className="text-muted">RTM 템플릿 미저장</span>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      if (!selectedAgentId) return
+                      saveCapabilityTemplateMutation.mutate(selectedAgentId)
+                    }}
+                    disabled={!selectedAgentId || saveCapabilityTemplateMutation.isPending}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                    title="현재 RTM capability를 템플릿으로 저장"
+                  >
+                    {saveCapabilityTemplateMutation.isPending ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Save className="w-3.5 h-3.5" />
+                    )}
+                    <span>{saveCapabilityTemplateMutation.isPending ? '저장 중...' : 'RTM 템플릿 저장'}</span>
+                  </button>
                   <StatusBadge status={selectedAgentOnline ? 'online' : 'offline'} t={t} />
                   {connectionStatusMap[selectedAgent.id] && (
                     <HeartbeatBadge
@@ -1483,7 +1559,7 @@ export default function AgentDashboard() {
               {/* ROS2 Action Servers */}
               <div>
                 <div className="flex items-center gap-2 mb-4">
-                  <Activity className="w-5 h-5 text-purple-400" />
+                  <Activity className="w-5 h-5 text-rose-400" />
                   <h3 className="text-lg font-semibold text-primary">{t('agent.detectedActionServers')}</h3>
                   <span className="text-sm text-muted">
                     ({actionCapabilities.length} {t('agent.actionTypes')})

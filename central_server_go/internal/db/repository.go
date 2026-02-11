@@ -343,6 +343,8 @@ func decodeAgent(node neo4j.Node) Agent {
 		Status:              getString(props, "status"),
 		HardwareFingerprint: toNullString(getString(props, "hardware_fingerprint")),
 		AssignedByServer:    getBool(props, "assigned_by_server"),
+		CapabilityTemplateSavedAt: toNullTimeMillis(getInt64(props, "capability_template_saved_at_ms")),
+		CapabilityTemplateCapabilityCount: int(getInt64(props, "capability_template_capability_count")),
 		CreatedAt:           time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
 		UpdatedAt:           time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
 	}
@@ -517,6 +519,48 @@ func (r *Repository) UpdateAgentLastSeen(id string) error {
 	return err
 }
 
+// SaveAgentCapabilityTemplate marks current capabilities as a persisted RTM template snapshot.
+func (r *Repository) SaveAgentCapabilityTemplate(agentID string) (int, error) {
+	caps, err := r.GetAgentCapabilities(agentID)
+	if err != nil {
+		return 0, err
+	}
+	if len(caps) == 0 {
+		return 0, fmt.Errorf("no capabilities found for agent %s", agentID)
+	}
+
+	ctx := context.Background()
+	nowMs := time.Now().UTC().UnixMilli()
+	props := map[string]any{
+		"id":                agentID,
+		"saved_at_ms":       nowMs,
+		"capability_count":  len(caps),
+		"updated_at_ms":     nowMs,
+	}
+
+	_, err = r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		result, err := tx.Run(ctx, `
+			MATCH (a:Agent {id: $id})
+			SET a.capability_template_saved_at_ms = $saved_at_ms,
+			    a.capability_template_capability_count = $capability_count,
+			    a.updated_at_ms = $updated_at_ms
+			RETURN a.id AS id
+		`, props)
+		if err != nil {
+			return nil, err
+		}
+		if !result.Next(ctx) {
+			return nil, fmt.Errorf("agent not found: %s", agentID)
+		}
+		return nil, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	return len(caps), nil
+}
+
 func (r *Repository) CreateOrUpdateAgent(agent *Agent) error {
 	if agent == nil {
 		return fmt.Errorf("agent is nil")
@@ -632,6 +676,16 @@ func (r *Repository) DeleteAgent(id string) error {
 		_, err := tx.Run(ctx, `
 			MATCH (a:Agent {id: $id})
 			DETACH DELETE a
+		`, map[string]any{"id": id})
+		if err != nil {
+			return nil, err
+		}
+
+		// AgentCapability nodes are stored as separate entities (property-linked by agent_id),
+		// so removing an Agent node alone leaves orphan capabilities behind.
+		_, err = tx.Run(ctx, `
+			MATCH (c:AgentCapability {agent_id: $id})
+			DETACH DELETE c
 		`, map[string]any{"id": id})
 		return nil, err
 	})
@@ -2644,6 +2698,7 @@ func (r *Repository) SyncAgentCapabilities(agentID string, capabilities []AgentC
 					c.action_server = $action_server,
 					c.node_name = $node_name,
 					c.is_lifecycle_node = $is_lifecycle_node,
+					c.lifecycle_state = $lifecycle_state,
 					c.goal_schema_json = $goal_schema_json,
 					c.result_schema_json = $result_schema_json,
 					c.feedback_schema_json = $feedback_schema_json,
@@ -2666,6 +2721,7 @@ func (r *Repository) SyncAgentCapabilities(agentID string, capabilities []AgentC
 				"action_server":         cap.ActionServer,
 				"node_name":             cap.NodeName,
 				"is_lifecycle_node":     cap.IsLifecycleNode,
+				"lifecycle_state":       cap.LifecycleState,
 				"goal_schema_json":      string(cap.GoalSchema),
 				"result_schema_json":    string(cap.ResultSchema),
 				"feedback_schema_json":  string(cap.FeedbackSchema),
@@ -2733,6 +2789,7 @@ func capabilityFromNeo4jNode(props map[string]any) AgentCapability {
 		SchemaVersion:   int(getInt64(props, "schema_version")),
 		Status:          getString(props, "status"),
 		IsAvailable:     getBool(props, "is_available"),
+		LifecycleState:  getString(props, "lifecycle_state"),
 		LastUsedAt:      toNullTimeMillis(getInt64(props, "last_used_at_ms")),
 		DiscoveredAt:    time.UnixMilli(getInt64(props, "discovered_at_ms")).UTC(),
 		UpdatedAt:       time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
@@ -2749,6 +2806,9 @@ func capabilityFromNeo4jNode(props map[string]any) AgentCapability {
 	}
 	if cap.SchemaVersion == 0 {
 		cap.SchemaVersion = 1
+	}
+	if strings.TrimSpace(cap.LifecycleState) == "" {
+		cap.LifecycleState = "unknown"
 	}
 	cap.CapabilityKind = normalizeCapabilityKind(cap.CapabilityKind, cap.ActionType)
 	return cap

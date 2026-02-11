@@ -29,6 +29,10 @@ type Agent struct {
 	SemanticTags     datatypes.JSON `gorm:"type:jsonb"`            // Current semantic tags []string
 	CurrentGraphID   sql.NullString `gorm:"size:50"`               // Currently executing graph ID
 
+	// Offline RTM template snapshot metadata
+	CapabilityTemplateSavedAt       sql.NullTime `gorm:"index"`
+	CapabilityTemplateCapabilityCount int
+
 	// Relationships
 	AgentBehaviorTrees []AgentBehaviorTree `gorm:"foreignKey:AgentID"`
 	BehaviorTrees      []BehaviorTree      `gorm:"foreignKey:AgentID"`

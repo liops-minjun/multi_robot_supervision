@@ -77,6 +77,18 @@ export const agentApi = {
     await api.delete(`/agents/${id}`)
   },
 
+  // Persist capability snapshot as RTM template for offline editing
+  saveCapabilityTemplate: async (agentId: string): Promise<{
+    success: boolean
+    agent_id: string
+    capability_count: number
+    saved_at: string
+    agent: Agent
+  }> => {
+    const { data } = await api.post(`/agents/${agentId}/capability-template`)
+    return data
+  },
+
   // Get aggregated capabilities for all robots of an agent
   getCapabilities: async (agentId: string): Promise<AgentCapabilitiesResponse> => {
     const { data } = await api.get(`/agents/${agentId}/capabilities`)

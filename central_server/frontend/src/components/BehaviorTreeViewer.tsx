@@ -16,17 +16,29 @@ import type { ActionGraph, StateDefinition } from '../types'
 
 // Color palette for different action types
 const ACTION_COLORS: Record<string, string> = {
-  'nav2_msgs/NavigateToPose': '#3b82f6',
-  'control_msgs/FollowJointTrajectory': '#8b5cf6',
-  'control_msgs/GripperCommand': '#f59e0b',
-  'std_srvs/Trigger': '#06b6d4',
+  'nav2_msgs/NavigateToPose': '#fb7185',
+  'control_msgs/FollowJointTrajectory': '#f97316',
+  'control_msgs/GripperCommand': '#ef4444',
+  'std_srvs/Trigger': '#0ea5e9',
 }
 
 const START_NODE_ID = '__behavior_tree_start__'
 const START_NODE_COLOR = '#22c55e'
 
 const getActionColor = (actionType: string): string => {
-  return ACTION_COLORS[actionType] || '#6b7280'
+  return ACTION_COLORS[actionType] || '#f87171'
+}
+
+const inferCapabilityKindFromActionType = (actionType?: string): 'action' | 'service' => {
+  const normalizedType = (actionType || '').toLowerCase()
+  return normalizedType.includes('/srv/') ? 'service' : 'action'
+}
+
+const normalizeCapabilityKind = (kind?: string, actionType?: string): 'action' | 'service' => {
+  const normalizedKind = (kind || '').toLowerCase()
+  if (normalizedKind === 'service') return 'service'
+  if (normalizedKind === 'action') return 'action'
+  return inferCapabilityKindFromActionType(actionType)
 }
 
 // Compact Action Node for Viewer
@@ -271,16 +283,17 @@ function BehaviorTreeViewerInner({
       const y = 50 + Math.floor(index / cols) * (compact ? 100 : 150)
 
       let subtype = step.action?.server || step.action?.type || 'Unknown'
-      let color = '#6b7280'
+      const capabilityKind = normalizeCapabilityKind(step.action?.capability_kind, step.action?.type)
+      let color = capabilityKind === 'service' ? '#0ea5e9' : '#f87171'
       let duringState: string | undefined
 
       const mapping = actionMappings.find(m => m.action_type === step.action?.type) ||
         actionMappings.find(m => m.server === step.action?.server)
-      if (mapping) {
+      if (mapping && capabilityKind !== 'service') {
         color = getActionColor(mapping.action_type)
         duringState = mapping.during_states?.[0] || mapping.during_state
       } else if (step.action?.type) {
-        color = getActionColor(step.action.type)
+        color = capabilityKind === 'service' ? '#0ea5e9' : getActionColor(step.action.type)
       }
       const stepDuringTargets = step.duringStateTargets || step.during_state_targets
       const stepDuringStates = step.duringStates || step.during_states

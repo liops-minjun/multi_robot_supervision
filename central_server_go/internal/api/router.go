@@ -143,6 +143,7 @@ func (s *Server) setupRouter() {
 			r.Get("/{agentID}", s.GetAgent)
 			r.Patch("/{agentID}", s.UpdateAgent)   // Update agent (rename)
 			r.Delete("/{agentID}", s.DeleteAgent)
+			r.Post("/{agentID}/capability-template", s.SaveAgentCapabilityTemplate)
 			r.Get("/{agentID}/capabilities", s.GetAgentCapabilities)
 			r.Get("/{agentID}/connection-status", s.GetSingleAgentConnectionStatus) // Heartbeat monitoring for single agent
 			r.Get("/{agentID}/logs", s.GetAgentLogs)                                // Execution logs for agent

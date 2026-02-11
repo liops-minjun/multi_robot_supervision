@@ -36,6 +36,13 @@ export interface RobotTelemetryData {
       angular: { x: number; y: number; z: number }
     }
   }
+  transforms?: Array<{
+    frame_id: string
+    child_frame_id: string
+    translation: { x: number; y: number; z: number }
+    rotation: { x: number; y: number; z: number; w: number }
+    timestamp_ns?: number
+  }>
 }
 
 // Pose value structure
