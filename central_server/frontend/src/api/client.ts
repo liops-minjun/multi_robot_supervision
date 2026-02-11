@@ -45,8 +45,19 @@ const api = axios.create({
 
 // Agent APIs
 export const agentApi = {
-  list: async (): Promise<Agent[]> => {
-    const { data } = await api.get('/agents')
+  list: async (options?: {
+    offlineMode?: 'all' | 'template_only' | 'none'
+    cleanupStale?: boolean
+  }): Promise<Agent[]> => {
+    const params = new URLSearchParams()
+    if (options?.offlineMode) {
+      params.set('offline_mode', options.offlineMode)
+    }
+    if (options?.cleanupStale) {
+      params.set('cleanup_stale', 'true')
+    }
+    const query = params.toString()
+    const { data } = await api.get(query ? `/agents?${query}` : '/agents')
     return data
   },
 

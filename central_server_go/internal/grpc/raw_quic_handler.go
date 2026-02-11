@@ -2579,6 +2579,25 @@ func (h *RawQUICHandler) handleCapabilityRegistration(
 	log.Printf("[RawQUIC] Capability registration from agent %s: %d capabilities",
 		agentID, len(reg.Capabilities))
 
+	// Keep the last known capability snapshot when transient discovery returns empty.
+	// This allows editing with cached capabilities even while RTM is offline/unstable.
+	if len(reg.Capabilities) == 0 {
+		existingCaps, err := h.repo.GetAgentCapabilities(agentID)
+		if err != nil {
+			log.Printf("[RawQUIC] Failed to read existing capabilities for %s: %v", agentID, err)
+			return
+		}
+		if len(existingCaps) > 0 {
+			log.Printf("[RawQUIC] Empty capability registration from %s ignored; preserving %d cached capabilities",
+				agentID, len(existingCaps))
+			return
+		}
+		log.Printf("[RawQUIC] Empty capability registration from %s (no cached snapshot)", agentID)
+		return
+	}
+
+	now := time.Now().UTC()
+
 	// Convert to db.AgentCapability (agent-based, not robot-based)
 	dbCaps := make([]db.AgentCapability, 0, len(reg.Capabilities))
 	for _, cap := range reg.Capabilities {
@@ -2616,6 +2635,8 @@ func (h *RawQUICHandler) handleCapabilityRegistration(
 			IsAvailable:     cap.IsAvailable, // Use the actual availability from the agent
 			Status:          status,
 			LifecycleState:  lifecycleState,
+			DiscoveredAt:    now,
+			UpdatedAt:       now,
 		}
 
 		// Store schemas as JSON (they come as JSON strings from C++)

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Server,
@@ -741,8 +741,8 @@ export default function AgentDashboard() {
   // For inline editing in agent list
   const [editingAgentInList, setEditingAgentInList] = useState<string | null>(null)
   const [listEditedName, setListEditedName] = useState('')
-  // Filter to show only online agents (default: false - show all agents)
-  const [showOnlineOnly, setShowOnlineOnly] = useState(false)
+  const [statusFilter, setStatusFilter] = useState<'online' | 'offline'>('online')
+  const staleCleanupDoneRef = useRef(false)
 
   // Fetch all agents
   const {
@@ -750,11 +750,26 @@ export default function AgentDashboard() {
     isLoading: agentsLoading,
     refetch: refetchAgents,
   } = useQuery({
-    queryKey: ['agents'],
-    queryFn: () => agentApi.list(),
+    queryKey: ['agents', 'template-only'],
+    queryFn: () => agentApi.list({
+      offlineMode: 'template_only',
+    }),
     refetchInterval: 1000,
     refetchIntervalInBackground: true,
   })
+
+  useEffect(() => {
+    if (staleCleanupDoneRef.current) return
+    staleCleanupDoneRef.current = true
+    void agentApi
+      .list({ offlineMode: 'template_only', cleanupStale: true })
+      .then(() => {
+        queryClient.invalidateQueries({ queryKey: ['agents'] })
+      })
+      .catch((error) => {
+        console.warn('[AgentDashboard] stale RTM cleanup failed:', error)
+      })
+  }, [queryClient])
 
   // Fetch connection status for all agents (heartbeat monitoring)
   const { data: connectionStatus = [] } = useQuery({
@@ -769,6 +784,12 @@ export default function AgentDashboard() {
     acc[status.id] = status
     return acc
   }, {} as Record<string, AgentConnectionStatus>)
+
+  const isAgentAlive = (agent: { id: string; status: string }) => {
+    const live = connectionStatusMap[agent.id]
+    if (live) return live.is_online
+    return agent.status === 'online'
+  }
 
   // Fetch capabilities for selected agent
   const { data: agentCapabilities, isLoading: capabilitiesLoading } = useQuery({
@@ -908,6 +929,7 @@ export default function AgentDashboard() {
   const unavailableServers = executabilityCheck?.unavailable_servers || []
 
   const selectedAgent = agents.find((a) => a.id === selectedAgentId)
+  const selectedAgentOnline = selectedAgent ? isAgentAlive(selectedAgent) : false
   const selectedAgentConnection = selectedAgentId ? connectionStatusMap[selectedAgentId] : undefined
   const actionCapabilities = useMemo(
     () => (agentCapabilities?.capabilities || []).filter((cap) => capabilityKindOf(cap) === 'action'),
@@ -917,6 +939,23 @@ export default function AgentDashboard() {
     () => (agentCapabilities?.capabilities || []).filter((cap) => capabilityKindOf(cap) === 'service'),
     [agentCapabilities?.capabilities]
   )
+
+  useEffect(() => {
+    if (!selectedAgentId) return
+    const selected = agents.find((a) => a.id === selectedAgentId)
+    if (!selected) {
+      setSelectedAgentId(null)
+      return
+    }
+    const selectedIsOnline = isAgentAlive(selected)
+    if (statusFilter === 'online' && !selectedIsOnline) {
+      setSelectedAgentId(null)
+      return
+    }
+    if (statusFilter === 'offline' && selectedIsOnline) {
+      setSelectedAgentId(null)
+    }
+  }, [agents, selectedAgentId, statusFilter, connectionStatusMap])
   const pingLatencyText = (() => {
     const latencyUs = selectedAgentConnection?.ping_latency_us
     if (latencyUs != null) {
@@ -1062,13 +1101,13 @@ export default function AgentDashboard() {
     resetStateMutation.isPending
 
   // Summary stats
-  const onlineCount = agents.filter((a) => a.status === 'online').length
-  const offlineCount = agents.filter((a) => a.status !== 'online').length
+  const onlineCount = agents.filter((a) => isAgentAlive(a)).length
+  const offlineCount = agents.filter((a) => !isAgentAlive(a)).length
 
   // Filtered agents list
-  const filteredAgents = showOnlineOnly
-    ? agents.filter((a) => a.status === 'online')
-    : agents
+  const filteredAgents = statusFilter === 'online'
+    ? agents.filter((a) => isAgentAlive(a))
+    : agents.filter((a) => !isAgentAlive(a))
 
   return (
     <div className="h-screen flex bg-base">
@@ -1089,23 +1128,29 @@ export default function AgentDashboard() {
               <RefreshCw size={16} />
             </button>
           </div>
-          {/* Filter toggle */}
-          <div className="mt-2 flex items-center gap-2">
+          <div className="mt-3 grid grid-cols-2 gap-2">
             <button
-              onClick={() => setShowOnlineOnly(!showOnlineOnly)}
-              className={`text-xs px-2 py-1 rounded transition-colors ${
-                showOnlineOnly
-                  ? 'bg-green-500/20 text-green-400 border border-green-500/30'
-                  : 'bg-gray-500/20 text-secondary border border-gray-500/30'
+              onClick={() => setStatusFilter('online')}
+              className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                statusFilter === 'online'
+                  ? 'border-green-500/50 bg-green-500/20'
+                  : 'border-primary bg-elevated hover:bg-surface'
               }`}
             >
-              {showOnlineOnly ? `Online only (${onlineCount})` : `All (${agents.length})`}
+              <div className="text-xl font-bold text-green-400">{onlineCount}</div>
+              <div className="text-[10px] uppercase text-muted">{t('agent.online')}</div>
             </button>
-            {!showOnlineOnly && offlineCount > 0 && (
-              <span className="text-[10px] text-muted">
-                {offlineCount} offline
-              </span>
-            )}
+            <button
+              onClick={() => setStatusFilter('offline')}
+              className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                statusFilter === 'offline'
+                  ? 'border-gray-400/50 bg-gray-500/20'
+                  : 'border-primary bg-elevated hover:bg-surface'
+              }`}
+            >
+              <div className="text-xl font-bold text-secondary">{offlineCount}</div>
+              <div className="text-[10px] uppercase text-muted">{t('agent.offline')}</div>
+            </button>
           </div>
         </div>
 
@@ -1117,17 +1162,14 @@ export default function AgentDashboard() {
             <div className="p-8 text-center">
               <Server className="w-12 h-12 mx-auto mb-3 text-muted" />
               <p className="text-muted text-sm">
-                {showOnlineOnly ? 'No online RTMs' : t('agent.noAgents')}
-              </p>
-              <p className="text-xs text-muted mt-1">
-                {showOnlineOnly && agents.length > 0
-                  ? `${offlineCount} offline RTM(s) hidden`
-                  : t('agent.noAgentsHint')}
+                {statusFilter === 'online' ? 'No online RTMs' : 'No offline RTMs'}
               </p>
             </div>
           ) : (
             <div className="py-2">
-              {filteredAgents.map((agent) => (
+              {filteredAgents.map((agent) => {
+                const isOnline = isAgentAlive(agent)
+                return (
                 <button
                   key={agent.id}
                   onClick={() => setSelectedAgentId(agent.id)}
@@ -1139,7 +1181,7 @@ export default function AgentDashboard() {
                 >
                   {/* Status indicator */}
                   <div className="flex-shrink-0 flex items-center gap-1">
-                    {agent.status === 'online' ? (
+                    {isOnline ? (
                       <Wifi className="w-4 h-4 text-green-500" />
                     ) : (
                       <WifiOff className="w-4 h-4 text-muted" />
@@ -1206,7 +1248,7 @@ export default function AgentDashboard() {
                             <Pencil className="w-3 h-3" />
                           </button>
                           {/* Delete button - only for offline agents */}
-                          {agent.status !== 'online' && (
+                          {!isOnline && (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation()
@@ -1232,7 +1274,7 @@ export default function AgentDashboard() {
                     </div>
                   </div>
 
-                  {agent.status === 'online' ? (
+                  {isOnline ? (
                     <ChevronRight className="w-4 h-4 text-muted" />
                   ) : (
                     <button
@@ -1249,23 +1291,9 @@ export default function AgentDashboard() {
                     </button>
                   )}
                 </button>
-              ))}
+              )})}
             </div>
           )}
-        </div>
-
-        {/* Summary Stats */}
-        <div className="p-4 border-t border-primary bg-elevated">
-          <div className="grid grid-cols-2 gap-3 text-center">
-            <div>
-              <div className="text-xl font-bold text-green-400">{onlineCount}</div>
-              <div className="text-[10px] text-muted uppercase">{t('agent.online')}</div>
-            </div>
-            <div>
-              <div className="text-xl font-bold text-secondary">{offlineCount}</div>
-              <div className="text-[10px] text-muted uppercase">{t('agent.offline')}</div>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -1279,14 +1307,14 @@ export default function AgentDashboard() {
                 <div className="flex items-center gap-4">
                   <div
                     className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-                      selectedAgent.status === 'online'
+                      selectedAgentOnline
                         ? 'bg-green-500/20'
                         : 'bg-gray-500/20'
                     }`}
                   >
                     <Server
                       className={`w-6 h-6 ${
-                        selectedAgent.status === 'online'
+                        selectedAgentOnline
                           ? 'text-green-400'
                           : 'text-secondary'
                       }`}
@@ -1375,7 +1403,7 @@ export default function AgentDashboard() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <StatusBadge status={selectedAgent.status} t={t} />
+                  <StatusBadge status={selectedAgentOnline ? 'online' : 'offline'} t={t} />
                   {connectionStatusMap[selectedAgent.id] && (
                     <HeartbeatBadge
                       health={connectionStatusMap[selectedAgent.id].heartbeat_health}
