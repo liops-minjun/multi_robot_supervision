@@ -53,6 +53,7 @@ const edgeTypes = {
 
 const START_NODE_ID = '__behavior_tree_start__'
 const START_NODE_COLOR = '#22c55e'
+const ACTION_NODE_DRAG_HANDLE_SELECTOR = '.action-node-drag-handle'
 
 // Color palette for different action types
 const ACTION_COLORS: Record<string, string> = {
@@ -1203,6 +1204,23 @@ function ActionGraphEditor() {
     }))
   }, [isEditing, setNodes])
 
+  // Limit action node dragging to explicit drag-handle areas only.
+  useEffect(() => {
+    setNodes((nds) => {
+      let changed = false
+      const next = nds.map((node) => {
+        if (node.type !== 'action') return node
+        if (node.dragHandle === ACTION_NODE_DRAG_HANDLE_SELECTOR) return node
+        changed = true
+        return {
+          ...node,
+          dragHandle: ACTION_NODE_DRAG_HANDLE_SELECTOR,
+        }
+      })
+      return changed ? next : nds
+    })
+  }, [setNodes])
+
   // Clear canvas immediately when switching to a different template
   // This prevents showing stale data from the previous template
   useEffect(() => {
@@ -1964,6 +1982,7 @@ function ActionGraphEditor() {
         id: getNodeId(),
         type: isActionLikeNode ? 'action' : 'event',
         position,
+        dragHandle: isActionLikeNode ? ACTION_NODE_DRAG_HANDLE_SELECTOR : undefined,
         data: {
           label: data.label,
           subtype: data.subtype,
@@ -3091,6 +3110,7 @@ function convertActionGraphToGraph(
       id: step.id,
       type: nodeType,
       position: { x, y },
+      dragHandle: nodeType === 'action' ? ACTION_NODE_DRAG_HANDLE_SELECTOR : undefined,
       data: {
         label: step.name || step.id,
         subtype: isTerminal ? (step.terminal_type === 'success' ? 'End' : 'Error') : subtype,
