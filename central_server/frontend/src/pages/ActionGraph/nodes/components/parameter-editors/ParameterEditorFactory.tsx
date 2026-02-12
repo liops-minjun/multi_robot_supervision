@@ -38,6 +38,22 @@ const ParameterEditorFactory = memo(({
   onFieldSourceChange,
 }: ParameterEditorFactoryProps) => {
   const editorType = getEditorType(fieldType, isArray)
+  const isToolFrameTarget = !isArray && isToolFrameField(fieldName)
+
+  // Tool frame is dropdown-only field (no fixed text input, no step-result binding).
+  if (isToolFrameTarget) {
+    return (
+      <ToolFrameFieldEditor
+        fieldName={fieldName}
+        fieldType={fieldType}
+        value={value}
+        onChange={onChange}
+        robotTelemetry={robotTelemetry}
+        fieldSource={fieldSource}
+        onFieldSourceChange={onFieldSourceChange}
+      />
+    )
+  }
 
   // Check if field has a binding (step_result source)
   const hasBinding = fieldSource?.source === 'step_result'
@@ -54,23 +70,6 @@ const ParameterEditorFactory = memo(({
           targetFieldName={fieldName}
         />
       </div>
-    )
-  }
-
-  // Force tool frame editor regardless of inferred schema type
-  // (some schemas expose std_msgs/String as object-like types).
-  if (!isArray && isToolFrameField(fieldName)) {
-    return (
-      <ToolFrameFieldEditor
-        fieldName={fieldName}
-        fieldType={fieldType}
-        value={value}
-        onChange={onChange}
-        robotTelemetry={robotTelemetry}
-        fieldSource={fieldSource}
-        availableSteps={availableSteps}
-        onFieldSourceChange={onFieldSourceChange}
-      />
     )
   }
 
@@ -345,13 +344,12 @@ const PrimitiveEditor = memo(({
 })
 
 const ToolFrameFieldEditor = memo(({
-  fieldName,
+  fieldName: _fieldName,
   fieldType,
   value,
   onChange,
   robotTelemetry,
   fieldSource,
-  availableSteps,
   onFieldSourceChange,
 }: {
   fieldName: string
@@ -360,7 +358,6 @@ const ToolFrameFieldEditor = memo(({
   onChange: (value: unknown) => void
   robotTelemetry?: RobotTelemetryData | null
   fieldSource?: ParameterFieldSource
-  availableSteps?: AvailableStep[]
   onFieldSourceChange?: (source: ParameterFieldSource | undefined) => void
 }) => {
   const normalizedType = (fieldType || '').toLowerCase()
@@ -374,7 +371,13 @@ const ToolFrameFieldEditor = memo(({
   const toolFrameOptions = currentToolFrame && !discoveredToolFrames.includes(currentToolFrame)
     ? [...discoveredToolFrames, currentToolFrame]
     : discoveredToolFrames
-  const isBinding = fieldSource?.source === 'step_result'
+
+  // Force-disable binding/fixed-source for tool_frame fields.
+  useEffect(() => {
+    if (fieldSource?.source && onFieldSourceChange) {
+      onFieldSourceChange(undefined)
+    }
+  }, [fieldSource?.source, onFieldSourceChange])
 
   const handleToolFrameChange = useCallback((nextValue: string) => {
     if (
@@ -389,41 +392,27 @@ const ToolFrameFieldEditor = memo(({
 
   return (
     <div className="space-y-1.5">
-      <ParameterSourceSelector
-        fieldSource={fieldSource}
-        availableSteps={availableSteps || []}
-        onChange={onFieldSourceChange || (() => {})}
-        targetFieldType={fieldType}
-        targetFieldName={fieldName}
-        constantValue={currentToolFrame}
-        onConstantChange={(next) => handleToolFrameChange(String(next ?? ''))}
-        inputType="text"
-      />
-
-      {!isBinding && (
-        <div className="space-y-1">
-          {toolFrameOptions.length > 0 ? (
-            <>
-              <div className="text-[9px] text-cyan-300">base_link 하위 tool0 및 하위 프레임</div>
-              <select
-                value={currentToolFrame}
-                onChange={(e) => handleToolFrameChange(e.target.value)}
-                onClick={(e) => e.stopPropagation()}
-                className="w-full px-2 py-1.5 bg-sunken border border-cyan-500/30 rounded text-[11px] text-primary focus:outline-none focus:border-cyan-400"
-              >
-                <option value="">도구 프레임 선택...</option>
-                {toolFrameOptions.map((frame) => (
-                  <option key={frame} value={frame}>{frame}</option>
-                ))}
-              </select>
-            </>
-          ) : (
-            <div className="text-[9px] text-muted">
-              base_link 하위의 tool0 프레임이 아직 감지되지 않았습니다.
-            </div>
-          )}
-        </div>
-      )}
+      <div className="space-y-1">
+        <div className="text-[9px] text-cyan-300">base_link 하위 tool0 및 하위 프레임</div>
+        <select
+          value={currentToolFrame}
+          onChange={(e) => handleToolFrameChange(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          className="w-full px-2 py-1.5 bg-sunken border border-cyan-500/30 rounded text-[11px] text-primary focus:outline-none focus:border-cyan-400"
+        >
+          <option value="">
+            {toolFrameOptions.length > 0 ? '도구 프레임 선택...' : '감지된 도구 프레임 없음'}
+          </option>
+          {toolFrameOptions.map((frame) => (
+            <option key={frame} value={frame}>{frame}</option>
+          ))}
+        </select>
+        {toolFrameOptions.length === 0 && (
+          <div className="text-[9px] text-muted">
+            base_link 하위의 tool0 프레임이 아직 감지되지 않았습니다.
+          </div>
+        )}
+      </div>
     </div>
   )
 })

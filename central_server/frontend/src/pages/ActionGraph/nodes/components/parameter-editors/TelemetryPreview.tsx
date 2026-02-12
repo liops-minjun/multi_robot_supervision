@@ -76,27 +76,32 @@ const PosePreview = memo(({ liveValue, savedValue, compact, isPoint }: {
   const zDiff = savedPos ? calcDiff(pos.z, savedPos.z) : null
 
   // Orientation (for pose, not point)
+  let rollDiff: ReturnType<typeof calcDiff> | null = null
+  let pitchDiff: ReturnType<typeof calcDiff> | null = null
   let yawDiff: ReturnType<typeof calcDiff> | null = null
-  let liveYaw = 0
+  let liveEuler = { roll: 0, pitch: 0, yaw: 0 }
   const liveOrientation = 'orientation' in liveValue ? liveValue.orientation : undefined
   const savedOrientation = savedValue && 'orientation' in savedValue ? savedValue.orientation : undefined
   if (!isPoint && liveOrientation) {
-    const euler = quaternionToEuler(liveOrientation)
-    liveYaw = euler.yaw
+    liveEuler = quaternionToEuler(liveOrientation)
     if (savedOrientation) {
       const savedEuler = quaternionToEuler(savedOrientation)
-      yawDiff = calcDiff(liveYaw, savedEuler.yaw)
+      rollDiff = calcDiff(liveEuler.roll, savedEuler.roll)
+      pitchDiff = calcDiff(liveEuler.pitch, savedEuler.pitch)
+      yawDiff = calcDiff(liveEuler.yaw, savedEuler.yaw)
     }
   }
 
   if (compact) {
     return (
-      <div className="flex items-center gap-2 px-2 py-1 bg-purple-500/10 rounded border border-purple-500/30">
+      <div className="flex items-start gap-2 px-2 py-1 bg-purple-500/10 rounded border border-purple-500/30">
         <Radio className="w-3 h-3 text-purple-400 animate-pulse" />
-        <span className="text-[9px] text-secondary font-mono">
-          x={formatNumber(pos.x)} y={formatNumber(pos.y)}
-          {!isPoint && ` θ=${formatNumber(liveYaw, 1)}°`}
-        </span>
+        <div className="text-[9px] text-secondary font-mono leading-4">
+          <div>x={formatNumber(pos.x)} y={formatNumber(pos.y)} z={formatNumber(pos.z)}</div>
+          {!isPoint && (
+            <div>r={formatNumber(liveEuler.roll, 1)}° p={formatNumber(liveEuler.pitch, 1)}° y={formatNumber(liveEuler.yaw, 1)}°</div>
+          )}
+        </div>
       </div>
     )
   }
@@ -109,42 +114,54 @@ const PosePreview = memo(({ liveValue, savedValue, compact, isPoint }: {
         {savedValue && <span className="text-[8px] text-muted ml-auto">차이 표시됨</span>}
       </div>
 
-      <div className="grid grid-cols-4 gap-2 text-[10px] font-mono">
-        {/* X */}
-        <div>
-          <div className="text-muted text-[8px]">X</div>
-          <div className="text-primary">{formatNumber(pos.x)}</div>
-          {xDiff && xDiff.direction !== 'same' && (
-            <DiffIndicator diff={xDiff} />
-          )}
-        </div>
-
-        {/* Y */}
-        <div>
-          <div className="text-muted text-[8px]">Y</div>
-          <div className="text-primary">{formatNumber(pos.y)}</div>
-          {yDiff && yDiff.direction !== 'same' && (
-            <DiffIndicator diff={yDiff} />
-          )}
-        </div>
-
-        {/* Z */}
-        <div>
-          <div className="text-muted text-[8px]">Z</div>
-          <div className="text-primary">{formatNumber(pos.z)}</div>
-          {zDiff && zDiff.direction !== 'same' && (
-            <DiffIndicator diff={zDiff} />
-          )}
-        </div>
-
-        {/* Yaw (for pose) */}
-        {!isPoint && (
+      <div className="space-y-1.5 text-[10px] font-mono">
+        <div className="grid grid-cols-3 gap-2">
           <div>
-            <div className="text-muted text-[8px]">Yaw</div>
-            <div className="text-primary">{formatNumber(liveYaw, 1)}°</div>
-            {yawDiff && yawDiff.direction !== 'same' && (
-              <DiffIndicator diff={yawDiff} isAngle />
+            <div className="text-muted text-[8px]">X</div>
+            <div className="text-primary">{formatNumber(pos.x)}</div>
+            {xDiff && xDiff.direction !== 'same' && (
+              <DiffIndicator diff={xDiff} />
             )}
+          </div>
+          <div>
+            <div className="text-muted text-[8px]">Y</div>
+            <div className="text-primary">{formatNumber(pos.y)}</div>
+            {yDiff && yDiff.direction !== 'same' && (
+              <DiffIndicator diff={yDiff} />
+            )}
+          </div>
+          <div>
+            <div className="text-muted text-[8px]">Z</div>
+            <div className="text-primary">{formatNumber(pos.z)}</div>
+            {zDiff && zDiff.direction !== 'same' && (
+              <DiffIndicator diff={zDiff} />
+            )}
+          </div>
+        </div>
+
+        {!isPoint && (
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <div className="text-muted text-[8px]">Roll</div>
+              <div className="text-primary">{formatNumber(liveEuler.roll, 1)}°</div>
+              {rollDiff && rollDiff.direction !== 'same' && (
+                <DiffIndicator diff={rollDiff} isAngle />
+              )}
+            </div>
+            <div>
+              <div className="text-muted text-[8px]">Pitch</div>
+              <div className="text-primary">{formatNumber(liveEuler.pitch, 1)}°</div>
+              {pitchDiff && pitchDiff.direction !== 'same' && (
+                <DiffIndicator diff={pitchDiff} isAngle />
+              )}
+            </div>
+            <div>
+              <div className="text-muted text-[8px]">Yaw</div>
+              <div className="text-primary">{formatNumber(liveEuler.yaw, 1)}°</div>
+              {yawDiff && yawDiff.direction !== 'same' && (
+                <DiffIndicator diff={yawDiff} isAngle />
+              )}
+            </div>
           </div>
         )}
       </div>
