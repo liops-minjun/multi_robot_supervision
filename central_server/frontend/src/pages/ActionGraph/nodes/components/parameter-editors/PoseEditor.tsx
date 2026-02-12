@@ -31,6 +31,7 @@ function frameBaseName(frame: string): string {
 
 function isToolLikeFrame(frame: string): boolean {
   const base = frameBaseName(frame).toLowerCase()
+  if (base.includes('controller')) return false
   return (
     base === 'tool0' ||
     base.includes('tool') ||

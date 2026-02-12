@@ -231,8 +231,12 @@ export function getEditorType(rosType: string, isArray: boolean): EditorType {
 export type StdPrimitiveWrapperType = 'string' | 'boolean' | 'number'
 
 export function getStdPrimitiveWrapperType(rosType: string): StdPrimitiveWrapperType | null {
-  const lower = rosType.toLowerCase()
-  const normalized = lower.replace('std_msgs/', 'std_msgs/msg/')
+  const lower = (rosType || '').toLowerCase().trim()
+  const normalized = lower
+    .replace(/::/g, '/')
+    .replace(/__/g, '/')
+    .replace(/^std_msgs\//, 'std_msgs/msg/')
+    .replace(/\/+/g, '/')
 
   if (normalized === 'std_msgs/msg/string') return 'string'
   if (normalized === 'std_msgs/msg/bool') return 'boolean'

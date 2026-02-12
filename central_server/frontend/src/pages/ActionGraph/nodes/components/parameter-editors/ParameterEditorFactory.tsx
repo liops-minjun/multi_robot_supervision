@@ -57,6 +57,23 @@ const ParameterEditorFactory = memo(({
     )
   }
 
+  // Force tool frame editor regardless of inferred schema type
+  // (some schemas expose std_msgs/String as object-like types).
+  if (!isArray && isToolFrameField(fieldName)) {
+    return (
+      <ToolFrameFieldEditor
+        fieldName={fieldName}
+        fieldType={fieldType}
+        value={value}
+        onChange={onChange}
+        robotTelemetry={robotTelemetry}
+        fieldSource={fieldSource}
+        availableSteps={availableSteps}
+        onFieldSourceChange={onFieldSourceChange}
+      />
+    )
+  }
+
   // Pose types (Pose, PoseStamped, PoseWithCovariance, etc.)
   if (editorType === 'pose') {
     const isStamped = fieldType.toLowerCase().includes('stamped') || fieldType.toLowerCase().includes('covariance')
@@ -303,7 +320,7 @@ const PrimitiveEditor = memo(({
         <div className="space-y-1">
           {toolFrameOptions.length > 0 ? (
             <>
-              <div className="text-[9px] text-cyan-300">tool0 및 하위 감지 도구 프레임</div>
+              <div className="text-[9px] text-cyan-300">base_link 하위 tool0 및 하위 프레임</div>
               <select
                 value={currentToolFrame}
                 onChange={(e) => onChange(e.target.value)}
@@ -318,7 +335,91 @@ const PrimitiveEditor = memo(({
             </>
           ) : (
             <div className="text-[9px] text-muted">
-              tool0 또는 하위 TF 프레임이 아직 감지되지 않았습니다.
+              base_link 하위의 tool0 프레임이 아직 감지되지 않았습니다.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+})
+
+const ToolFrameFieldEditor = memo(({
+  fieldName,
+  fieldType,
+  value,
+  onChange,
+  robotTelemetry,
+  fieldSource,
+  availableSteps,
+  onFieldSourceChange,
+}: {
+  fieldName: string
+  fieldType: string
+  value: unknown
+  onChange: (value: unknown) => void
+  robotTelemetry?: RobotTelemetryData | null
+  fieldSource?: ParameterFieldSource
+  availableSteps?: AvailableStep[]
+  onFieldSourceChange?: (source: ParameterFieldSource | undefined) => void
+}) => {
+  const normalizedType = (fieldType || '').toLowerCase()
+  const stdWrapperType = getStdPrimitiveWrapperType(fieldType)
+  const isStdStringWrapper = stdWrapperType === 'string' ||
+    normalizedType.includes('std_msgs/msg/string') ||
+    normalizedType.includes('std_msgs::msg/string')
+
+  const currentToolFrame = extractWrappedString(value).trim()
+  const discoveredToolFrames = collectToolFramesFromTransforms(robotTelemetry)
+  const toolFrameOptions = currentToolFrame && !discoveredToolFrames.includes(currentToolFrame)
+    ? [...discoveredToolFrames, currentToolFrame]
+    : discoveredToolFrames
+  const isBinding = fieldSource?.source === 'step_result'
+
+  const handleToolFrameChange = useCallback((nextValue: string) => {
+    if (
+      isStdStringWrapper ||
+      (value && typeof value === 'object' && !Array.isArray(value) && 'data' in (value as Record<string, unknown>))
+    ) {
+      onChange({ data: nextValue })
+      return
+    }
+    onChange(nextValue)
+  }, [isStdStringWrapper, onChange, value])
+
+  return (
+    <div className="space-y-1.5">
+      <ParameterSourceSelector
+        fieldSource={fieldSource}
+        availableSteps={availableSteps || []}
+        onChange={onFieldSourceChange || (() => {})}
+        targetFieldType={fieldType}
+        targetFieldName={fieldName}
+        constantValue={currentToolFrame}
+        onConstantChange={(next) => handleToolFrameChange(String(next ?? ''))}
+        inputType="text"
+      />
+
+      {!isBinding && (
+        <div className="space-y-1">
+          {toolFrameOptions.length > 0 ? (
+            <>
+              <div className="text-[9px] text-cyan-300">base_link 하위 tool0 및 하위 프레임</div>
+              <select
+                value={currentToolFrame}
+                onChange={(e) => handleToolFrameChange(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                className="w-full px-2 py-1.5 bg-sunken border border-cyan-500/30 rounded text-[11px] text-primary focus:outline-none focus:border-cyan-400"
+              >
+                <option value="">도구 프레임 선택...</option>
+                {toolFrameOptions.map((frame) => (
+                  <option key={frame} value={frame}>{frame}</option>
+                ))}
+              </select>
+            </>
+          ) : (
+            <div className="text-[9px] text-muted">
+              base_link 하위의 tool0 프레임이 아직 감지되지 않았습니다.
             </div>
           )}
         </div>
@@ -337,17 +438,33 @@ function getFrameBaseName(frame: string): string {
   return (parts[parts.length - 1] || '').toLowerCase()
 }
 
-function isToolLikeFrame(frame: string): boolean {
-  const base = getFrameBaseName(frame)
-  return (
-    base === 'tool0' ||
-    base.includes('tool') ||
-    base.includes('tcp') ||
-    base.includes('eef') ||
-    base.includes('end_effector') ||
-    base.includes('gripper') ||
-    base.includes('flange')
-  )
+function hasAncestorFrame(
+  startFrame: string,
+  targetAncestorFrame: string,
+  childToParents: Map<string, Set<string>>
+): boolean {
+  const normalizedStart = normalizeFrameName(startFrame)
+  const normalizedTarget = normalizeFrameName(targetAncestorFrame)
+  if (!normalizedStart || !normalizedTarget) return false
+  if (normalizedStart === normalizedTarget) return true
+
+  const visited = new Set<string>()
+  const queue: string[] = [normalizedStart]
+
+  while (queue.length > 0) {
+    const current = queue.shift()!
+    if (visited.has(current)) continue
+    visited.add(current)
+
+    const parents = childToParents.get(current)
+    if (!parents) continue
+    for (const parent of parents) {
+      if (parent === normalizedTarget) return true
+      if (!visited.has(parent)) queue.push(parent)
+    }
+  }
+
+  return false
 }
 
 function collectToolFramesFromTransforms(robotTelemetry?: RobotTelemetryData | null): string[] {
@@ -355,6 +472,7 @@ function collectToolFramesFromTransforms(robotTelemetry?: RobotTelemetryData | n
   if (transforms.length === 0) return []
 
   const parentToChildren = new Map<string, Set<string>>()
+  const childToParents = new Map<string, Set<string>>()
   const originalFrameName = new Map<string, string>()
 
   transforms.forEach((transform) => {
@@ -365,6 +483,10 @@ function collectToolFramesFromTransforms(robotTelemetry?: RobotTelemetryData | n
       parentToChildren.set(parent, new Set())
     }
     parentToChildren.get(parent)!.add(child)
+    if (!childToParents.has(child)) {
+      childToParents.set(child, new Set())
+    }
+    childToParents.get(child)!.add(parent)
     if (!originalFrameName.has(parent)) {
       originalFrameName.set(parent, transform.frame_id)
     }
@@ -373,27 +495,33 @@ function collectToolFramesFromTransforms(robotTelemetry?: RobotTelemetryData | n
     }
   })
 
-  const roots = new Set<string>()
-  const toolLikeFrames = new Set<string>()
-  for (const [frame, original] of originalFrameName.entries()) {
+  const tool0Candidates: string[] = []
+  for (const frame of originalFrameName.keys()) {
     if (getFrameBaseName(frame) === 'tool0') {
-      roots.add(frame)
-    }
-    if (isToolLikeFrame(frame)) {
-      toolLikeFrames.add(original || frame)
+      tool0Candidates.push(frame)
     }
   }
 
-  if (roots.size === 0) {
-    return Array.from(toolLikeFrames).sort((a, b) => a.localeCompare(b))
+  if (tool0Candidates.length === 0) {
+    const hasRobotBase = Array.from(originalFrameName.keys()).some((frame) => {
+      const base = getFrameBaseName(frame)
+      return base === 'base_link' || base === 'base'
+    })
+    return hasRobotBase ? ['tool0'] : []
   }
+
+  // Prefer tool0 frames that are descendants of base_link.
+  const roots = tool0Candidates.filter((candidate) =>
+    hasAncestorFrame(candidate, 'base_link', childToParents)
+  )
+  const effectiveRoots = roots.length > 0 ? roots : tool0Candidates
 
   const visited = new Set<string>()
-  const queue: string[] = [...roots]
+  const queue: string[] = [...effectiveRoots]
   const collected = new Set<string>()
 
   // Always include tool0 itself in the selectable tool frames.
-  roots.forEach((root) => {
+  effectiveRoots.forEach((root) => {
     collected.add(originalFrameName.get(root) || root)
   })
 
@@ -420,7 +548,9 @@ function isToolFrameField(fieldName: string): boolean {
   const normalized = fieldName.toLowerCase()
   return (
     normalized === 'tool' ||
+    normalized === 'toolframe' ||
     normalized === 'tool_frame' ||
+    normalized.includes('toolframe') ||
     normalized.includes('tool_frame') ||
     normalized.endsWith('_tool') ||
     normalized.includes('end_effector') ||
@@ -517,7 +647,7 @@ const StdPrimitiveMessageEditor = memo(({
         <div className="space-y-1">
           {toolFrameOptions.length > 0 ? (
             <>
-              <div className="text-[9px] text-cyan-300">tool0 및 하위 감지 도구 프레임</div>
+              <div className="text-[9px] text-cyan-300">base_link 하위 tool0 및 하위 프레임</div>
               <select
                 value={currentToolFrame}
                 onChange={(e) => handleConstantChange(e.target.value)}
@@ -532,7 +662,7 @@ const StdPrimitiveMessageEditor = memo(({
             </>
           ) : (
             <div className="text-[9px] text-muted">
-              tool0 또는 하위 TF 프레임이 아직 감지되지 않았습니다.
+              base_link 하위의 tool0 프레임이 아직 감지되지 않았습니다.
             </div>
           )}
         </div>
