@@ -2984,6 +2984,7 @@ function ActionGraphEditor() {
           <AssignTemplateModal
             template={selectedTemplate}
             currentAssignments={templateAssignments}
+            allAgents={agents}
             onAssign={(agentId) => assignTemplate.mutate({ templateId: selectedTemplate.id, agentId })}
             onUnassign={(agentId) => unassignTemplate.mutate({ templateId: selectedTemplate.id, agentId })}
             onClose={() => setShowAssignModal(false)}
@@ -3391,12 +3392,14 @@ function CompatibilityBar({
 function AssignTemplateModal({
   template,
   currentAssignments,
+  allAgents,
   onAssign,
   onUnassign,
   onClose,
 }: {
   template: ActionGraph
   currentAssignments: AssignmentInfo[]
+  allAgents: Array<{ id: string; name: string; status: string }>
   onAssign: (agentId: string) => void
   onUnassign: (agentId: string) => void
   onClose: () => void
@@ -3404,7 +3407,10 @@ function AssignTemplateModal({
   console.log('[AssignTemplateModal] Rendering, template:', template?.id, template?.name)
   console.log('[AssignTemplateModal] currentAssignments:', currentAssignments)
 
-  const assignedAgentIds = currentAssignments.map(a => a.agent_id)
+  const assignedAgentIdSet = useMemo(
+    () => new Set(currentAssignments.map((assignment) => assignment.agent_id)),
+    [currentAssignments]
+  )
 
   // Fetch compatible agents using capability-based API
   const { data: compatibleAgentsData, isLoading: compatibleLoading, error: compatibleError } = useQuery({
@@ -3419,15 +3425,68 @@ function AssignTemplateModal({
   const requiredActionTypes = compatibleAgentsData?.required_action_types || []
   const compatibleAgents = compatibleAgentsData?.agents || []
 
-  // Sort agents: compatible first, then assigned, then by name
-  const sortedAgents = [...compatibleAgents].sort((a, b) => {
-    const aAssigned = assignedAgentIds.includes(a.agent_id)
-    const bAssigned = assignedAgentIds.includes(b.agent_id)
+  const mergedAgents = useMemo(() => {
+    type ModalAgent = {
+      agent_id: string
+      agent_name: string
+      status: string
+      has_all_capabilities: boolean
+      missing_capabilities: string[]
+    }
+
+    const byAgent = new Map<string, ModalAgent>()
+    const compatibilityMap = new Map(compatibleAgents.map((agent) => [agent.agent_id, agent]))
+
+    for (const agent of allAgents) {
+      const compatibility = compatibilityMap.get(agent.id)
+      const isAssigned = assignedAgentIdSet.has(agent.id)
+
+      byAgent.set(agent.id, {
+        agent_id: agent.id,
+        agent_name: agent.name || agent.id,
+        status: compatibility?.status || agent.status || 'offline',
+        has_all_capabilities: compatibility?.has_all_capabilities ?? isAssigned,
+        missing_capabilities: compatibility?.missing_capabilities || [],
+      })
+    }
+
+    for (const compatibility of compatibleAgents) {
+      if (byAgent.has(compatibility.agent_id)) continue
+      byAgent.set(compatibility.agent_id, {
+        agent_id: compatibility.agent_id,
+        agent_name: compatibility.agent_name || compatibility.agent_id,
+        status: compatibility.status || 'offline',
+        has_all_capabilities: compatibility.has_all_capabilities,
+        missing_capabilities: compatibility.missing_capabilities || [],
+      })
+    }
+
+    for (const assignment of currentAssignments) {
+      if (byAgent.has(assignment.agent_id)) continue
+      byAgent.set(assignment.agent_id, {
+        agent_id: assignment.agent_id,
+        agent_name: assignment.agent_name || assignment.agent_id,
+        status: 'offline',
+        has_all_capabilities: true,
+        missing_capabilities: [],
+      })
+    }
+
+    return Array.from(byAgent.values())
+  }, [allAgents, compatibleAgents, currentAssignments, assignedAgentIdSet])
+
+  // Sort agents: assigned first, then compatible, then online, then by name
+  const sortedAgents = [...mergedAgents].sort((a, b) => {
+    const aAssigned = assignedAgentIdSet.has(a.agent_id)
+    const bAssigned = assignedAgentIdSet.has(b.agent_id)
+    if (aAssigned !== bAssigned) {
+      return aAssigned ? -1 : 1
+    }
     if (a.has_all_capabilities !== b.has_all_capabilities) {
       return a.has_all_capabilities ? -1 : 1
     }
-    if (aAssigned !== bAssigned) {
-      return aAssigned ? -1 : 1
+    if (a.status !== b.status) {
+      return a.status === 'online' ? -1 : 1
     }
     return formatTaskManagerName(a.agent_name).localeCompare(formatTaskManagerName(b.agent_name))
   })
@@ -3484,7 +3543,7 @@ function AssignTemplateModal({
               </div>
             ) : (
               sortedAgents.map(agent => {
-                const isAssigned = assignedAgentIds.includes(agent.agent_id)
+                const isAssigned = assignedAgentIdSet.has(agent.agent_id)
                 const isCompatible = agent.has_all_capabilities
                 const matchedCount = requiredActionTypes.length - (agent.missing_capabilities?.length || 0)
 

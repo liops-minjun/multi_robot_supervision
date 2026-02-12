@@ -32,6 +32,8 @@ function toEditorTelemetry(telemetry: RobotTelemetry | null | undefined): RobotT
       effort: telemetry.joint_state.effort,
     } : undefined,
     odometry: telemetry.odometry ? {
+      frame_id: telemetry.odometry.frame_id,
+      child_frame_id: telemetry.odometry.child_frame_id,
       pose: {
         position: telemetry.odometry.pose.position,
         orientation: telemetry.odometry.pose.orientation,

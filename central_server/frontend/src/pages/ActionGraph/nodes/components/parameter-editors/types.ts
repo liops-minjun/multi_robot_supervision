@@ -27,6 +27,8 @@ export interface RobotTelemetryData {
     effort: number[]
   }
   odometry?: {
+    frame_id?: string
+    child_frame_id?: string
     pose: {
       position: { x: number; y: number; z: number }
       orientation: { x: number; y: number; z: number; w: number }
