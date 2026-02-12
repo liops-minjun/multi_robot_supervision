@@ -41,6 +41,44 @@ const normalizeCapabilityKind = (kind?: string, actionType?: string): 'action' |
   return inferCapabilityKindFromActionType(actionType)
 }
 
+const clamp = (value: number, min: number, max: number): number => {
+  return Math.min(max, Math.max(min, value))
+}
+
+const median = (values: number[]): number => {
+  if (values.length === 0) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle]
+}
+
+const positiveAxisDiffs = (values: number[]): number[] => {
+  if (values.length < 2) return []
+  const sorted = Array.from(new Set(values)).sort((a, b) => a - b)
+  const diffs: number[] = []
+  for (let i = 1; i < sorted.length; i += 1) {
+    const diff = sorted[i] - sorted[i - 1]
+    if (Number.isFinite(diff) && diff > 1) {
+      diffs.push(diff)
+    }
+  }
+  return diffs
+}
+
+const normalizeOutcome = (outcome?: string): string => {
+  const normalized = (outcome || '').toLowerCase()
+  if (!normalized) return ''
+  if (normalized === 'success' || normalized === 'succeeded' || normalized === 'done') {
+    return 'success'
+  }
+  if (normalized === 'failed' || normalized === 'failure' || normalized === 'error' || normalized === 'abort') {
+    return 'failed'
+  }
+  return normalized
+}
+
 // Compact Action Node for Viewer
 const ViewerActionNode = memo(({ data, selected }: NodeProps<any>) => {
   const color = data.color || '#3b82f6'
@@ -265,11 +303,77 @@ function BehaviorTreeViewerInner({
     const edges: Edge[] = []
     const actionMappings = stateDef?.action_mappings || []
     const entryPoint = behaviorTree.entry_point || behaviorTree.steps[0]?.id
+    const fallbackCols = compact ? 2 : 3
+    const fallbackBaseX = compact ? 50 : 300
+    const fallbackBaseY = compact ? 50 : 100
+    const fallbackSpacingX = compact ? 200 : 300
+    const fallbackSpacingY = compact ? 110 : 200
+    const stepPositions = new Map<string, { x: number; y: number }>()
+
+    behaviorTree.steps.forEach((step, index) => {
+      const storedX = step.ui?.x
+      const storedY = step.ui?.y
+      const hasStoredPosition =
+        typeof storedX === 'number' &&
+        typeof storedY === 'number' &&
+        Number.isFinite(storedX) &&
+        Number.isFinite(storedY)
+
+      const x = hasStoredPosition ? storedX : fallbackBaseX + (index % fallbackCols) * fallbackSpacingX
+      const y = hasStoredPosition ? storedY : fallbackBaseY + Math.floor(index / fallbackCols) * fallbackSpacingY
+      stepPositions.set(step.id, { x, y })
+    })
+
+    // Preview cards are intentionally smaller than editor cards.
+    // Compact the coordinate space so ordering stays the same while spacing fits viewer scale.
+    const displayPositions = new Map<string, { x: number; y: number }>()
+    if (stepPositions.size > 0) {
+      const positions = Array.from(stepPositions.values())
+      const minX = Math.min(...positions.map((position) => position.x))
+      const minY = Math.min(...positions.map((position) => position.y))
+
+      const xDiffs = positiveAxisDiffs(positions.map((position) => position.x))
+      const yDiffs = positiveAxisDiffs(positions.map((position) => position.y))
+      const sourceSpacingX = median(xDiffs) || fallbackSpacingX
+      const sourceSpacingY = median(yDiffs) || fallbackSpacingY
+
+      const targetSpacingX = compact ? 170 : 235
+      const targetSpacingY = compact ? 95 : 145
+
+      // Keep relative layout but shrink oversized editor spacing for preview readability.
+      const scaleX = clamp(targetSpacingX / sourceSpacingX, compact ? 0.7 : 0.5, 1)
+      const scaleY = clamp(targetSpacingY / sourceSpacingY, compact ? 0.72 : 0.5, 1)
+
+      const previewBaseX = compact ? 50 : 100
+      const previewBaseY = compact ? 50 : 100
+
+      stepPositions.forEach((position, stepId) => {
+        displayPositions.set(stepId, {
+          x: previewBaseX + (position.x - minX) * scaleX,
+          y: previewBaseY + (position.y - minY) * scaleY,
+        })
+      })
+    }
+
+    let startX = compact ? 20 : 80
+    let startY = compact ? 20 : 100
+    const entryPosition = entryPoint ? displayPositions.get(entryPoint) : null
+    const startOffsetX = compact ? 130 : 190
+    if (entryPosition) {
+      startX = entryPosition.x - startOffsetX
+      startY = entryPosition.y
+    } else if (displayPositions.size > 0) {
+      const positions = Array.from(displayPositions.values())
+      const minX = Math.min(...positions.map((position) => position.x))
+      const sumY = positions.reduce((acc, position) => acc + position.y, 0)
+      startX = minX - startOffsetX
+      startY = sumY / positions.length
+    }
 
     nodes.push({
       id: START_NODE_ID,
       type: 'event',
-      position: { x: 20, y: 20 },
+      position: { x: startX, y: startY },
       data: {
         label: 'Start',
         subtype: 'Start',
@@ -278,9 +382,9 @@ function BehaviorTreeViewerInner({
     })
 
     behaviorTree.steps.forEach((step, index) => {
-      const cols = compact ? 2 : 3
-      const x = 50 + (index % cols) * (compact ? 200 : 280)
-      const y = 50 + Math.floor(index / cols) * (compact ? 100 : 150)
+      const fallbackX = fallbackBaseX + (index % fallbackCols) * fallbackSpacingX
+      const fallbackY = fallbackBaseY + Math.floor(index / fallbackCols) * fallbackSpacingY
+      const position = displayPositions.get(step.id) || { x: fallbackX, y: fallbackY }
 
       let subtype = step.action?.server || step.action?.type || 'Unknown'
       const capabilityKind = normalizeCapabilityKind(step.action?.capability_kind, step.action?.type)
@@ -313,7 +417,7 @@ function BehaviorTreeViewerInner({
       nodes.push({
         id: step.id,
         type: nodeType,
-        position: { x, y },
+        position,
         data: {
           label: step.job_name || step.name || step.id,
           subtype: isTerminal ? (step.terminal_type === 'success' ? 'End' : 'Error') : subtype,
@@ -326,44 +430,73 @@ function BehaviorTreeViewerInner({
         },
       })
 
-      if (step.transition?.on_success) {
-        const target = typeof step.transition.on_success === 'string'
-          ? step.transition.on_success
-          : step.transition.on_success.next
-
-        if (target) {
-          // Use cyan color for active edges, green for inactive
-          const edgeColor = isActive ? '#22d3ee' : '#22c55e'
+      const outcomeTransitions = step.transition?.on_outcomes || []
+      if (outcomeTransitions.length > 0) {
+        outcomeTransitions.forEach((transition, outcomeIndex) => {
+          if (!transition.next) return
+          const normalizedOutcome = normalizeOutcome(transition.outcome)
+          const isSuccessOutcome = normalizedOutcome === 'success'
+          const sourceHandle = isSuccessOutcome ? 'success-out' : 'failure-out'
+          const edgeColor = isSuccessOutcome
+            ? (isActive ? '#22d3ee' : '#22c55e')
+            : '#ef4444'
           edges.push({
-            id: `${step.id}->${target}`,
+            id: `${step.id}-outcome-${outcomeIndex}->${transition.next}`,
             source: step.id,
-            target,
-            sourceHandle: 'success-out',
+            target: transition.next,
+            sourceHandle,
             targetHandle: 'state-in',
             type: 'smoothstep',
             markerEnd: { type: MarkerType.ArrowClosed, color: edgeColor },
-            style: { stroke: edgeColor, strokeWidth: isActive ? 2.5 : 1.5 },
-            animated: isActive,
+            style: {
+              stroke: edgeColor,
+              strokeWidth: isSuccessOutcome && isActive ? 2.5 : 1.5,
+              strokeDasharray: isSuccessOutcome ? undefined : '4,4',
+            },
+            animated: isSuccessOutcome && isActive,
           })
+        })
+      } else {
+        if (step.transition?.on_success) {
+          const target = typeof step.transition.on_success === 'string'
+            ? step.transition.on_success
+            : step.transition.on_success.next
+
+          if (target) {
+            // Use cyan color for active edges, green for inactive
+            const edgeColor = isActive ? '#22d3ee' : '#22c55e'
+            edges.push({
+              id: `${step.id}->${target}`,
+              source: step.id,
+              target,
+              sourceHandle: 'success-out',
+              targetHandle: 'state-in',
+              type: 'smoothstep',
+              markerEnd: { type: MarkerType.ArrowClosed, color: edgeColor },
+              style: { stroke: edgeColor, strokeWidth: isActive ? 2.5 : 1.5 },
+              animated: isActive,
+            })
+          }
         }
-      }
 
-      if (step.transition?.on_failure) {
-        const target = typeof step.transition.on_failure === 'string'
-          ? step.transition.on_failure
-          : step.transition.on_failure.fallback
+        if (step.transition?.on_failure) {
+          const failureTransition = step.transition.on_failure
+          const target = typeof failureTransition === 'string'
+            ? failureTransition
+            : (failureTransition.fallback || (failureTransition as { next?: string }).next)
 
-        if (target) {
-          edges.push({
-            id: `${step.id}-fail->${target}`,
-            source: step.id,
-            target,
-            sourceHandle: 'failure-out',
-            targetHandle: 'state-in',
-            type: 'smoothstep',
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#ef4444' },
-            style: { stroke: '#ef4444', strokeWidth: 1.5, strokeDasharray: '4,4' },
-          })
+          if (target) {
+            edges.push({
+              id: `${step.id}-fail->${target}`,
+              source: step.id,
+              target,
+              sourceHandle: 'failure-out',
+              targetHandle: 'state-in',
+              type: 'smoothstep',
+              markerEnd: { type: MarkerType.ArrowClosed, color: '#ef4444' },
+              style: { stroke: '#ef4444', strokeWidth: 1.5, strokeDasharray: '4,4' },
+            })
+          }
         }
       }
     })

@@ -148,6 +148,21 @@ const getServerLeafName = (serverName?: string): string => {
   return parts[parts.length - 1] || serverName
 }
 
+const normalizeLegacyNamespaceServer = (serverName?: string): string => {
+  if (!serverName) return ''
+
+  const trimmed = serverName.trim()
+  if (!trimmed) return ''
+
+  if (!trimmed.includes('{namespace}')) {
+    return trimmed
+  }
+
+  const withoutToken = trimmed.replace(/\{namespace\}/g, '')
+  const collapsed = withoutToken.replace(/\/{2,}/g, '/')
+  return collapsed || ''
+}
+
 const formatTaskManagerName = (value?: string | null): string => {
   const raw = (value || '').trim()
   if (!raw) return ''
@@ -867,13 +882,12 @@ function ActionGraphEditor() {
   const nodePalette = useMemo(() => {
     const palette: PaletteCategory[] = []
 
-    // Use discovered action servers from the fleet - show all servers with {namespace} pattern
+    // Use discovered action servers from the fleet and keep full server paths.
     if (fleetCapabilities && fleetCapabilities.action_servers && fleetCapabilities.action_servers.length > 0) {
-      // Deduplicate by action type + action server leaf name
+      // Deduplicate by action type + full action server path.
       const serverMap = new Map<string, typeof fleetCapabilities.action_servers[0]>()
       for (const srv of fleetCapabilities.action_servers) {
-        const actionServerName = getServerLeafName(srv.action_server)
-        const dedupeKey = `${srv.action_type}|${actionServerName}`
+        const dedupeKey = `${srv.action_type}|${srv.action_server}`
         const existing = serverMap.get(dedupeKey)
         if (!existing || (!existing.is_available && srv.is_available)) {
           serverMap.set(dedupeKey, srv)
@@ -885,8 +899,7 @@ function ActionGraphEditor() {
         icon: <Server className="w-3.5 h-3.5" />,
         items: Array.from(serverMap.values()).map((srv) => {
           const actionServerName = getServerLeafName(srv.action_server)
-          const namespaceServer = `{namespace}/${actionServerName}`
-          const hideKey = getDiscoveredActionHideKey(srv.action_type, actionServerName)
+          const hideKey = getDiscoveredActionHideKey(srv.action_type, srv.action_server)
 
           return {
             type: 'action',
@@ -894,7 +907,7 @@ function ActionGraphEditor() {
             label: actionServerName || srv.action_server, // Display action server name
             color: getActionColor(srv.action_type),
             actionType: srv.action_type,
-            server: namespaceServer, // Use {namespace} pattern by default
+            server: srv.action_server,
             agentName: srv.agent_name,
             isAvailable: srv.is_available,
             capabilityKind: 'action',
@@ -925,7 +938,6 @@ function ActionGraphEditor() {
         icon: <Cpu className="w-3.5 h-3.5" />,
         items: Array.from(serviceMap.values()).map((srv) => {
           const serviceServerName = getServerLeafName(srv.service_name)
-          const namespaceServer = `{namespace}/${serviceServerName}`
           const hideKey = getDiscoveredServiceHideKey(srv.service_type, srv.service_name)
           const isDefaultHidden = shouldDefaultHideDiscoveredService(srv.service_type, srv.service_name)
           const isExplicitShown = shownDefaultHiddenDiscoveredServiceKeySet.has(hideKey)
@@ -939,7 +951,7 @@ function ActionGraphEditor() {
             label: serviceServerName || srv.service_name,
             color: '#0ea5e9',
             actionType: srv.service_type,
-            server: namespaceServer,
+            server: srv.service_name,
             agentName: srv.agent_name,
             isAvailable: srv.is_available,
             capabilityKind: 'service',
@@ -1184,9 +1196,10 @@ function ActionGraphEditor() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [deleteSelectedElements, edges, isEditing, nodes])
 
-  // Only reset graph when template changes (by ID), not when state definition loads
-  // This prevents newly added nodes from being lost when async data loads
-  const templateId = selectedTemplate?.id
+  // Track the selected template ID independently from query loading state.
+  // Using selectedTemplate?.id here can transiently become undefined during refetch/error
+  // and inadvertently clear the canvas.
+  const templateId = selectedTemplateId
 
   // Keep editability flag inside node data for node-local controls (e.g. delete button).
   useEffect(() => {
@@ -1236,9 +1249,7 @@ function ActionGraphEditor() {
 
   // Load template from server when template data is ready
   useEffect(() => {
-    // IMPORTANT: Verify selectedTemplate.id matches templateId to prevent stale data
-    // When switching templates, templateId changes immediately but selectedTemplate
-    // may still hold the previous template's data until the query completes
+    // IMPORTANT: Verify selectedTemplate.id matches selected template ID.
     if (selectedTemplate && templateId && selectedTemplate.id === templateId) {
       // Skip if we already loaded this template
       if (loadedTemplateIdRef.current === templateId) {
@@ -1270,7 +1281,7 @@ function ActionGraphEditor() {
       }
       setSaveStatus('idle')
     }
-  }, [templateId, selectedTemplate?.id, setNodes, setEdges, selectedStateDef, availableStates, availableAgents, fitView])
+  }, [templateId, selectedTemplate, setNodes, setEdges, selectedStateDef, availableStates, availableAgents, fitView])
 
   // Track if there are unsaved changes (for UI indicator)
   const hasUnsavedChanges = useMemo(() => {
@@ -1412,6 +1423,7 @@ function ActionGraphEditor() {
         node.data.duringStateTargets,
         node.data.duringStates
       )
+      const normalizedNodeServer = normalizeLegacyNamespaceServer(node.data.server)
       const selfDuringTarget = normalizedDuringTargets.find(target =>
         (!target.target_type || target.target_type === 'self' || target.target_type === 'all') &&
         target.state
@@ -1431,7 +1443,7 @@ function ActionGraphEditor() {
         // Regular action steps don't need type set (only 'fallback' or 'terminal' use type)
         action: {
           type: node.data.actionType || node.data.subtype,
-          server: node.data.server,
+          server: normalizedNodeServer || node.data.server,
           capability_kind: normalizeCapabilityKind(
             node.data.capabilityKind,
             node.data.actionType || node.data.subtype
@@ -1671,34 +1683,38 @@ function ActionGraphEditor() {
   const releaseLock = useCallback(async () => {
     if (!selectedTemplateId || !isEditing) return
 
-    // Save changes before releasing lock
-    const { steps, entryPoint, generatedStates } = convertGraphToSteps()
+    // Only auto-save on release when there are real unsaved changes.
+    // This prevents accidental overwrite with empty canvas during transient data unload.
+    if (hasUnsavedChanges) {
+      // Save changes before releasing lock
+      const { steps, entryPoint, generatedStates } = convertGraphToSteps()
 
-    try {
-      // Save the current state
-      const payload: Partial<ActionGraph> = { steps }
-      if (entryPoint) {
-        payload.entry_point = entryPoint
-      }
-      if (generatedStates && generatedStates.length > 0) {
-        payload.states = generatedStates
-      }
-      await templateApi.update(selectedTemplateId, payload, sessionId)
+      try {
+        // Save the current state
+        const payload: Partial<ActionGraph> = { steps }
+        if (entryPoint) {
+          payload.entry_point = entryPoint
+        }
+        if (generatedStates && generatedStates.length > 0) {
+          payload.states = generatedStates
+        }
+        await templateApi.update(selectedTemplateId, payload, sessionId)
 
-      // Update saved state ref
-      lastSavedStateRef.current = {
-        nodes: JSON.stringify(nodes),
-        edges: JSON.stringify(edges),
-      }
+        // Update saved state ref
+        lastSavedStateRef.current = {
+          nodes: JSON.stringify(nodes),
+          edges: JSON.stringify(edges),
+        }
 
-      // Invalidate queries to refetch
-      queryClient.invalidateQueries({ queryKey: ['template', selectedTemplateId] })
-      queryClient.invalidateQueries({ queryKey: ['templates-all'] })
-    } catch (error) {
-      console.error('[Lock] Failed to save before releasing lock:', error)
-      // Ask user if they want to release lock without saving
-      const proceed = window.confirm('저장에 실패했습니다. 저장하지 않고 편집을 종료하시겠습니까?')
-      if (!proceed) return
+        // Invalidate queries to refetch
+        queryClient.invalidateQueries({ queryKey: ['template', selectedTemplateId] })
+        queryClient.invalidateQueries({ queryKey: ['templates-all'] })
+      } catch (error) {
+        console.error('[Lock] Failed to save before releasing lock:', error)
+        // Ask user if they want to release lock without saving
+        const proceed = window.confirm('저장에 실패했습니다. 저장하지 않고 편집을 종료하시겠습니까?')
+        if (!proceed) return
+      }
     }
 
     // Stop heartbeat
@@ -1715,7 +1731,7 @@ function ActionGraphEditor() {
 
     setIsEditing(false)
     setLockStatus({ isLocked: false, lockedBy: null, expiresAt: null, isOwnLock: false })
-  }, [selectedTemplateId, sessionId, isEditing, convertGraphToSteps, nodes, edges, queryClient])
+  }, [selectedTemplateId, sessionId, isEditing, hasUnsavedChanges, convertGraphToSteps, nodes, edges, queryClient])
 
   // Fetch lock status when template changes
   useEffect(() => {
@@ -3051,7 +3067,8 @@ function convertActionGraphToGraph(
     const x = hasStoredPosition ? storedX : 300 + (index % 3) * 300
     const y = hasStoredPosition ? storedY : 100 + Math.floor(index / 3) * 200
 
-    let subtype = step.action?.server || step.action?.type || 'Unknown'
+    const normalizedServer = normalizeLegacyNamespaceServer(step.action?.server)
+    let subtype = normalizedServer || step.action?.type || 'Unknown'
     const capabilityKind = normalizeCapabilityKind(step.action?.capability_kind, step.action?.type)
     let color = capabilityKind === 'service' ? '#0ea5e9' : '#f87171'
     let actionType = step.action?.type
@@ -3116,7 +3133,7 @@ function convertActionGraphToGraph(
         subtype: isTerminal ? (step.terminal_type === 'success' ? 'End' : 'Error') : subtype,
         color,
         actionType,
-        server: step.action?.server,
+        server: normalizedServer || step.action?.server,
         capabilityKind,
         startStates: stepStartStates,
         preStates: stepPreStates,
@@ -3131,7 +3148,7 @@ function convertActionGraphToGraph(
         params: step.action?.params?.data || {},
         fieldSources: step.action?.params?.field_sources,
         waypointId: step.action?.params?.waypoint_id,
-        jobName: step.job_name || (isTerminal ? '' : getDefaultJobNameTemplate(step.action?.server, step.name || step.id)),
+        jobName: step.job_name || (isTerminal ? '' : getDefaultJobNameTemplate(normalizedServer || step.action?.server, step.name || step.id)),
         autoGenerateStates: step.auto_generate_states ?? true,
         finalState: isTerminal ? (step.terminal_type === 'success' ? defaultState : errorState) : undefined,
         preconditions: [],

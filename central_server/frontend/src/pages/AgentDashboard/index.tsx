@@ -735,6 +735,7 @@ export default function AgentDashboard() {
   const [expandedCapabilities, setExpandedCapabilities] = useState<string[]>([])
   const [selectedRobotId, setSelectedRobotId] = useState<string | null>(null)
   const [selectedGraphId, setSelectedGraphId] = useState<string | null>(null)
+  const [detailViewTab, setDetailViewTab] = useState<'actions' | 'services' | 'behaviorTree'>('actions')
   const [logsExpanded, setLogsExpanded] = useState(true)
   const [telemetryExpanded, setTelemetryExpanded] = useState(false)
   const [isEditingName, setIsEditingName] = useState(false)
@@ -969,6 +970,10 @@ export default function AgentDashboard() {
       setSelectedAgentId(null)
     }
   }, [agents, selectedAgentId, statusFilter, connectionStatusMap])
+
+  useEffect(() => {
+    setDetailViewTab('actions')
+  }, [selectedAgentId])
   const pingLatencyText = (() => {
     const latencyUs = selectedAgentConnection?.ping_latency_us
     if (latencyUs != null) {
@@ -1556,7 +1561,48 @@ export default function AgentDashboard() {
 
             {/* Scrollable content area */}
             <div className="flex-1 overflow-auto p-6 space-y-8">
+              {/* Detail Tabs */}
+              <div className="flex flex-wrap items-center gap-2 p-1 bg-surface border border-primary rounded-xl">
+                <button
+                  onClick={() => setDetailViewTab('actions')}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    detailViewTab === 'actions'
+                      ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                      : 'text-secondary hover:bg-elevated border border-transparent'
+                  }`}
+                >
+                  <Activity className="w-3.5 h-3.5" />
+                  감지된 Action
+                  <span className="text-[10px] opacity-80">({actionCapabilities.length})</span>
+                </button>
+                <button
+                  onClick={() => setDetailViewTab('services')}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    detailViewTab === 'services'
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                      : 'text-secondary hover:bg-elevated border border-transparent'
+                  }`}
+                >
+                  <Server className="w-3.5 h-3.5" />
+                  감지된 Service
+                  <span className="text-[10px] opacity-80">({serviceCapabilities.length})</span>
+                </button>
+                <button
+                  onClick={() => setDetailViewTab('behaviorTree')}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    detailViewTab === 'behaviorTree'
+                      ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
+                      : 'text-secondary hover:bg-elevated border border-transparent'
+                  }`}
+                >
+                  <Layout className="w-3.5 h-3.5" />
+                  현재 할당 BT
+                  <span className="text-[10px] opacity-80">({sortedActionGraphs.length})</span>
+                </button>
+              </div>
+
               {/* ROS2 Action Servers */}
+              {detailViewTab === 'actions' && (
               <div>
                 <div className="flex items-center gap-2 mb-4">
                   <Activity className="w-5 h-5 text-rose-400" />
@@ -1606,8 +1652,10 @@ export default function AgentDashboard() {
                   </div>
                 )}
               </div>
+              )}
 
               {/* ROS2 Service Servers */}
+              {detailViewTab === 'services' && (
               <div>
                 <div className="flex items-center gap-2 mb-4">
                   <Server className="w-5 h-5 text-cyan-400" />
@@ -1641,8 +1689,10 @@ export default function AgentDashboard() {
                   </div>
                 )}
               </div>
+              )}
 
               {/* Behavior Tree */}
+              {detailViewTab === 'behaviorTree' && (
               <div>
                 <div className="flex items-center gap-2 mb-4">
                   <Layout className="w-5 h-5 text-cyan-400" />
@@ -1966,9 +2016,10 @@ export default function AgentDashboard() {
                   </div>
                 )}
               </div>
+              )}
 
               {/* Telemetry */}
-              {selectedRobotId && (
+              {detailViewTab === 'behaviorTree' && selectedRobotId && (
                 <div>
                   <TelemetryPanel
                     telemetry={robotTelemetry || null}
@@ -1981,6 +2032,7 @@ export default function AgentDashboard() {
               )}
 
               {/* Execution Logs */}
+              {detailViewTab === 'behaviorTree' && (
               <div>
                 <ExecutionLogsPanel
                   logs={agentLogs}
@@ -1989,6 +2041,7 @@ export default function AgentDashboard() {
                   onToggleExpand={() => setLogsExpanded(!logsExpanded)}
                 />
               </div>
+              )}
             </div>
           </>
         ) : (

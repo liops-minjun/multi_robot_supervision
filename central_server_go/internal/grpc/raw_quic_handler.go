@@ -1789,6 +1789,9 @@ func (h *RawQUICHandler) handleRegisterAgent(
 		agent.Status = "online"
 		agent.IPAddress = sql.NullString{String: remoteAddr, Valid: true}
 		agent.LastSeen = sql.NullTime{Time: time.Now(), Valid: true}
+		if req.Namespace != "" {
+			agent.Namespace = req.Namespace
+		}
 		if req.HardwareFingerprint != "" {
 			agent.HardwareFingerprint = sql.NullString{String: req.HardwareFingerprint, Valid: true}
 		}

@@ -477,8 +477,8 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
               onChange={(e) => { e.stopPropagation(); updateData('server', e.target.value) }}
               onClick={(e) => e.stopPropagation()}
               className="flex-1 min-w-0 text-[9px] font-mono text-secondary bg-transparent border-b border-transparent hover:border-gray-600 focus:border-white focus:outline-none truncate"
-              placeholder={capabilityKind === 'service' ? '{namespace}/service_server' : '{namespace}/action_server'}
-              title={`${capabilityKind === 'service' ? 'Service' : 'Action'} Server. {namespace}는 배포 시 로봇 매니저의 namespace로 치환됩니다.`}
+              placeholder={capabilityKind === 'service' ? '/service_server' : '/action_server'}
+              title={`${capabilityKind === 'service' ? 'Service' : 'Action'} Server full path`}
             />
           {data.actionType && (
             <span className="text-[8px] px-1 py-0.5 rounded truncate flex-shrink-0" style={{ backgroundColor: `${color}30`, color }}>
