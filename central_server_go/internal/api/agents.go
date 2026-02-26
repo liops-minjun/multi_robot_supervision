@@ -3,7 +3,9 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
+	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"central_server_go/internal/db"
@@ -21,9 +23,95 @@ func (s *Server) ListAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	responses := make([]AgentResponse, len(agents))
-	for i, agent := range agents {
-		responses[i] = agentToResponse(&agent, s.stateManager)
+	offlineMode := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("offline_mode")))
+	if offlineMode == "" {
+		offlineMode = "all"
+	}
+	cleanupStale := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("cleanup_stale")), "true")
+
+	needsAssignmentLookup := offlineMode == "template_only" || cleanupStale
+	assignedAgentIDs := make(map[string]struct{})
+	if needsAssignmentLookup {
+		assignments, err := s.repo.GetAllAgentBehaviorTrees()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		graphIDs := make([]string, 0, len(assignments))
+		graphIDSet := make(map[string]struct{})
+		for _, assignment := range assignments {
+			graphID := strings.TrimSpace(assignment.BehaviorTreeID)
+			if graphID == "" {
+				continue
+			}
+			if _, exists := graphIDSet[graphID]; exists {
+				continue
+			}
+			graphIDSet[graphID] = struct{}{}
+			graphIDs = append(graphIDs, graphID)
+		}
+		graphsMap, err := s.repo.GetBehaviorTreesByIDs(graphIDs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		for _, assignment := range assignments {
+			agentID := strings.TrimSpace(assignment.AgentID)
+			if agentID == "" {
+				continue
+			}
+
+			graphID := strings.TrimSpace(assignment.BehaviorTreeID)
+			graph := graphsMap[graphID]
+			if graph == nil || !graph.IsTemplate {
+				continue
+			}
+			assignedAgentIDs[agentID] = struct{}{}
+		}
+	}
+
+	responses := make([]AgentResponse, 0, len(agents))
+	staleAgentIDs := make([]string, 0)
+	for _, agent := range agents {
+		response := agentToResponse(&agent, s.stateManager)
+		isOnline := response.Status == "online"
+		_, hasAssignedTemplate := assignedAgentIDs[agent.ID]
+		hasTemplate := hasAssignedTemplate || response.HasCapabilityTemplate
+
+		include := true
+		switch offlineMode {
+		case "none":
+			include = isOnline
+		case "template_only":
+			include = isOnline || hasTemplate
+		case "all":
+			include = true
+		default:
+			include = true
+		}
+
+		if !isOnline && !hasTemplate && cleanupStale {
+			staleAgentIDs = append(staleAgentIDs, agent.ID)
+			include = false
+		}
+
+		if include {
+			responses = append(responses, response)
+		}
+	}
+
+	if cleanupStale {
+		for _, agentID := range staleAgentIDs {
+			if err := s.repo.DeleteAgentBehaviorTreesByAgent(agentID); err != nil {
+				log.Printf("[Agents] cleanup_stale failed to remove assignments for %s: %v", agentID, err)
+				continue
+			}
+			if err := s.repo.DeleteAgent(agentID); err != nil {
+				log.Printf("[Agents] cleanup_stale failed to remove agent %s: %v", agentID, err)
+			}
+		}
 	}
 
 	writeJSON(w, http.StatusOK, responses)
@@ -155,6 +243,45 @@ func (s *Server) DeleteAgent(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"message": "Agent deleted",
+	})
+}
+
+// SaveAgentCapabilityTemplate persists current capabilities as an offline RTM template snapshot.
+func (s *Server) SaveAgentCapabilityTemplate(w http.ResponseWriter, r *http.Request) {
+	agentID := chi.URLParam(r, "agentID")
+
+	agent, err := s.repo.GetAgent(agentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if agent == nil {
+		writeError(w, http.StatusNotFound, "Agent not found")
+		return
+	}
+
+	capabilityCount, err := s.repo.SaveAgentCapabilityTemplate(agentID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	updatedAgent, err := s.repo.GetAgent(agentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if updatedAgent == nil {
+		writeError(w, http.StatusNotFound, "Agent not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success":          true,
+		"agent_id":         agentID,
+		"capability_count": capabilityCount,
+		"saved_at":         time.Now().UTC(),
+		"agent":            agentToResponse(updatedAgent, s.stateManager),
 	})
 }
 
@@ -973,6 +1100,8 @@ func agentToResponse(agent *db.Agent, sm *state.GlobalStateManager) AgentRespons
 		Status:     agent.Status,
 		RobotCount: 1, // 1 Agent = 1 Robot in this architecture
 		CreatedAt:  agent.CreatedAt,
+		HasCapabilityTemplate:         agent.CapabilityTemplateSavedAt.Valid,
+		CapabilityTemplateCapabilityCount: agent.CapabilityTemplateCapabilityCount,
 	}
 
 	if agent.IPAddress.Valid {
@@ -980,6 +1109,9 @@ func agentToResponse(agent *db.Agent, sm *state.GlobalStateManager) AgentRespons
 	}
 	if agent.LastSeen.Valid {
 		response.LastSeen = &agent.LastSeen.Time
+	}
+	if agent.CapabilityTemplateSavedAt.Valid {
+		response.CapabilityTemplateSavedAt = &agent.CapabilityTemplateSavedAt.Time
 	}
 
 	// In 1:1 model, agent ID is also the robot ID

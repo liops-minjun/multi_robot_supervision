@@ -53,13 +53,14 @@ const edgeTypes = {
 
 const START_NODE_ID = '__behavior_tree_start__'
 const START_NODE_COLOR = '#22c55e'
+const ACTION_NODE_DRAG_HANDLE_SELECTOR = '.action-node-drag-handle'
 
 // Color palette for different action types
 const ACTION_COLORS: Record<string, string> = {
-  'nav2_msgs/NavigateToPose': '#3b82f6',
-  'control_msgs/FollowJointTrajectory': '#8b5cf6',
-  'control_msgs/GripperCommand': '#f59e0b',
-  'std_srvs/Trigger': '#06b6d4',
+  'nav2_msgs/NavigateToPose': '#fb7185',
+  'control_msgs/FollowJointTrajectory': '#f97316',
+  'control_msgs/GripperCommand': '#ef4444',
+  'std_srvs/Trigger': '#0ea5e9',
 }
 
 // State color categories
@@ -92,7 +93,7 @@ const OUTCOME_EDGE_COLORS: Record<ActionOutcome, string> = {
 }
 
 const getActionColor = (actionType: string): string => {
-  return ACTION_COLORS[actionType] || '#6b7280'
+  return ACTION_COLORS[actionType] || '#f87171'
 }
 
 const HIDDEN_DISCOVERED_ACTIONS_STORAGE_KEY = 'action-graph.hidden-discovered-actions.v1'
@@ -145,6 +146,21 @@ const getServerLeafName = (serverName?: string): string => {
   if (!serverName) return ''
   const parts = serverName.split('/').filter(Boolean)
   return parts[parts.length - 1] || serverName
+}
+
+const normalizeLegacyNamespaceServer = (serverName?: string): string => {
+  if (!serverName) return ''
+
+  const trimmed = serverName.trim()
+  if (!trimmed) return ''
+
+  if (!trimmed.includes('{namespace}')) {
+    return trimmed
+  }
+
+  const withoutToken = trimmed.replace(/\{namespace\}/g, '')
+  const collapsed = withoutToken.replace(/\/{2,}/g, '/')
+  return collapsed || ''
 }
 
 const formatTaskManagerName = (value?: string | null): string => {
@@ -520,6 +536,8 @@ function ActionGraphEditor() {
   const [nodeSearchQuery, setNodeSearchQuery] = useState('')
   const [discoveredActionTab, setDiscoveredActionTab] = useState<DiscoveryTab>('visible')
   const [discoveredServiceTab, setDiscoveredServiceTab] = useState<DiscoveryTab>('visible')
+  const [discoveredActionLifecycleOnly, setDiscoveredActionLifecycleOnly] = useState(false)
+  const [discoveredServiceLifecycleOnly, setDiscoveredServiceLifecycleOnly] = useState(false)
   const [hiddenDiscoveredActionKeys, setHiddenDiscoveredActionKeys] = useState<string[]>(() => loadHiddenDiscoveredActionKeys())
   const [hiddenDiscoveredServiceKeys, setHiddenDiscoveredServiceKeys] = useState<string[]>(() => loadHiddenDiscoveredServiceKeys())
   const [shownDefaultHiddenDiscoveredServiceKeys, setShownDefaultHiddenDiscoveredServiceKeys] = useState<string[]>(() => loadShownDefaultHiddenDiscoveredServiceKeys())
@@ -555,14 +573,22 @@ function ActionGraphEditor() {
 
   // Fetch all agents for capability-based workflow
   const { data: agents = [] } = useQuery({
-    queryKey: ['agents-list'],
-    queryFn: () => agentApi.list(),
+    queryKey: ['agents-list', 'template-only'],
+    queryFn: () => agentApi.list({
+      offlineMode: 'template_only',
+    }),
   })
 
   const availableAgents = useMemo(
     () => agents
-      .filter(agent => agent.status !== 'offline')
       .map(agent => ({ id: agent.id, name: agent.name })),
+    [agents]
+  )
+  const sortedAgentsForFilter = useMemo(
+    () => [...agents].sort((a, b) => {
+      if (a.status !== b.status) return a.status === 'online' ? -1 : 1
+      return (a.name || '').localeCompare(b.name || '')
+    }),
     [agents]
   )
 
@@ -610,6 +636,7 @@ function ActionGraphEditor() {
       }
       const fleetCaps = await capabilityApi.listAll()
       const rawActionServers = fleetCaps.action_servers || []
+      const rawServiceServers = fleetCaps.service_servers || []
       const normalizedActionServers = rawActionServers.filter((srv: any) =>
         normalizeCapabilityKind(srv?.capability_kind, srv?.action_type) === 'action'
       )
@@ -630,7 +657,39 @@ function ActionGraphEditor() {
       return {
         ...fleetCaps,
         action_servers: normalizedActionServers,
-        service_servers: [...(fleetCaps.service_servers || []), ...inferredServiceServers],
+        service_servers: [...rawServiceServers, ...inferredServiceServers],
+      }
+    },
+  })
+
+  // Always fetch all RTM capability templates (online + offline snapshot).
+  const { data: allFleetCapabilities } = useQuery({
+    queryKey: ['fleet-capabilities-all'],
+    queryFn: async () => {
+      const fleetCaps = await capabilityApi.listAll()
+      const rawActionServers = fleetCaps.action_servers || []
+      const rawServiceServers = fleetCaps.service_servers || []
+      const normalizedActionServers = rawActionServers.filter((srv: any) =>
+        normalizeCapabilityKind(srv?.capability_kind, srv?.action_type) === 'action'
+      )
+      const inferredServiceServers = rawActionServers
+        .filter((srv: any) => normalizeCapabilityKind(srv?.capability_kind, srv?.action_type) === 'service')
+        .map((srv: any) => ({
+          service_type: srv.action_type,
+          service_name: srv.action_server,
+          agent_id: srv.agent_id,
+          agent_name: srv.agent_name,
+          node_name: srv.node_name,
+          is_lifecycle_node: srv.is_lifecycle_node ?? false,
+          is_available: srv.is_available ?? false,
+          lifecycle_state: srv.lifecycle_state || 'unknown',
+          status: srv.status || 'unknown',
+        }))
+
+      return {
+        ...fleetCaps,
+        action_servers: normalizedActionServers,
+        service_servers: [...rawServiceServers, ...inferredServiceServers],
       }
     },
   })
@@ -733,13 +792,6 @@ function ActionGraphEditor() {
     enabled: !!selectedTemplateId,
   })
 
-  // Fetch compatible agents for selected template
-  const { data: compatibleAgentsData } = useQuery({
-    queryKey: ['template-compatible-agents', selectedTemplateId],
-    queryFn: () => templateApi.getCompatibleAgents(selectedTemplateId!),
-    enabled: !!selectedTemplateId,
-  })
-
   // Mutations
   const deleteTemplate = useMutation({
     mutationFn: (id: string) => templateApi.delete(id),
@@ -830,13 +882,12 @@ function ActionGraphEditor() {
   const nodePalette = useMemo(() => {
     const palette: PaletteCategory[] = []
 
-    // Use discovered action servers from the fleet - show all servers with {namespace} pattern
+    // Use discovered action servers from the fleet and keep full server paths.
     if (fleetCapabilities && fleetCapabilities.action_servers && fleetCapabilities.action_servers.length > 0) {
-      // Deduplicate by action type + action server leaf name
+      // Deduplicate by action type + full action server path.
       const serverMap = new Map<string, typeof fleetCapabilities.action_servers[0]>()
       for (const srv of fleetCapabilities.action_servers) {
-        const actionServerName = getServerLeafName(srv.action_server)
-        const dedupeKey = `${srv.action_type}|${actionServerName}`
+        const dedupeKey = `${srv.action_type}|${srv.action_server}`
         const existing = serverMap.get(dedupeKey)
         if (!existing || (!existing.is_available && srv.is_available)) {
           serverMap.set(dedupeKey, srv)
@@ -848,8 +899,7 @@ function ActionGraphEditor() {
         icon: <Server className="w-3.5 h-3.5" />,
         items: Array.from(serverMap.values()).map((srv) => {
           const actionServerName = getServerLeafName(srv.action_server)
-          const namespaceServer = `{namespace}/${actionServerName}`
-          const hideKey = getDiscoveredActionHideKey(srv.action_type, actionServerName)
+          const hideKey = getDiscoveredActionHideKey(srv.action_type, srv.action_server)
 
           return {
             type: 'action',
@@ -857,7 +907,7 @@ function ActionGraphEditor() {
             label: actionServerName || srv.action_server, // Display action server name
             color: getActionColor(srv.action_type),
             actionType: srv.action_type,
-            server: namespaceServer, // Use {namespace} pattern by default
+            server: srv.action_server,
             agentName: srv.agent_name,
             isAvailable: srv.is_available,
             capabilityKind: 'action',
@@ -888,7 +938,6 @@ function ActionGraphEditor() {
         icon: <Cpu className="w-3.5 h-3.5" />,
         items: Array.from(serviceMap.values()).map((srv) => {
           const serviceServerName = getServerLeafName(srv.service_name)
-          const namespaceServer = `{namespace}/${serviceServerName}`
           const hideKey = getDiscoveredServiceHideKey(srv.service_type, srv.service_name)
           const isDefaultHidden = shouldDefaultHideDiscoveredService(srv.service_type, srv.service_name)
           const isExplicitShown = shownDefaultHiddenDiscoveredServiceKeySet.has(hideKey)
@@ -902,7 +951,7 @@ function ActionGraphEditor() {
             label: serviceServerName || srv.service_name,
             color: '#0ea5e9',
             actionType: srv.service_type,
-            server: namespaceServer,
+            server: srv.service_name,
             agentName: srv.agent_name,
             isAvailable: srv.is_available,
             capabilityKind: 'service',
@@ -1037,6 +1086,66 @@ function ActionGraphEditor() {
     }))
   }, [edges, deleteEdge])
 
+  const requiredCapabilityKeys = useMemo(() => {
+    const required = new Set<string>()
+    for (const node of nodes) {
+      if (node.type !== 'action') continue
+      const actionType = (node.data.actionType || node.data.subtype || '').trim()
+      if (!actionType) continue
+      const capabilityKind = normalizeCapabilityKind(node.data.capabilityKind, actionType)
+      required.add(`${capabilityKind}:${actionType}`)
+    }
+    return Array.from(required).sort()
+  }, [nodes])
+
+  const capabilityTemplateByAgent = useMemo(() => {
+    const byAgent = new Map<string, Set<string>>()
+    const ensureAgent = (agentID: string) => {
+      if (!byAgent.has(agentID)) byAgent.set(agentID, new Set<string>())
+      return byAgent.get(agentID)!
+    }
+
+    for (const srv of allFleetCapabilities?.action_servers || []) {
+      if (!srv?.agent_id || !srv?.action_type) continue
+      ensureAgent(srv.agent_id).add(`action:${srv.action_type}`)
+    }
+    for (const srv of allFleetCapabilities?.service_servers || []) {
+      if (!srv?.agent_id || !srv?.service_type) continue
+      ensureAgent(srv.agent_id).add(`service:${srv.service_type}`)
+    }
+
+    return byAgent
+  }, [allFleetCapabilities])
+
+  const compatibleRtmTemplates = useMemo(() => {
+    const templates = agents
+      .filter((agent) => capabilityTemplateByAgent.has(agent.id) || agent.has_capability_template)
+      .map((agent) => {
+        const providedCapabilities = capabilityTemplateByAgent.get(agent.id) || new Set<string>()
+        const missing = requiredCapabilityKeys.filter((required) => !providedCapabilities.has(required))
+        return {
+          id: agent.id,
+          name: formatTaskManagerName(agent.name) || formatTaskManagerName(agent.id) || agent.id,
+          status: agent.status,
+          hasAllCapabilities: missing.length === 0,
+          missingCount: missing.length,
+          totalCapabilities: providedCapabilities.size,
+        }
+      })
+      .sort((a, b) => {
+        if (a.hasAllCapabilities !== b.hasAllCapabilities) return a.hasAllCapabilities ? -1 : 1
+        if (a.status !== b.status) return a.status === 'online' ? -1 : 1
+        return a.name.localeCompare(b.name)
+      })
+
+    return templates
+  }, [agents, capabilityTemplateByAgent, requiredCapabilityKeys])
+
+  const compatibleRtmTemplateCount = useMemo(
+    () => compatibleRtmTemplates.filter((agent) => agent.hasAllCapabilities).length,
+    [compatibleRtmTemplates]
+  )
+
   const deleteSelectedElements = useCallback(() => {
     if (!isEditing) return
 
@@ -1087,9 +1196,10 @@ function ActionGraphEditor() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [deleteSelectedElements, edges, isEditing, nodes])
 
-  // Only reset graph when template changes (by ID), not when state definition loads
-  // This prevents newly added nodes from being lost when async data loads
-  const templateId = selectedTemplate?.id
+  // Track the selected template ID independently from query loading state.
+  // Using selectedTemplate?.id here can transiently become undefined during refetch/error
+  // and inadvertently clear the canvas.
+  const templateId = selectedTemplateId
 
   // Keep editability flag inside node data for node-local controls (e.g. delete button).
   useEffect(() => {
@@ -1107,6 +1217,23 @@ function ActionGraphEditor() {
     }))
   }, [isEditing, setNodes])
 
+  // Limit action node dragging to explicit drag-handle areas only.
+  useEffect(() => {
+    setNodes((nds) => {
+      let changed = false
+      const next = nds.map((node) => {
+        if (node.type !== 'action') return node
+        if (node.dragHandle === ACTION_NODE_DRAG_HANDLE_SELECTOR) return node
+        changed = true
+        return {
+          ...node,
+          dragHandle: ACTION_NODE_DRAG_HANDLE_SELECTOR,
+        }
+      })
+      return changed ? next : nds
+    })
+  }, [setNodes])
+
   // Clear canvas immediately when switching to a different template
   // This prevents showing stale data from the previous template
   useEffect(() => {
@@ -1122,9 +1249,7 @@ function ActionGraphEditor() {
 
   // Load template from server when template data is ready
   useEffect(() => {
-    // IMPORTANT: Verify selectedTemplate.id matches templateId to prevent stale data
-    // When switching templates, templateId changes immediately but selectedTemplate
-    // may still hold the previous template's data until the query completes
+    // IMPORTANT: Verify selectedTemplate.id matches selected template ID.
     if (selectedTemplate && templateId && selectedTemplate.id === templateId) {
       // Skip if we already loaded this template
       if (loadedTemplateIdRef.current === templateId) {
@@ -1156,7 +1281,7 @@ function ActionGraphEditor() {
       }
       setSaveStatus('idle')
     }
-  }, [templateId, selectedTemplate?.id, setNodes, setEdges, selectedStateDef, availableStates, availableAgents, fitView])
+  }, [templateId, selectedTemplate, setNodes, setEdges, selectedStateDef, availableStates, availableAgents, fitView])
 
   // Track if there are unsaved changes (for UI indicator)
   const hasUnsavedChanges = useMemo(() => {
@@ -1256,6 +1381,10 @@ function ActionGraphEditor() {
             name: node.data.label,
             type: 'terminal',
             terminal_type: node.data.subtype === 'Error' ? 'failure' : 'success',
+            ui: {
+              x: node.position.x,
+              y: node.position.y,
+            },
           })
         }
         // Start nodes don't need to be saved as steps
@@ -1294,6 +1423,7 @@ function ActionGraphEditor() {
         node.data.duringStateTargets,
         node.data.duringStates
       )
+      const normalizedNodeServer = normalizeLegacyNamespaceServer(node.data.server)
       const selfDuringTarget = normalizedDuringTargets.find(target =>
         (!target.target_type || target.target_type === 'self' || target.target_type === 'all') &&
         target.state
@@ -1303,13 +1433,17 @@ function ActionGraphEditor() {
       const step: ActionGraph['steps'][0] = {
         id: node.id,
         name: node.data.label,
+        ui: {
+          x: node.position.x,
+          y: node.position.y,
+        },
         // Job name for this step (user-defined name)
         job_name: node.data.jobName || undefined,
         auto_generate_states: node.data.autoGenerateStates || undefined,
         // Regular action steps don't need type set (only 'fallback' or 'terminal' use type)
         action: {
           type: node.data.actionType || node.data.subtype,
-          server: node.data.server,
+          server: normalizedNodeServer || node.data.server,
           capability_kind: normalizeCapabilityKind(
             node.data.capabilityKind,
             node.data.actionType || node.data.subtype
@@ -1549,34 +1683,38 @@ function ActionGraphEditor() {
   const releaseLock = useCallback(async () => {
     if (!selectedTemplateId || !isEditing) return
 
-    // Save changes before releasing lock
-    const { steps, entryPoint, generatedStates } = convertGraphToSteps()
+    // Only auto-save on release when there are real unsaved changes.
+    // This prevents accidental overwrite with empty canvas during transient data unload.
+    if (hasUnsavedChanges) {
+      // Save changes before releasing lock
+      const { steps, entryPoint, generatedStates } = convertGraphToSteps()
 
-    try {
-      // Save the current state
-      const payload: Partial<ActionGraph> = { steps }
-      if (entryPoint) {
-        payload.entry_point = entryPoint
-      }
-      if (generatedStates && generatedStates.length > 0) {
-        payload.states = generatedStates
-      }
-      await templateApi.update(selectedTemplateId, payload, sessionId)
+      try {
+        // Save the current state
+        const payload: Partial<ActionGraph> = { steps }
+        if (entryPoint) {
+          payload.entry_point = entryPoint
+        }
+        if (generatedStates && generatedStates.length > 0) {
+          payload.states = generatedStates
+        }
+        await templateApi.update(selectedTemplateId, payload, sessionId)
 
-      // Update saved state ref
-      lastSavedStateRef.current = {
-        nodes: JSON.stringify(nodes),
-        edges: JSON.stringify(edges),
-      }
+        // Update saved state ref
+        lastSavedStateRef.current = {
+          nodes: JSON.stringify(nodes),
+          edges: JSON.stringify(edges),
+        }
 
-      // Invalidate queries to refetch
-      queryClient.invalidateQueries({ queryKey: ['template', selectedTemplateId] })
-      queryClient.invalidateQueries({ queryKey: ['templates-all'] })
-    } catch (error) {
-      console.error('[Lock] Failed to save before releasing lock:', error)
-      // Ask user if they want to release lock without saving
-      const proceed = window.confirm('저장에 실패했습니다. 저장하지 않고 편집을 종료하시겠습니까?')
-      if (!proceed) return
+        // Invalidate queries to refetch
+        queryClient.invalidateQueries({ queryKey: ['template', selectedTemplateId] })
+        queryClient.invalidateQueries({ queryKey: ['templates-all'] })
+      } catch (error) {
+        console.error('[Lock] Failed to save before releasing lock:', error)
+        // Ask user if they want to release lock without saving
+        const proceed = window.confirm('저장에 실패했습니다. 저장하지 않고 편집을 종료하시겠습니까?')
+        if (!proceed) return
+      }
     }
 
     // Stop heartbeat
@@ -1593,7 +1731,7 @@ function ActionGraphEditor() {
 
     setIsEditing(false)
     setLockStatus({ isLocked: false, lockedBy: null, expiresAt: null, isOwnLock: false })
-  }, [selectedTemplateId, sessionId, isEditing, convertGraphToSteps, nodes, edges, queryClient])
+  }, [selectedTemplateId, sessionId, isEditing, hasUnsavedChanges, convertGraphToSteps, nodes, edges, queryClient])
 
   // Fetch lock status when template changes
   useEffect(() => {
@@ -1772,7 +1910,20 @@ function ActionGraphEditor() {
         },
       }
       console.log('[onConnect] Creating edge:', newEdge)
-      setEdges((eds) => addEdge(newEdge, eds))
+      setEdges((eds) => {
+        const isSameConnection = (edge: Edge) =>
+          edge.source === params.source &&
+          edge.target === params.target &&
+          (edge.sourceHandle ?? null) === (sourceHandleId ?? null) &&
+          (edge.targetHandle ?? null) === (targetHandleId ?? null)
+
+        // Toggle behavior: connecting the exact same handles again removes the edge.
+        if (eds.some(isSameConnection)) {
+          return eds.filter(edge => !isSameConnection(edge))
+        }
+
+        return addEdge(newEdge, eds)
+      })
     },
     [nodes, setEdges]
   )
@@ -1847,6 +1998,7 @@ function ActionGraphEditor() {
         id: getNodeId(),
         type: isActionLikeNode ? 'action' : 'event',
         position,
+        dragHandle: isActionLikeNode ? ACTION_NODE_DRAG_HANDLE_SELECTOR : undefined,
         data: {
           label: data.label,
           subtype: data.subtype,
@@ -1963,7 +2115,7 @@ function ActionGraphEditor() {
   return (
     <div className="h-screen flex bg-base">
       {/* Left Sidebar - Task definitions */}
-      <div className="w-64 bg-surface border-r border-primary flex flex-col">
+      <div className="w-44 bg-surface border-r border-primary flex flex-col">
         {/* Task list */}
         <div className="flex-1 overflow-y-auto">
           <div className="py-2">
@@ -2149,94 +2301,65 @@ function ActionGraphEditor() {
               className="w-full px-2 py-1.5 bg-elevated border border-primary rounded-lg text-xs text-primary focus:outline-none focus:border-blue-500 cursor-pointer"
             >
               <option value="">All RTMs</option>
-              {agents?.map((agent) => (
+              {sortedAgentsForFilter.map((agent) => (
                 <option key={agent.id} value={agent.id}>
-                  {formatTaskManagerName(agent.name) || formatTaskManagerName(agent.id) || agent.id}
+                  {(formatTaskManagerName(agent.name) || formatTaskManagerName(agent.id) || agent.id) +
+                    (agent.status === 'online' ? '' : ' (offline template)')}
                 </option>
               ))}
             </select>
           </div>
 
           {/* Compatible RTM Section - Prominent placement */}
-          {selectedTemplate && compatibleAgentsData && (() => {
-            // Merge compatible agents with assigned agents
-            const assignedAgentIds = new Set(templateAssignments.map(a => a.agent_id))
-            const onlineAgentMap = new Map((agents || []).map(agent => [agent.id, agent.status === 'online']))
-            const compatibleAgents = (compatibleAgentsData.agents || []).filter(a => a.has_all_capabilities && a.status === 'online')
-            const compatibleAgentIds = new Set(compatibleAgents.map(a => a.agent_id))
-
-            // Find assigned agents not in compatible list (may have partial or no capabilities data)
-            const assignedOnlyAgents = templateAssignments.filter(
-              a => !compatibleAgentIds.has(a.agent_id) && (onlineAgentMap.get(a.agent_id) ?? false)
-            )
-
-            // Total count: compatible + assigned-only
-            const totalCount = compatibleAgents.length + assignedOnlyAgents.length
-            const hiddenOfflineCount = (compatibleAgentsData.agents || []).filter(a => a.status !== 'online').length
-
-            return (
-              <div className="mx-3 my-2 p-2.5 bg-gradient-to-r from-green-500/10 to-emerald-500/5 border border-green-500/30 rounded-lg">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <Users size={14} className="text-green-400" />
-                    <span className="text-xs font-semibold text-green-400">
-                      호환 RTM
-                    </span>
-                  </div>
-                  <span className="text-xs text-green-300 font-bold">
-                    {totalCount}개
+          {selectedTemplate && (
+            <div className="mx-3 my-2 p-2.5 bg-gradient-to-r from-green-500/10 to-emerald-500/5 border border-green-500/30 rounded-lg">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Users size={14} className="text-green-400" />
+                  <span className="text-xs font-semibold text-green-400">
+                    호환 RTM 템플릿
                   </span>
                 </div>
-                {totalCount > 0 ? (
-                  <div className="flex flex-wrap gap-1.5">
-                    {/* Show compatible agents first */}
-                    {compatibleAgents.map(agent => {
-                      const isAssigned = assignedAgentIds.has(agent.agent_id)
-                      return (
-                        <div
-                          key={agent.agent_id}
-                          className="flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium bg-green-500/20 text-green-300 border border-green-500/40"
-                        >
-                          <div className={`w-1.5 h-1.5 rounded-full ${
-                            agent.status === 'online' ? 'bg-green-400' : 'bg-gray-500'
-                          }`} />
-                          {formatTaskManagerName(agent.agent_name) || formatTaskManagerName(agent.agent_id) || agent.agent_id}
-                          {isAssigned && (
-                            <Check size={10} className="text-blue-400" />
-                          )}
-                        </div>
-                      )
-                    })}
-                    {/* Show assigned-only agents (not in compatible list) */}
-                    {assignedOnlyAgents.map(agent => (
+                <span className="text-xs text-green-300 font-bold">
+                  {compatibleRtmTemplateCount}/{compatibleRtmTemplates.length}
+                </span>
+              </div>
+
+              {requiredCapabilityKeys.length === 0 ? (
+                <div className="text-[10px] text-muted bg-elevated/70 px-2 py-1 rounded">
+                  액션/서비스 노드를 추가하면 호환 RTM 템플릿을 계산합니다.
+                </div>
+              ) : compatibleRtmTemplates.length === 0 ? (
+                <div className="text-[10px] text-yellow-400 bg-yellow-500/10 px-2 py-1 rounded">
+                  RTM capability 템플릿이 없습니다. RTM이 한 번 이상 capability를 등록해야 합니다.
+                </div>
+              ) : compatibleRtmTemplateCount > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {compatibleRtmTemplates
+                    .filter((agent) => agent.hasAllCapabilities)
+                    .map((agent) => (
                       <div
-                        key={agent.agent_id}
-                        className="flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium bg-blue-500/20 text-blue-300 border border-blue-500/40"
+                        key={agent.id}
+                        className="flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium bg-green-500/20 text-green-300 border border-green-500/40"
                       >
-                        <div className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-                        {formatTaskManagerName(agent.agent_name) || formatTaskManagerName(agent.agent_id) || agent.agent_id}
-                        <Check size={10} className="text-blue-400" />
+                        <div className={`w-1.5 h-1.5 rounded-full ${agent.status === 'online' ? 'bg-green-400' : 'bg-gray-400'}`} />
+                        {agent.name}
                       </div>
                     ))}
-                  </div>
-                ) : (
-                  <div className="text-[10px] text-yellow-400 bg-yellow-500/10 px-2 py-1 rounded">
-                    ⚠️ 호환되는 RTM 없음 - Action Type 확인 필요
-                  </div>
-                )}
-                {hiddenOfflineCount > 0 && (
-                  <div className="text-[9px] text-muted mt-1.5">
-                    오프라인 {hiddenOfflineCount}개 숨김
-                  </div>
-                )}
-                {compatibleAgentsData.agents?.filter(a => !a.has_all_capabilities).length > 0 && (
-                  <div className="text-[9px] text-muted mt-1.5">
-                    +{compatibleAgentsData.agents.filter(a => !a.has_all_capabilities).length}개 부분 호환
-                  </div>
-                )}
-              </div>
-            )
-          })()}
+                </div>
+              ) : (
+                <div className="text-[10px] text-yellow-400 bg-yellow-500/10 px-2 py-1 rounded">
+                  현재 태스크의 action/service 조합을 모두 만족하는 RTM 템플릿이 없습니다.
+                </div>
+              )}
+
+              {requiredCapabilityKeys.length > 0 && compatibleRtmTemplates.length > compatibleRtmTemplateCount && (
+                <div className="text-[9px] text-muted mt-1.5">
+                  부분 호환 {compatibleRtmTemplates.length - compatibleRtmTemplateCount}개
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Node Search */}
           <div className="px-3 py-2 border-b border-primary">
@@ -2276,14 +2399,21 @@ function ActionGraphEditor() {
                 const isDiscoveredServicesCategory = category.category === 'Discovered Services'
                 const isDiscoveredCategory = isDiscoveredActionsCategory || isDiscoveredServicesCategory
                 const discoveryTab = isDiscoveredActionsCategory ? discoveredActionTab : discoveredServiceTab
+                const lifecycleOnly = isDiscoveredActionsCategory
+                  ? discoveredActionLifecycleOnly
+                  : discoveredServiceLifecycleOnly
                 const visibleDiscoveredCount = category.items.filter((item) => !item.isHidden).length
                 const hiddenDiscoveredCount = category.items.filter((item) => item.isHidden).length
+                const lifecycleDiscoveredCount = category.items.filter((item) => item.isLifecycleNode === true).length
                 const baseCategoryItems = isDiscoveredCategory
                   ? category.items.filter((item) => discoveryTab === 'hidden' ? item.isHidden : !item.isHidden)
                   : category.items
-                const categoryItems = normalizedSearchQuery
-                  ? baseCategoryItems.filter((item) => matchesPaletteSearch(item, normalizedSearchQuery))
+                const lifecycleFilteredItems = isDiscoveredCategory && lifecycleOnly
+                  ? baseCategoryItems.filter((item) => item.isLifecycleNode === true)
                   : baseCategoryItems
+                const categoryItems = normalizedSearchQuery
+                  ? lifecycleFilteredItems.filter((item) => matchesPaletteSearch(item, normalizedSearchQuery))
+                  : lifecycleFilteredItems
 
                 return (
                   <div key={category.category}>
@@ -2311,34 +2441,52 @@ function ActionGraphEditor() {
                       <div className="px-2 pb-2 space-y-0.5">
                         {isDiscoveredCategory && (
                           <div className="px-1 pt-1 pb-1.5">
-                            <div className="inline-flex rounded-md border border-primary overflow-hidden">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="inline-flex rounded-md border border-primary overflow-hidden">
+                                <button
+                                  onClick={() => (
+                                    isDiscoveredActionsCategory
+                                      ? setDiscoveredActionTab('visible')
+                                      : setDiscoveredServiceTab('visible')
+                                  )}
+                                  className={`px-2 py-1 text-[10px] transition-colors ${
+                                    discoveryTab === 'visible'
+                                      ? 'bg-blue-600/25 text-blue-300'
+                                      : 'bg-elevated text-secondary hover:text-primary'
+                                  }`}
+                                >
+                                  Visible ({visibleDiscoveredCount})
+                                </button>
+                                <button
+                                  onClick={() => (
+                                    isDiscoveredActionsCategory
+                                      ? setDiscoveredActionTab('hidden')
+                                      : setDiscoveredServiceTab('hidden')
+                                  )}
+                                  className={`px-2 py-1 text-[10px] transition-colors border-l border-primary ${
+                                    discoveryTab === 'hidden'
+                                      ? 'bg-yellow-600/25 text-yellow-300'
+                                      : 'bg-elevated text-secondary hover:text-primary'
+                                  }`}
+                                >
+                                  Hidden ({hiddenDiscoveredCount})
+                                </button>
+                              </div>
+
                               <button
                                 onClick={() => (
                                   isDiscoveredActionsCategory
-                                    ? setDiscoveredActionTab('visible')
-                                    : setDiscoveredServiceTab('visible')
+                                    ? setDiscoveredActionLifecycleOnly((prev) => !prev)
+                                    : setDiscoveredServiceLifecycleOnly((prev) => !prev)
                                 )}
-                                className={`px-2 py-1 text-[10px] transition-colors ${
-                                  discoveryTab === 'visible'
-                                    ? 'bg-blue-600/25 text-blue-300'
-                                    : 'bg-elevated text-secondary hover:text-primary'
+                                className={`px-2 py-1 rounded-md border text-[10px] transition-colors ${
+                                  lifecycleOnly
+                                    ? 'border-amber-500/50 bg-amber-600/25 text-amber-200'
+                                    : 'border-primary bg-elevated text-secondary hover:text-primary'
                                 }`}
+                                title="Lifecycle 노드가 제공한 항목만 표시"
                               >
-                                Visible ({visibleDiscoveredCount})
-                              </button>
-                              <button
-                                onClick={() => (
-                                  isDiscoveredActionsCategory
-                                    ? setDiscoveredActionTab('hidden')
-                                    : setDiscoveredServiceTab('hidden')
-                                )}
-                                className={`px-2 py-1 text-[10px] transition-colors border-l border-primary ${
-                                  discoveryTab === 'hidden'
-                                    ? 'bg-yellow-600/25 text-yellow-300'
-                                    : 'bg-elevated text-secondary hover:text-primary'
-                                }`}
-                              >
-                                Hidden ({hiddenDiscoveredCount})
+                                Lifecycle Only ({lifecycleDiscoveredCount})
                               </button>
                             </div>
                           </div>
@@ -2412,7 +2560,7 @@ function ActionGraphEditor() {
                                 )}
                                 {item.actionType && !item.duringState && !item.robotCount && (
                                   <span className={`text-[9px] block ${
-                                    item.capabilityKind === 'service' ? 'text-sky-400' : 'text-purple-400'
+                                    item.capabilityKind === 'service' ? 'text-sky-400' : 'text-rose-400'
                                   }`}>
                                     {item.actionType.split('/').pop()}
                                   </span>
@@ -2773,37 +2921,41 @@ function ActionGraphEditor() {
                         )}
                       </div>
 
-                      {/* Compatible RTMs */}
-                      {compatibleAgentsData && (
-                        <div className="flex-shrink-0 w-72">
-                          <h3 className="text-xs font-semibold text-secondary uppercase mb-2">호환 RTM</h3>
-                          <div className="space-y-1.5 max-h-32 overflow-y-auto">
-                            {(compatibleAgentsData.agents || [])
-                              .filter(a => a.has_all_capabilities && !templateAssignments.some(ta => ta.agent_id === a.agent_id))
-                              .map(a => (
-                                <div key={a.agent_id} className="flex items-center justify-between p-2 bg-elevated rounded-lg">
-                                  <div className="flex items-center gap-2">
-                                    <Cpu size={12} className="text-purple-400" />
-                                    <span className="text-xs text-primary">
-                                      {formatTaskManagerName(a.agent_name) || formatTaskManagerName(a.agent_id) || a.agent_id}
-                                    </span>
-                                  </div>
-                                  <button
-                                    onClick={() => assignTemplate.mutate({ templateId: selectedTemplate.id, agentId: a.agent_id })}
-                                    className="px-2 py-1 text-[10px] bg-blue-600/20 text-blue-400 rounded hover:bg-blue-600/30"
-                                  >
-                                    할당
-                                  </button>
+                      {/* Compatible RTM Templates (independent from RTM filter selection) */}
+                      <div className="flex-shrink-0 w-72">
+                        <h3 className="text-xs font-semibold text-secondary uppercase mb-2">호환 RTM 템플릿</h3>
+                        <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                          {compatibleRtmTemplates
+                            .filter((agent) =>
+                              agent.hasAllCapabilities &&
+                              !templateAssignments.some((assignment) => assignment.agent_id === agent.id)
+                            )
+                            .map((agent) => (
+                              <div key={agent.id} className="flex items-center justify-between p-2 bg-elevated rounded-lg">
+                                <div className="flex items-center gap-2">
+                                  <Cpu size={12} className="text-purple-400" />
+                                  <span className="text-xs text-primary">
+                                    {agent.name}
+                                  </span>
                                 </div>
-                              ))}
-                            {(compatibleAgentsData.agents || []).filter(a => a.has_all_capabilities && !templateAssignments.some(ta => ta.agent_id === a.agent_id)).length === 0 && (
-                              <div className="text-xs text-muted p-3 bg-elevated rounded-lg">
-                                추가 호환 RTM 없음
+                                <button
+                                  onClick={() => assignTemplate.mutate({ templateId: selectedTemplate.id, agentId: agent.id })}
+                                  className="px-2 py-1 text-[10px] bg-blue-600/20 text-blue-400 rounded hover:bg-blue-600/30"
+                                >
+                                  할당
+                                </button>
                               </div>
-                            )}
-                          </div>
+                            ))}
+                          {compatibleRtmTemplates.filter((agent) =>
+                            agent.hasAllCapabilities &&
+                            !templateAssignments.some((assignment) => assignment.agent_id === agent.id)
+                          ).length === 0 && (
+                            <div className="text-xs text-muted p-3 bg-elevated rounded-lg">
+                              추가 호환 RTM 없음
+                            </div>
+                          )}
                         </div>
-                      )}
+                      </div>
                     </div>
                   ) : null}
                 </div>
@@ -2832,6 +2984,7 @@ function ActionGraphEditor() {
           <AssignTemplateModal
             template={selectedTemplate}
             currentAssignments={templateAssignments}
+            allAgents={agents}
             onAssign={(agentId) => assignTemplate.mutate({ templateId: selectedTemplate.id, agentId })}
             onUnassign={(agentId) => unassignTemplate.mutate({ templateId: selectedTemplate.id, agentId })}
             onClose={() => setShowAssignModal(false)}
@@ -2904,12 +3057,21 @@ function convertActionGraphToGraph(
   })
 
   steps.forEach((step, index) => {
-    const x = 300 + (index % 3) * 300
-    const y = 100 + Math.floor(index / 3) * 200
+    const storedX = step.ui?.x
+    const storedY = step.ui?.y
+    const hasStoredPosition =
+      typeof storedX === 'number' &&
+      typeof storedY === 'number' &&
+      Number.isFinite(storedX) &&
+      Number.isFinite(storedY)
 
-    let subtype = step.action?.server || step.action?.type || 'Unknown'
+    const x = hasStoredPosition ? storedX : 300 + (index % 3) * 300
+    const y = hasStoredPosition ? storedY : 100 + Math.floor(index / 3) * 200
+
+    const normalizedServer = normalizeLegacyNamespaceServer(step.action?.server)
+    let subtype = normalizedServer || step.action?.type || 'Unknown'
     const capabilityKind = normalizeCapabilityKind(step.action?.capability_kind, step.action?.type)
-    let color = capabilityKind === 'service' ? '#0ea5e9' : '#6b7280'
+    let color = capabilityKind === 'service' ? '#0ea5e9' : '#f87171'
     let actionType = step.action?.type
     let duringStates: string[] = []
 
@@ -2966,12 +3128,13 @@ function convertActionGraphToGraph(
       id: step.id,
       type: nodeType,
       position: { x, y },
+      dragHandle: nodeType === 'action' ? ACTION_NODE_DRAG_HANDLE_SELECTOR : undefined,
       data: {
         label: step.name || step.id,
         subtype: isTerminal ? (step.terminal_type === 'success' ? 'End' : 'Error') : subtype,
         color,
         actionType,
-        server: step.action?.server,
+        server: normalizedServer || step.action?.server,
         capabilityKind,
         startStates: stepStartStates,
         preStates: stepPreStates,
@@ -2986,7 +3149,7 @@ function convertActionGraphToGraph(
         params: step.action?.params?.data || {},
         fieldSources: step.action?.params?.field_sources,
         waypointId: step.action?.params?.waypoint_id,
-        jobName: step.job_name || (isTerminal ? '' : getDefaultJobNameTemplate(step.action?.server, step.name || step.id)),
+        jobName: step.job_name || (isTerminal ? '' : getDefaultJobNameTemplate(normalizedServer || step.action?.server, step.name || step.id)),
         autoGenerateStates: step.auto_generate_states ?? true,
         finalState: isTerminal ? (step.terminal_type === 'success' ? defaultState : errorState) : undefined,
         preconditions: [],
@@ -3229,12 +3392,14 @@ function CompatibilityBar({
 function AssignTemplateModal({
   template,
   currentAssignments,
+  allAgents,
   onAssign,
   onUnassign,
   onClose,
 }: {
   template: ActionGraph
   currentAssignments: AssignmentInfo[]
+  allAgents: Array<{ id: string; name: string; status: string }>
   onAssign: (agentId: string) => void
   onUnassign: (agentId: string) => void
   onClose: () => void
@@ -3242,7 +3407,10 @@ function AssignTemplateModal({
   console.log('[AssignTemplateModal] Rendering, template:', template?.id, template?.name)
   console.log('[AssignTemplateModal] currentAssignments:', currentAssignments)
 
-  const assignedAgentIds = currentAssignments.map(a => a.agent_id)
+  const assignedAgentIdSet = useMemo(
+    () => new Set(currentAssignments.map((assignment) => assignment.agent_id)),
+    [currentAssignments]
+  )
 
   // Fetch compatible agents using capability-based API
   const { data: compatibleAgentsData, isLoading: compatibleLoading, error: compatibleError } = useQuery({
@@ -3257,15 +3425,68 @@ function AssignTemplateModal({
   const requiredActionTypes = compatibleAgentsData?.required_action_types || []
   const compatibleAgents = compatibleAgentsData?.agents || []
 
-  // Sort agents: compatible first, then assigned, then by name
-  const sortedAgents = [...compatibleAgents].sort((a, b) => {
-    const aAssigned = assignedAgentIds.includes(a.agent_id)
-    const bAssigned = assignedAgentIds.includes(b.agent_id)
+  const mergedAgents = useMemo(() => {
+    type ModalAgent = {
+      agent_id: string
+      agent_name: string
+      status: string
+      has_all_capabilities: boolean
+      missing_capabilities: string[]
+    }
+
+    const byAgent = new Map<string, ModalAgent>()
+    const compatibilityMap = new Map(compatibleAgents.map((agent) => [agent.agent_id, agent]))
+
+    for (const agent of allAgents) {
+      const compatibility = compatibilityMap.get(agent.id)
+      const isAssigned = assignedAgentIdSet.has(agent.id)
+
+      byAgent.set(agent.id, {
+        agent_id: agent.id,
+        agent_name: agent.name || agent.id,
+        status: compatibility?.status || agent.status || 'offline',
+        has_all_capabilities: compatibility?.has_all_capabilities ?? isAssigned,
+        missing_capabilities: compatibility?.missing_capabilities || [],
+      })
+    }
+
+    for (const compatibility of compatibleAgents) {
+      if (byAgent.has(compatibility.agent_id)) continue
+      byAgent.set(compatibility.agent_id, {
+        agent_id: compatibility.agent_id,
+        agent_name: compatibility.agent_name || compatibility.agent_id,
+        status: compatibility.status || 'offline',
+        has_all_capabilities: compatibility.has_all_capabilities,
+        missing_capabilities: compatibility.missing_capabilities || [],
+      })
+    }
+
+    for (const assignment of currentAssignments) {
+      if (byAgent.has(assignment.agent_id)) continue
+      byAgent.set(assignment.agent_id, {
+        agent_id: assignment.agent_id,
+        agent_name: assignment.agent_name || assignment.agent_id,
+        status: 'offline',
+        has_all_capabilities: true,
+        missing_capabilities: [],
+      })
+    }
+
+    return Array.from(byAgent.values())
+  }, [allAgents, compatibleAgents, currentAssignments, assignedAgentIdSet])
+
+  // Sort agents: assigned first, then compatible, then online, then by name
+  const sortedAgents = [...mergedAgents].sort((a, b) => {
+    const aAssigned = assignedAgentIdSet.has(a.agent_id)
+    const bAssigned = assignedAgentIdSet.has(b.agent_id)
+    if (aAssigned !== bAssigned) {
+      return aAssigned ? -1 : 1
+    }
     if (a.has_all_capabilities !== b.has_all_capabilities) {
       return a.has_all_capabilities ? -1 : 1
     }
-    if (aAssigned !== bAssigned) {
-      return aAssigned ? -1 : 1
+    if (a.status !== b.status) {
+      return a.status === 'online' ? -1 : 1
     }
     return formatTaskManagerName(a.agent_name).localeCompare(formatTaskManagerName(b.agent_name))
   })
@@ -3322,7 +3543,7 @@ function AssignTemplateModal({
               </div>
             ) : (
               sortedAgents.map(agent => {
-                const isAssigned = assignedAgentIds.includes(agent.agent_id)
+                const isAssigned = assignedAgentIdSet.has(agent.agent_id)
                 const isCompatible = agent.has_all_capabilities
                 const matchedCount = requiredActionTypes.length - (agent.missing_capabilities?.length || 0)
 

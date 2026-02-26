@@ -49,8 +49,12 @@ const extractRosType = (info: Record<string, unknown>): { type: string; isArray:
   const rosName = info['x-ros-name'] as string | undefined
 
   if (rosNamespace && rosName) {
-    // Convert "geometry_msgs__msg" → "geometry_msgs/msg"
-    const namespace = rosNamespace.replace(/__/g, '/')
+    // Normalize namespace separators from C++ extractor:
+    // "geometry_msgs::msg" or "geometry_msgs__msg" -> "geometry_msgs/msg"
+    const namespace = rosNamespace
+      .replace(/::/g, '/')
+      .replace(/__/g, '/')
+      .replace(/\/+/g, '/')
     return { type: `${namespace}/${rosName}`, isArray: false }
   }
 

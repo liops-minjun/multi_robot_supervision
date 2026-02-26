@@ -303,11 +303,12 @@ func (s *Server) UpdateBehaviorTree(w http.ResponseWriter, r *http.Request) {
 	if len(affectedAgents) > 0 && s.quicHandler != nil {
 		// Send graph update notification to each affected agent
 		for _, agentID := range affectedAgents {
-			// Convert to canonical format with agent-specific server substitution
+			// Convert to canonical format without RTM namespace substitution.
+			// Legacy fallback: strip {namespace} token if it still exists in old templates.
 			agent, _ := s.repo.GetAgent(agentID)
 			if agent != nil && canonicalGraph != nil {
 				agentGraph := *canonicalGraph
-				agentGraph.SubstituteServerPatterns(agent.Namespace)
+				agentGraph.SubstituteServerPatterns("")
 				graphJSON, _ := json.Marshal(agentGraph)
 
 				// Send async notification (don't block the response)
@@ -901,9 +902,8 @@ func (s *Server) DeployBehaviorTreeToAgent(w http.ResponseWriter, r *http.Reques
 	// Set the target agent
 	canonicalGraph.BehaviorTree.AgentID = agentID
 
-	// Substitute server name patterns (e.g., {namespace} -> actual namespace)
-	// Always call even if namespace is empty to remove {namespace} placeholders
-	canonicalGraph.SubstituteServerPatterns(agent.Namespace)
+	// Legacy fallback only: strip {namespace} token from old templates.
+	canonicalGraph.SubstituteServerPatterns("")
 
 	// Serialize the graph to JSON
 	graphJSON, err := json.Marshal(canonicalGraph)

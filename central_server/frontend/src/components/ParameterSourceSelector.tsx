@@ -25,7 +25,7 @@ interface ParameterSourceSelectorProps {
   // For constant value input
   constantValue?: unknown
   onConstantChange?: (value: unknown) => void
-  inputType?: 'text' | 'number' | 'checkbox'
+  inputType?: 'text' | 'number' | 'checkbox' | 'slider'
 }
 
 // Type compatibility indicator
@@ -70,6 +70,12 @@ export default function ParameterSourceSelector({
   onConstantChange,
   inputType = 'text',
 }: ParameterSourceSelectorProps) {
+  const clampSpeedFactor = (raw: unknown): number => {
+    const parsed = typeof raw === 'number' ? raw : parseFloat(String(raw))
+    if (!Number.isFinite(parsed)) return 1.0
+    return Math.min(1.0, Math.max(0.1, parsed))
+  }
+
   // Determine current mode: 'constant' or 'binding'
   const isBinding = fieldSource?.source === 'step_result'
 
@@ -177,6 +183,39 @@ export default function ParameterSourceSelector({
                   className="w-full px-2 py-1.5 bg-sunken border border-amber-500/30 rounded text-[11px] text-primary focus:outline-none focus:border-amber-500"
                   placeholder="숫자 입력..."
                 />
+              ) : inputType === 'slider' ? (
+                <div className="space-y-1.5">
+                  <input
+                    type="range"
+                    min={0.1}
+                    max={1.0}
+                    step={0.01}
+                    value={clampSpeedFactor(constantValue)}
+                    onChange={(e) => {
+                      e.stopPropagation()
+                      onConstantChange(clampSpeedFactor(e.target.value))
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-full accent-amber-500 cursor-pointer"
+                  />
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[9px] text-muted">0.1</span>
+                    <input
+                      type="number"
+                      min={0.1}
+                      max={1.0}
+                      step={0.01}
+                      value={clampSpeedFactor(constantValue)}
+                      onChange={(e) => {
+                        e.stopPropagation()
+                        onConstantChange(clampSpeedFactor(e.target.value))
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-20 px-2 py-1 bg-sunken border border-amber-500/30 rounded text-[11px] text-primary focus:outline-none focus:border-amber-500 text-right font-mono"
+                    />
+                    <span className="text-[9px] text-muted">1.0</span>
+                  </div>
+                </div>
               ) : (
                 <input
                   type="text"

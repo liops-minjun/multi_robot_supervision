@@ -69,6 +69,10 @@ func main() {
 		log.Printf("Warning: Failed to load existing state: %v", err)
 	}
 
+	// Start background workers (heartbeat timeout checker, stale cleanup, cache cleanup)
+	stateManager.Start()
+	defer stateManager.Stop()
+
 	// Create gRPC server
 	grpcServer, err := fleetgrpc.NewServer(cfg, stateManager)
 	if err != nil {
@@ -104,6 +108,16 @@ func main() {
 
 	// Create REST API server (with rawQUICHandler for QUIC-based deployments)
 	apiServer := api.NewServer(repo, stateManager, scheduler, rawQUICHandler, definitionsPath)
+
+	// Persist offline status when heartbeat timeout detects disconnected agents.
+	stateManager.SetOnAgentDisconnect(func(agentID string) {
+		if err := repo.UpdateAgentStatus(agentID, "offline", ""); err != nil {
+			log.Printf("Failed to update timed-out agent status (%s): %v", agentID, err)
+		}
+		if hub := apiServer.GetWebSocketHub(); hub != nil {
+			hub.BroadcastAgentUpdate(agentID, "offline")
+		}
+	})
 
 	// Set WebSocket hub on rawQUICHandler after apiServer is created
 	if rawQUICHandler != nil {
@@ -213,9 +227,6 @@ func loadExistingState(repo *db.Repository, stateManager *state.GlobalStateManag
 			agent.CurrentState,
 		)
 		stateManager.SetRobotOnline(agent.ID, false)
-
-		// Register agent (will be set online when connected)
-		stateManager.RegisterAgent(agent.ID, agent.Name, "")
 	}
 
 	log.Printf("Loaded %d agents from database", len(agents))

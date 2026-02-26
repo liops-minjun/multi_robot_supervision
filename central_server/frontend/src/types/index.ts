@@ -36,6 +36,9 @@ export interface Agent {
   status: 'online' | 'offline' | 'warning'
   ip_address: string | null
   last_seen: string | null
+  has_capability_template?: boolean
+  capability_template_saved_at?: string | null
+  capability_template_capability_count?: number
   robot_count: number
   created_at: string
 }
@@ -186,6 +189,10 @@ export const SystemStates: GraphState[] = [
 export interface GraphStep {
   id: string
   name?: string
+  ui?: {
+    x: number
+    y: number
+  }
   job_name?: string                // User-defined job name for this step
   auto_generate_states?: boolean   // Whether to auto-generate states from this step
   type?: 'fallback' | 'terminal' | null

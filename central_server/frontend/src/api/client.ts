@@ -45,8 +45,19 @@ const api = axios.create({
 
 // Agent APIs
 export const agentApi = {
-  list: async (): Promise<Agent[]> => {
-    const { data } = await api.get('/agents')
+  list: async (options?: {
+    offlineMode?: 'all' | 'template_only' | 'none'
+    cleanupStale?: boolean
+  }): Promise<Agent[]> => {
+    const params = new URLSearchParams()
+    if (options?.offlineMode) {
+      params.set('offline_mode', options.offlineMode)
+    }
+    if (options?.cleanupStale) {
+      params.set('cleanup_stale', 'true')
+    }
+    const query = params.toString()
+    const { data } = await api.get(query ? `/agents?${query}` : '/agents')
     return data
   },
 
@@ -64,6 +75,18 @@ export const agentApi = {
   // Delete agent
   delete: async (id: string): Promise<void> => {
     await api.delete(`/agents/${id}`)
+  },
+
+  // Persist capability snapshot as RTM template for offline editing
+  saveCapabilityTemplate: async (agentId: string): Promise<{
+    success: boolean
+    agent_id: string
+    capability_count: number
+    saved_at: string
+    agent: Agent
+  }> => {
+    const { data } = await api.post(`/agents/${agentId}/capability-template`)
+    return data
   },
 
   // Get aggregated capabilities for all robots of an agent

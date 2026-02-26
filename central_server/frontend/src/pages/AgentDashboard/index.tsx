@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Server,
@@ -31,6 +31,7 @@ import {
   Check,
   X,
   Trash2,
+  Save,
 } from 'lucide-react'
 import { agentApi, actionGraphApi, fleetApi, stateDefinitionApi, taskApi, logsApi, telemetryApi } from '../../api/client'
 import type { AgentCapabilityInfo, AgentConnectionStatus, ActionGraph, RobotStateSnapshot, StateDefinition, ExecutionPhase, TaskLogEntry, TaskLogLevel, RobotTelemetry, LifecycleState } from '../../types'
@@ -238,7 +239,7 @@ function CapabilityCard({
           {isService ? (
             <Server className="w-4 h-4 text-cyan-400" />
           ) : (
-            <Zap className="w-4 h-4 text-purple-400" />
+            <Zap className="w-4 h-4 text-rose-400" />
           )}
           <div className="flex flex-col items-start">
             <span className="text-primary font-medium font-mono">{serverName}</span>
@@ -299,7 +300,7 @@ function CapabilityCard({
                 {isService ? (
                   <Server className="w-3 h-3 text-cyan-400" />
                 ) : (
-                  <Activity className="w-3 h-3 text-blue-400" />
+                  <Activity className="w-3 h-3 text-rose-400" />
                 )}
                 <span className="text-sm text-primary font-mono">{capability.action_server}</span>
               </div>
@@ -734,6 +735,7 @@ export default function AgentDashboard() {
   const [expandedCapabilities, setExpandedCapabilities] = useState<string[]>([])
   const [selectedRobotId, setSelectedRobotId] = useState<string | null>(null)
   const [selectedGraphId, setSelectedGraphId] = useState<string | null>(null)
+  const [detailViewTab, setDetailViewTab] = useState<'actions' | 'services' | 'behaviorTree'>('actions')
   const [logsExpanded, setLogsExpanded] = useState(true)
   const [telemetryExpanded, setTelemetryExpanded] = useState(false)
   const [isEditingName, setIsEditingName] = useState(false)
@@ -741,8 +743,8 @@ export default function AgentDashboard() {
   // For inline editing in agent list
   const [editingAgentInList, setEditingAgentInList] = useState<string | null>(null)
   const [listEditedName, setListEditedName] = useState('')
-  // Filter to show only online agents (default: false - show all agents)
-  const [showOnlineOnly, setShowOnlineOnly] = useState(false)
+  const [statusFilter, setStatusFilter] = useState<'online' | 'offline' | 'saved'>('online')
+  const staleCleanupDoneRef = useRef(false)
 
   // Fetch all agents
   const {
@@ -750,11 +752,26 @@ export default function AgentDashboard() {
     isLoading: agentsLoading,
     refetch: refetchAgents,
   } = useQuery({
-    queryKey: ['agents'],
-    queryFn: () => agentApi.list(),
+    queryKey: ['agents', 'template-only'],
+    queryFn: () => agentApi.list({
+      offlineMode: 'template_only',
+    }),
     refetchInterval: 1000,
     refetchIntervalInBackground: true,
   })
+
+  useEffect(() => {
+    if (staleCleanupDoneRef.current) return
+    staleCleanupDoneRef.current = true
+    void agentApi
+      .list({ offlineMode: 'template_only', cleanupStale: true })
+      .then(() => {
+        queryClient.invalidateQueries({ queryKey: ['agents'] })
+      })
+      .catch((error) => {
+        console.warn('[AgentDashboard] stale RTM cleanup failed:', error)
+      })
+  }, [queryClient])
 
   // Fetch connection status for all agents (heartbeat monitoring)
   const { data: connectionStatus = [] } = useQuery({
@@ -769,6 +786,12 @@ export default function AgentDashboard() {
     acc[status.id] = status
     return acc
   }, {} as Record<string, AgentConnectionStatus>)
+
+  const isAgentAlive = (agent: { id: string; status: string }) => {
+    const live = connectionStatusMap[agent.id]
+    if (live) return live.is_online
+    return agent.status === 'online'
+  }
 
   // Fetch capabilities for selected agent
   const { data: agentCapabilities, isLoading: capabilitiesLoading } = useQuery({
@@ -908,7 +931,15 @@ export default function AgentDashboard() {
   const unavailableServers = executabilityCheck?.unavailable_servers || []
 
   const selectedAgent = agents.find((a) => a.id === selectedAgentId)
+  const selectedAgentOnline = selectedAgent ? isAgentAlive(selectedAgent) : false
   const selectedAgentConnection = selectedAgentId ? connectionStatusMap[selectedAgentId] : undefined
+  const selectedAgentTemplateSavedAtText = useMemo(() => {
+    const raw = selectedAgent?.capability_template_saved_at
+    if (!raw) return null
+    const date = new Date(raw)
+    if (Number.isNaN(date.getTime())) return raw
+    return date.toLocaleString()
+  }, [selectedAgent?.capability_template_saved_at])
   const actionCapabilities = useMemo(
     () => (agentCapabilities?.capabilities || []).filter((cap) => capabilityKindOf(cap) === 'action'),
     [agentCapabilities?.capabilities]
@@ -917,6 +948,32 @@ export default function AgentDashboard() {
     () => (agentCapabilities?.capabilities || []).filter((cap) => capabilityKindOf(cap) === 'service'),
     [agentCapabilities?.capabilities]
   )
+
+  useEffect(() => {
+    if (!selectedAgentId) return
+    const selected = agents.find((a) => a.id === selectedAgentId)
+    if (!selected) {
+      setSelectedAgentId(null)
+      return
+    }
+    const selectedIsOnline = isAgentAlive(selected)
+    const selectedIsSaved = selected.has_capability_template === true
+    if (statusFilter === 'online' && !selectedIsOnline) {
+      setSelectedAgentId(null)
+      return
+    }
+    if (statusFilter === 'offline' && selectedIsOnline) {
+      setSelectedAgentId(null)
+      return
+    }
+    if (statusFilter === 'saved' && !selectedIsSaved) {
+      setSelectedAgentId(null)
+    }
+  }, [agents, selectedAgentId, statusFilter, connectionStatusMap])
+
+  useEffect(() => {
+    setDetailViewTab('actions')
+  }, [selectedAgentId])
   const pingLatencyText = (() => {
     const latencyUs = selectedAgentConnection?.ping_latency_us
     if (latencyUs != null) {
@@ -1054,6 +1111,17 @@ export default function AgentDashboard() {
     },
   })
 
+  const saveCapabilityTemplateMutation = useMutation({
+    mutationFn: (agentId: string) => agentApi.saveCapabilityTemplate(agentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
+      queryClient.invalidateQueries({ queryKey: ['agent-capabilities', selectedAgentId] })
+    },
+    onError: (error: Error) => {
+      alert(`RTM 템플릿 저장 실패: ${error.message}`)
+    },
+  })
+
   const isExecutionLoading =
     executeGraphMutation.isPending ||
     pauseTaskMutation.isPending ||
@@ -1062,13 +1130,16 @@ export default function AgentDashboard() {
     resetStateMutation.isPending
 
   // Summary stats
-  const onlineCount = agents.filter((a) => a.status === 'online').length
-  const offlineCount = agents.filter((a) => a.status !== 'online').length
+  const onlineCount = agents.filter((a) => isAgentAlive(a)).length
+  const offlineCount = agents.filter((a) => !isAgentAlive(a)).length
+  const savedCount = agents.filter((a) => a.has_capability_template).length
 
   // Filtered agents list
-  const filteredAgents = showOnlineOnly
-    ? agents.filter((a) => a.status === 'online')
-    : agents
+  const filteredAgents = statusFilter === 'online'
+    ? agents.filter((a) => isAgentAlive(a))
+    : statusFilter === 'offline'
+      ? agents.filter((a) => !isAgentAlive(a))
+      : agents.filter((a) => a.has_capability_template)
 
   return (
     <div className="h-screen flex bg-base">
@@ -1089,23 +1160,40 @@ export default function AgentDashboard() {
               <RefreshCw size={16} />
             </button>
           </div>
-          {/* Filter toggle */}
-          <div className="mt-2 flex items-center gap-2">
+          <div className="mt-3 grid grid-cols-3 gap-2">
             <button
-              onClick={() => setShowOnlineOnly(!showOnlineOnly)}
-              className={`text-xs px-2 py-1 rounded transition-colors ${
-                showOnlineOnly
-                  ? 'bg-green-500/20 text-green-400 border border-green-500/30'
-                  : 'bg-gray-500/20 text-secondary border border-gray-500/30'
+              onClick={() => setStatusFilter('online')}
+              className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                statusFilter === 'online'
+                  ? 'border-green-500/50 bg-green-500/20'
+                  : 'border-primary bg-elevated hover:bg-surface'
               }`}
             >
-              {showOnlineOnly ? `Online only (${onlineCount})` : `All (${agents.length})`}
+              <div className="text-xl font-bold text-green-400">{onlineCount}</div>
+              <div className="text-[10px] uppercase text-muted">{t('agent.online')}</div>
             </button>
-            {!showOnlineOnly && offlineCount > 0 && (
-              <span className="text-[10px] text-muted">
-                {offlineCount} offline
-              </span>
-            )}
+            <button
+              onClick={() => setStatusFilter('offline')}
+              className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                statusFilter === 'offline'
+                  ? 'border-gray-400/50 bg-gray-500/20'
+                  : 'border-primary bg-elevated hover:bg-surface'
+              }`}
+            >
+              <div className="text-xl font-bold text-secondary">{offlineCount}</div>
+              <div className="text-[10px] uppercase text-muted">{t('agent.offline')}</div>
+            </button>
+            <button
+              onClick={() => setStatusFilter('saved')}
+              className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                statusFilter === 'saved'
+                  ? 'border-emerald-500/50 bg-emerald-500/20'
+                  : 'border-primary bg-elevated hover:bg-surface'
+              }`}
+            >
+              <div className="text-xl font-bold text-emerald-300">{savedCount}</div>
+              <div className="text-[10px] uppercase text-muted">Saved RTM</div>
+            </button>
           </div>
         </div>
 
@@ -1117,17 +1205,18 @@ export default function AgentDashboard() {
             <div className="p-8 text-center">
               <Server className="w-12 h-12 mx-auto mb-3 text-muted" />
               <p className="text-muted text-sm">
-                {showOnlineOnly ? 'No online RTMs' : t('agent.noAgents')}
-              </p>
-              <p className="text-xs text-muted mt-1">
-                {showOnlineOnly && agents.length > 0
-                  ? `${offlineCount} offline RTM(s) hidden`
-                  : t('agent.noAgentsHint')}
+                {statusFilter === 'online'
+                  ? 'No online RTMs'
+                  : statusFilter === 'offline'
+                    ? 'No offline RTMs'
+                    : 'No saved RTMs'}
               </p>
             </div>
           ) : (
             <div className="py-2">
-              {filteredAgents.map((agent) => (
+              {filteredAgents.map((agent) => {
+                const isOnline = isAgentAlive(agent)
+                return (
                 <button
                   key={agent.id}
                   onClick={() => setSelectedAgentId(agent.id)}
@@ -1139,7 +1228,7 @@ export default function AgentDashboard() {
                 >
                   {/* Status indicator */}
                   <div className="flex-shrink-0 flex items-center gap-1">
-                    {agent.status === 'online' ? (
+                    {isOnline ? (
                       <Wifi className="w-4 h-4 text-green-500" />
                     ) : (
                       <WifiOff className="w-4 h-4 text-muted" />
@@ -1194,6 +1283,11 @@ export default function AgentDashboard() {
                           >
                             {agent.name}
                           </span>
+                          {agent.has_capability_template && (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                              Saved
+                            </span>
+                          )}
                           <button
                             onClick={(e) => {
                               e.stopPropagation()
@@ -1206,7 +1300,7 @@ export default function AgentDashboard() {
                             <Pencil className="w-3 h-3" />
                           </button>
                           {/* Delete button - only for offline agents */}
-                          {agent.status !== 'online' && (
+                          {!isOnline && (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation()
@@ -1232,7 +1326,7 @@ export default function AgentDashboard() {
                     </div>
                   </div>
 
-                  {agent.status === 'online' ? (
+                  {isOnline ? (
                     <ChevronRight className="w-4 h-4 text-muted" />
                   ) : (
                     <button
@@ -1249,23 +1343,9 @@ export default function AgentDashboard() {
                     </button>
                   )}
                 </button>
-              ))}
+              )})}
             </div>
           )}
-        </div>
-
-        {/* Summary Stats */}
-        <div className="p-4 border-t border-primary bg-elevated">
-          <div className="grid grid-cols-2 gap-3 text-center">
-            <div>
-              <div className="text-xl font-bold text-green-400">{onlineCount}</div>
-              <div className="text-[10px] text-muted uppercase">{t('agent.online')}</div>
-            </div>
-            <div>
-              <div className="text-xl font-bold text-secondary">{offlineCount}</div>
-              <div className="text-[10px] text-muted uppercase">{t('agent.offline')}</div>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -1279,14 +1359,14 @@ export default function AgentDashboard() {
                 <div className="flex items-center gap-4">
                   <div
                     className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-                      selectedAgent.status === 'online'
+                      selectedAgentOnline
                         ? 'bg-green-500/20'
                         : 'bg-gray-500/20'
                     }`}
                   >
                     <Server
                       className={`w-6 h-6 ${
-                        selectedAgent.status === 'online'
+                        selectedAgentOnline
                           ? 'text-green-400'
                           : 'text-secondary'
                       }`}
@@ -1372,10 +1452,39 @@ export default function AgentDashboard() {
                         </>
                       )}
                     </div>
+                    <div className="mt-1 text-xs">
+                      {selectedAgent.has_capability_template ? (
+                        <span className="text-green-400">
+                          RTM 템플릿 저장됨
+                          {selectedAgentTemplateSavedAtText ? ` · ${selectedAgentTemplateSavedAtText}` : ''}
+                          {selectedAgent.capability_template_capability_count != null
+                            ? ` · ${selectedAgent.capability_template_capability_count}개 capability`
+                            : ''}
+                        </span>
+                      ) : (
+                        <span className="text-muted">RTM 템플릿 미저장</span>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <StatusBadge status={selectedAgent.status} t={t} />
+                  <button
+                    onClick={() => {
+                      if (!selectedAgentId) return
+                      saveCapabilityTemplateMutation.mutate(selectedAgentId)
+                    }}
+                    disabled={!selectedAgentId || saveCapabilityTemplateMutation.isPending}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                    title="현재 RTM capability를 템플릿으로 저장"
+                  >
+                    {saveCapabilityTemplateMutation.isPending ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Save className="w-3.5 h-3.5" />
+                    )}
+                    <span>{saveCapabilityTemplateMutation.isPending ? '저장 중...' : 'RTM 템플릿 저장'}</span>
+                  </button>
+                  <StatusBadge status={selectedAgentOnline ? 'online' : 'offline'} t={t} />
                   {connectionStatusMap[selectedAgent.id] && (
                     <HeartbeatBadge
                       health={connectionStatusMap[selectedAgent.id].heartbeat_health}
@@ -1452,10 +1561,51 @@ export default function AgentDashboard() {
 
             {/* Scrollable content area */}
             <div className="flex-1 overflow-auto p-6 space-y-8">
+              {/* Detail Tabs */}
+              <div className="flex flex-wrap items-center gap-2 p-1 bg-surface border border-primary rounded-xl">
+                <button
+                  onClick={() => setDetailViewTab('actions')}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    detailViewTab === 'actions'
+                      ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                      : 'text-secondary hover:bg-elevated border border-transparent'
+                  }`}
+                >
+                  <Activity className="w-3.5 h-3.5" />
+                  감지된 Action
+                  <span className="text-[10px] opacity-80">({actionCapabilities.length})</span>
+                </button>
+                <button
+                  onClick={() => setDetailViewTab('services')}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    detailViewTab === 'services'
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                      : 'text-secondary hover:bg-elevated border border-transparent'
+                  }`}
+                >
+                  <Server className="w-3.5 h-3.5" />
+                  감지된 Service
+                  <span className="text-[10px] opacity-80">({serviceCapabilities.length})</span>
+                </button>
+                <button
+                  onClick={() => setDetailViewTab('behaviorTree')}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    detailViewTab === 'behaviorTree'
+                      ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
+                      : 'text-secondary hover:bg-elevated border border-transparent'
+                  }`}
+                >
+                  <Layout className="w-3.5 h-3.5" />
+                  현재 할당 BT
+                  <span className="text-[10px] opacity-80">({sortedActionGraphs.length})</span>
+                </button>
+              </div>
+
               {/* ROS2 Action Servers */}
+              {detailViewTab === 'actions' && (
               <div>
                 <div className="flex items-center gap-2 mb-4">
-                  <Activity className="w-5 h-5 text-purple-400" />
+                  <Activity className="w-5 h-5 text-rose-400" />
                   <h3 className="text-lg font-semibold text-primary">{t('agent.detectedActionServers')}</h3>
                   <span className="text-sm text-muted">
                     ({actionCapabilities.length} {t('agent.actionTypes')})
@@ -1502,8 +1652,10 @@ export default function AgentDashboard() {
                   </div>
                 )}
               </div>
+              )}
 
               {/* ROS2 Service Servers */}
+              {detailViewTab === 'services' && (
               <div>
                 <div className="flex items-center gap-2 mb-4">
                   <Server className="w-5 h-5 text-cyan-400" />
@@ -1537,8 +1689,10 @@ export default function AgentDashboard() {
                   </div>
                 )}
               </div>
+              )}
 
               {/* Behavior Tree */}
+              {detailViewTab === 'behaviorTree' && (
               <div>
                 <div className="flex items-center gap-2 mb-4">
                   <Layout className="w-5 h-5 text-cyan-400" />
@@ -1862,9 +2016,10 @@ export default function AgentDashboard() {
                   </div>
                 )}
               </div>
+              )}
 
               {/* Telemetry */}
-              {selectedRobotId && (
+              {detailViewTab === 'behaviorTree' && selectedRobotId && (
                 <div>
                   <TelemetryPanel
                     telemetry={robotTelemetry || null}
@@ -1877,6 +2032,7 @@ export default function AgentDashboard() {
               )}
 
               {/* Execution Logs */}
+              {detailViewTab === 'behaviorTree' && (
               <div>
                 <ExecutionLogsPanel
                   logs={agentLogs}
@@ -1885,6 +2041,7 @@ export default function AgentDashboard() {
                   onToggleExpand={() => setLogsExpanded(!logsExpanded)}
                 />
               </div>
+              )}
             </div>
           </>
         ) : (

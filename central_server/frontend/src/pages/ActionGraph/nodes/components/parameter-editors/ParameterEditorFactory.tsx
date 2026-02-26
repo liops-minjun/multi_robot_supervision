@@ -1,4 +1,4 @@
-import { memo, useCallback } from 'react'
+import { memo, useCallback, useEffect } from 'react'
 import { Code, Radio, Crosshair, Plus, Trash2 } from 'lucide-react'
 import PoseEditor from './PoseEditor'
 import JointArrayEditor from './JointArrayEditor'
@@ -12,10 +12,12 @@ interface ParameterEditorFactoryProps {
   fieldName: string
   fieldType: string
   isArray: boolean
+  actionType?: string
   value: unknown
   onChange: (value: unknown) => void
   // Telemetry
   robotTelemetry?: RobotTelemetryData | null
+  selectedToolFrame?: string | null
   // Binding
   fieldSource?: ParameterFieldSource
   availableSteps?: AvailableStep[]
@@ -26,14 +28,32 @@ const ParameterEditorFactory = memo(({
   fieldName,
   fieldType,
   isArray,
+  actionType,
   value,
   onChange,
   robotTelemetry,
+  selectedToolFrame,
   fieldSource,
   availableSteps,
   onFieldSourceChange,
 }: ParameterEditorFactoryProps) => {
   const editorType = getEditorType(fieldType, isArray)
+  const isToolFrameTarget = !isArray && isToolFrameField(fieldName)
+
+  // Tool frame is dropdown-only field (no fixed text input, no step-result binding).
+  if (isToolFrameTarget) {
+    return (
+      <ToolFrameFieldEditor
+        fieldName={fieldName}
+        fieldType={fieldType}
+        value={value}
+        onChange={onChange}
+        robotTelemetry={robotTelemetry}
+        fieldSource={fieldSource}
+        onFieldSourceChange={onFieldSourceChange}
+      />
+    )
+  }
 
   // Check if field has a binding (step_result source)
   const hasBinding = fieldSource?.source === 'step_result'
@@ -65,6 +85,7 @@ const ParameterEditorFactory = memo(({
         robotTelemetry={robotTelemetry}
         isStamped={isStamped}
         isPoint={false}
+        preferredFrameId={selectedToolFrame || undefined}
         fieldSource={fieldSource}
         availableSteps={availableSteps}
         onFieldSourceChange={onFieldSourceChange}
@@ -84,6 +105,7 @@ const ParameterEditorFactory = memo(({
         robotTelemetry={robotTelemetry}
         isStamped={isStamped}
         isPoint={true}
+        preferredFrameId={selectedToolFrame || undefined}
         fieldSource={fieldSource}
         availableSteps={availableSteps}
         onFieldSourceChange={onFieldSourceChange}
@@ -145,8 +167,10 @@ const ParameterEditorFactory = memo(({
       <PrimitiveEditor
         fieldName={fieldName}
         fieldType={fieldType}
+        actionType={actionType}
         value={value}
         onChange={onChange}
+        robotTelemetry={robotTelemetry}
         fieldSource={fieldSource}
         availableSteps={availableSteps}
         onFieldSourceChange={onFieldSourceChange}
@@ -162,6 +186,7 @@ const ParameterEditorFactory = memo(({
         fieldType={fieldType}
         value={value}
         onChange={onChange}
+        robotTelemetry={robotTelemetry}
         fieldSource={fieldSource}
         availableSteps={availableSteps}
         onFieldSourceChange={onFieldSourceChange}
@@ -206,20 +231,40 @@ const ParameterEditorFactory = memo(({
   )
 })
 
+function isManipulatorActionType(actionType?: string): boolean {
+  const normalized = (actionType || '').toLowerCase()
+  const compact = normalized.replace(/[^a-z0-9]/g, '')
+  return (
+    normalized.includes('joint_manipulation') ||
+    normalized.includes('cartesian_manipulation') ||
+    compact.includes('jointmanipulation') ||
+    compact.includes('cartesianmanipulation')
+  )
+}
+
+function isSpeedFactorField(fieldName: string): boolean {
+  const normalized = fieldName.toLowerCase()
+  return normalized === 'speed_factor' || normalized.endsWith('/speed_factor') || normalized.includes('speed_factor')
+}
+
 // Simple Primitive Editor with source selector
 const PrimitiveEditor = memo(({
   fieldName,
   fieldType,
+  actionType,
   value,
   onChange,
+  robotTelemetry,
   fieldSource,
   availableSteps,
   onFieldSourceChange,
 }: {
   fieldName: string
   fieldType: string
+  actionType?: string
   value: unknown
   onChange: (value: unknown) => void
+  robotTelemetry?: RobotTelemetryData | null
   fieldSource?: ParameterFieldSource
   availableSteps?: AvailableStep[]
   onFieldSourceChange?: (source: ParameterFieldSource | undefined) => void
@@ -227,22 +272,291 @@ const PrimitiveEditor = memo(({
   const lower = fieldType.toLowerCase()
   const isBool = lower === 'bool' || lower === 'boolean'
   const isNumeric = ['int8', 'int16', 'int32', 'int64', 'uint8', 'uint16', 'uint32', 'uint64', 'float32', 'float64', 'double', 'float'].some(t => lower.includes(t))
+  const isString = lower === 'string'
+  const isBinding = fieldSource?.source === 'step_result'
+  const supportsToolDropdown = isString && isToolFrameField(fieldName)
+  const currentToolFrame = String(value ?? '').trim()
+  const discoveredToolFrames = collectToolFramesFromTransforms(robotTelemetry)
+  const toolFrameOptions = currentToolFrame && !discoveredToolFrames.includes(currentToolFrame)
+    ? [...discoveredToolFrames, currentToolFrame]
+    : discoveredToolFrames
+  const shouldUseSpeedSlider = isNumeric && isManipulatorActionType(actionType) && isSpeedFactorField(fieldName)
+  const normalizedSpeedFactorValue = (() => {
+    if (!shouldUseSpeedSlider) return value
+    const parsed = typeof value === 'number' ? value : parseFloat(String(value))
+    if (!Number.isFinite(parsed)) return 1.0
+    return Math.min(1.0, Math.max(0.1, parsed))
+  })()
 
-  const inputType = isBool ? 'checkbox' : isNumeric ? 'number' : 'text'
+  useEffect(() => {
+    if (!shouldUseSpeedSlider) return
+    if (typeof normalizedSpeedFactorValue !== 'number') return
+    if (value === normalizedSpeedFactorValue) return
+    onChange(normalizedSpeedFactorValue)
+  }, [shouldUseSpeedSlider, normalizedSpeedFactorValue, onChange, value])
+
+  const inputType = isBool
+    ? 'checkbox'
+    : shouldUseSpeedSlider
+      ? 'slider'
+      : isNumeric
+        ? 'number'
+        : 'text'
 
   return (
-    <ParameterSourceSelector
-      fieldSource={fieldSource}
-      availableSteps={availableSteps || []}
-      onChange={onFieldSourceChange || (() => {})}
-      targetFieldType={fieldType}
-      targetFieldName={fieldName}
-      constantValue={value}
-      onConstantChange={onChange}
-      inputType={inputType}
-    />
+    <div className="space-y-1.5">
+      <ParameterSourceSelector
+        fieldSource={fieldSource}
+        availableSteps={availableSteps || []}
+        onChange={onFieldSourceChange || (() => {})}
+        targetFieldType={fieldType}
+        targetFieldName={fieldName}
+        constantValue={normalizedSpeedFactorValue}
+        onConstantChange={onChange}
+        inputType={inputType}
+      />
+      {!isBinding && supportsToolDropdown && (
+        <div className="space-y-1">
+          {toolFrameOptions.length > 0 ? (
+            <>
+              <div className="text-[9px] text-cyan-300">base_link 하위 tool0 및 하위 프레임</div>
+              <select
+                value={currentToolFrame}
+                onChange={(e) => onChange(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                className="w-full px-2 py-1.5 bg-sunken border border-cyan-500/30 rounded text-[11px] text-primary focus:outline-none focus:border-cyan-400"
+              >
+                <option value="">도구 프레임 선택...</option>
+                {toolFrameOptions.map((frame) => (
+                  <option key={frame} value={frame}>{frame}</option>
+                ))}
+              </select>
+            </>
+          ) : (
+            <div className="text-[9px] text-muted">
+              base_link 하위의 tool0 프레임이 아직 감지되지 않았습니다.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   )
 })
+
+const ToolFrameFieldEditor = memo(({
+  fieldName: _fieldName,
+  fieldType,
+  value,
+  onChange,
+  robotTelemetry,
+  fieldSource,
+  onFieldSourceChange,
+}: {
+  fieldName: string
+  fieldType: string
+  value: unknown
+  onChange: (value: unknown) => void
+  robotTelemetry?: RobotTelemetryData | null
+  fieldSource?: ParameterFieldSource
+  onFieldSourceChange?: (source: ParameterFieldSource | undefined) => void
+}) => {
+  const normalizedType = (fieldType || '').toLowerCase()
+  const stdWrapperType = getStdPrimitiveWrapperType(fieldType)
+  const isStdStringWrapper = stdWrapperType === 'string' ||
+    normalizedType.includes('std_msgs/msg/string') ||
+    normalizedType.includes('std_msgs::msg/string')
+
+  const currentToolFrame = extractWrappedString(value).trim()
+  const discoveredToolFrames = collectToolFramesFromTransforms(robotTelemetry)
+  const toolFrameOptions = currentToolFrame && !discoveredToolFrames.includes(currentToolFrame)
+    ? [...discoveredToolFrames, currentToolFrame]
+    : discoveredToolFrames
+
+  // Force-disable binding/fixed-source for tool_frame fields.
+  useEffect(() => {
+    if (fieldSource?.source && onFieldSourceChange) {
+      onFieldSourceChange(undefined)
+    }
+  }, [fieldSource?.source, onFieldSourceChange])
+
+  const handleToolFrameChange = useCallback((nextValue: string) => {
+    if (
+      isStdStringWrapper ||
+      (value && typeof value === 'object' && !Array.isArray(value) && 'data' in (value as Record<string, unknown>))
+    ) {
+      onChange({ data: nextValue })
+      return
+    }
+    onChange(nextValue)
+  }, [isStdStringWrapper, onChange, value])
+
+  return (
+    <div className="space-y-1.5">
+      <div className="space-y-1">
+        <div className="text-[9px] text-cyan-300">base_link 하위 tool0 및 하위 프레임</div>
+        <select
+          value={currentToolFrame}
+          onChange={(e) => handleToolFrameChange(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          className="w-full px-2 py-1.5 bg-sunken border border-cyan-500/30 rounded text-[11px] text-primary focus:outline-none focus:border-cyan-400"
+        >
+          <option value="">
+            {toolFrameOptions.length > 0 ? '도구 프레임 선택...' : '감지된 도구 프레임 없음'}
+          </option>
+          {toolFrameOptions.map((frame) => (
+            <option key={frame} value={frame}>{frame}</option>
+          ))}
+        </select>
+        {toolFrameOptions.length === 0 && (
+          <div className="text-[9px] text-muted">
+            base_link 하위의 tool0 프레임이 아직 감지되지 않았습니다.
+          </div>
+        )}
+      </div>
+    </div>
+  )
+})
+
+function normalizeFrameName(frame: string): string {
+  return frame.trim().replace(/^\/+/, '').replace(/\/+$/, '')
+}
+
+function getFrameBaseName(frame: string): string {
+  const normalized = normalizeFrameName(frame)
+  const parts = normalized.split('/')
+  return (parts[parts.length - 1] || '').toLowerCase()
+}
+
+function hasAncestorFrame(
+  startFrame: string,
+  targetAncestorFrame: string,
+  childToParents: Map<string, Set<string>>
+): boolean {
+  const normalizedStart = normalizeFrameName(startFrame)
+  const normalizedTarget = normalizeFrameName(targetAncestorFrame)
+  if (!normalizedStart || !normalizedTarget) return false
+  if (normalizedStart === normalizedTarget) return true
+
+  const visited = new Set<string>()
+  const queue: string[] = [normalizedStart]
+
+  while (queue.length > 0) {
+    const current = queue.shift()!
+    if (visited.has(current)) continue
+    visited.add(current)
+
+    const parents = childToParents.get(current)
+    if (!parents) continue
+    for (const parent of parents) {
+      if (parent === normalizedTarget) return true
+      if (!visited.has(parent)) queue.push(parent)
+    }
+  }
+
+  return false
+}
+
+function collectToolFramesFromTransforms(robotTelemetry?: RobotTelemetryData | null): string[] {
+  const transforms = robotTelemetry?.transforms || []
+  if (transforms.length === 0) return []
+
+  const parentToChildren = new Map<string, Set<string>>()
+  const childToParents = new Map<string, Set<string>>()
+  const originalFrameName = new Map<string, string>()
+
+  transforms.forEach((transform) => {
+    const parent = normalizeFrameName(transform.frame_id)
+    const child = normalizeFrameName(transform.child_frame_id)
+    if (!parent || !child) return
+    if (!parentToChildren.has(parent)) {
+      parentToChildren.set(parent, new Set())
+    }
+    parentToChildren.get(parent)!.add(child)
+    if (!childToParents.has(child)) {
+      childToParents.set(child, new Set())
+    }
+    childToParents.get(child)!.add(parent)
+    if (!originalFrameName.has(parent)) {
+      originalFrameName.set(parent, transform.frame_id)
+    }
+    if (!originalFrameName.has(child)) {
+      originalFrameName.set(child, transform.child_frame_id)
+    }
+  })
+
+  const tool0Candidates: string[] = []
+  for (const frame of originalFrameName.keys()) {
+    if (getFrameBaseName(frame) === 'tool0') {
+      tool0Candidates.push(frame)
+    }
+  }
+
+  if (tool0Candidates.length === 0) {
+    const hasRobotBase = Array.from(originalFrameName.keys()).some((frame) => {
+      const base = getFrameBaseName(frame)
+      return base === 'base_link' || base === 'base'
+    })
+    return hasRobotBase ? ['tool0'] : []
+  }
+
+  // Prefer tool0 frames that are descendants of base_link.
+  const roots = tool0Candidates.filter((candidate) =>
+    hasAncestorFrame(candidate, 'base_link', childToParents)
+  )
+  const effectiveRoots = roots.length > 0 ? roots : tool0Candidates
+
+  const visited = new Set<string>()
+  const queue: string[] = [...effectiveRoots]
+  const collected = new Set<string>()
+
+  // Always include tool0 itself in the selectable tool frames.
+  effectiveRoots.forEach((root) => {
+    collected.add(originalFrameName.get(root) || root)
+  })
+
+  while (queue.length > 0) {
+    const current = queue.shift()!
+    if (visited.has(current)) continue
+    visited.add(current)
+
+    const children = parentToChildren.get(current)
+    if (!children) continue
+
+    children.forEach((child) => {
+      if (!visited.has(child)) {
+        queue.push(child)
+      }
+      collected.add(originalFrameName.get(child) || child)
+    })
+  }
+
+  return Array.from(collected).sort((a, b) => a.localeCompare(b))
+}
+
+function isToolFrameField(fieldName: string): boolean {
+  const normalized = fieldName.toLowerCase()
+  return (
+    normalized === 'tool' ||
+    normalized === 'toolframe' ||
+    normalized === 'tool_frame' ||
+    normalized.includes('toolframe') ||
+    normalized.includes('tool_frame') ||
+    normalized.endsWith('_tool') ||
+    normalized.includes('end_effector') ||
+    normalized.includes('eef')
+  )
+}
+
+function extractWrappedString(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const wrapped = value as Record<string, unknown>
+    if (typeof wrapped.data === 'string') {
+      return wrapped.data
+    }
+  }
+  return ''
+}
 
 // std_msgs primitive wrapper editor (e.g. std_msgs/msg/String -> { data: "..." })
 const StdPrimitiveMessageEditor = memo(({
@@ -250,6 +564,7 @@ const StdPrimitiveMessageEditor = memo(({
   fieldType,
   value,
   onChange,
+  robotTelemetry,
   fieldSource,
   availableSteps,
   onFieldSourceChange,
@@ -258,6 +573,7 @@ const StdPrimitiveMessageEditor = memo(({
   fieldType: string
   value: unknown
   onChange: (value: unknown) => void
+  robotTelemetry?: RobotTelemetryData | null
   fieldSource?: ParameterFieldSource
   availableSteps?: AvailableStep[]
   onFieldSourceChange?: (source: ParameterFieldSource | undefined) => void
@@ -281,6 +597,13 @@ const StdPrimitiveMessageEditor = memo(({
   const wrapped = normalizeWrappedValue(value)
   const constantValue = wrapped.data ?? getDefaultValue()
   const inputType = wrapperType === 'boolean' ? 'checkbox' : wrapperType === 'number' ? 'number' : 'text'
+  const isBinding = fieldSource?.source === 'step_result'
+  const supportsToolDropdown = wrapperType === 'string' && isToolFrameField(fieldName)
+  const currentToolFrame = extractWrappedString(value).trim()
+  const discoveredToolFrames = collectToolFramesFromTransforms(robotTelemetry)
+  const toolFrameOptions = currentToolFrame && !discoveredToolFrames.includes(currentToolFrame)
+    ? [...discoveredToolFrames, currentToolFrame]
+    : discoveredToolFrames
 
   const handleConstantChange = useCallback((nextValue: unknown) => {
     if (wrapperType === 'boolean') {
@@ -309,6 +632,30 @@ const StdPrimitiveMessageEditor = memo(({
         onConstantChange={handleConstantChange}
         inputType={inputType}
       />
+      {!isBinding && supportsToolDropdown && (
+        <div className="space-y-1">
+          {toolFrameOptions.length > 0 ? (
+            <>
+              <div className="text-[9px] text-cyan-300">base_link 하위 tool0 및 하위 프레임</div>
+              <select
+                value={currentToolFrame}
+                onChange={(e) => handleConstantChange(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                className="w-full px-2 py-1.5 bg-sunken border border-cyan-500/30 rounded text-[11px] text-primary focus:outline-none focus:border-cyan-400"
+              >
+                <option value="">도구 프레임 선택...</option>
+                {toolFrameOptions.map((frame) => (
+                  <option key={frame} value={frame}>{frame}</option>
+                ))}
+              </select>
+            </>
+          ) : (
+            <div className="text-[9px] text-muted">
+              base_link 하위의 tool0 프레임이 아직 감지되지 않았습니다.
+            </div>
+          )}
+        </div>
+      )}
       <div className="text-[9px] text-muted">
         저장 형식: <code className="text-[9px] text-purple-300">{'{'}"data": ...{'}'}</code>
       </div>
@@ -554,6 +901,7 @@ const PoseEditorWithBinding = memo(({
   robotTelemetry,
   isStamped,
   isPoint,
+  preferredFrameId,
 }: {
   value: unknown
   onChange: (value: unknown) => void
@@ -565,6 +913,7 @@ const PoseEditorWithBinding = memo(({
   robotTelemetry?: RobotTelemetryData | null
   isStamped: boolean
   isPoint: boolean
+  preferredFrameId?: string
 }) => {
   // Check if field has a binding (step_result source)
   const hasBinding = fieldSource?.source === 'step_result'
@@ -596,6 +945,7 @@ const PoseEditorWithBinding = memo(({
         robotTelemetry={robotTelemetry}
         isStamped={isStamped}
         isPoint={isPoint}
+        preferredFrameId={preferredFrameId}
       />
 
       {/* Binding option - always show, disabled when no bindable steps */}

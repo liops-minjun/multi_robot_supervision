@@ -27,6 +27,8 @@ export interface RobotTelemetryData {
     effort: number[]
   }
   odometry?: {
+    frame_id?: string
+    child_frame_id?: string
     pose: {
       position: { x: number; y: number; z: number }
       orientation: { x: number; y: number; z: number; w: number }
@@ -36,6 +38,13 @@ export interface RobotTelemetryData {
       angular: { x: number; y: number; z: number }
     }
   }
+  transforms?: Array<{
+    frame_id: string
+    child_frame_id: string
+    translation: { x: number; y: number; z: number }
+    rotation: { x: number; y: number; z: number; w: number }
+    timestamp_ns?: number
+  }>
 }
 
 // Pose value structure
@@ -222,8 +231,12 @@ export function getEditorType(rosType: string, isArray: boolean): EditorType {
 export type StdPrimitiveWrapperType = 'string' | 'boolean' | 'number'
 
 export function getStdPrimitiveWrapperType(rosType: string): StdPrimitiveWrapperType | null {
-  const lower = rosType.toLowerCase()
-  const normalized = lower.replace('std_msgs/', 'std_msgs/msg/')
+  const lower = (rosType || '').toLowerCase().trim()
+  const normalized = lower
+    .replace(/::/g, '/')
+    .replace(/__/g, '/')
+    .replace(/^std_msgs\//, 'std_msgs/msg/')
+    .replace(/\/+/g, '/')
 
   if (normalized === 'std_msgs/msg/string') return 'string'
   if (normalized === 'std_msgs/msg/bool') return 'boolean'

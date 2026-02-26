@@ -1,4 +1,4 @@
-import { memo, useEffect } from 'react'
+import { memo, useEffect, useMemo } from 'react'
 import { ChevronDown, ChevronUp, Upload, Loader2, Radio } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import type { ActionField, ParameterFieldSource, RobotTelemetry } from '../../../../types'
@@ -12,6 +12,7 @@ interface GoalParametersSectionProps {
   onToggle: () => void
   isLoadingFields: boolean
   goalFields: ActionField[]
+  actionType?: string
   params: Record<string, unknown>
   fieldSources: Record<string, ParameterFieldSource>
   availableSteps: AvailableStep[]
@@ -31,6 +32,8 @@ function toEditorTelemetry(telemetry: RobotTelemetry | null | undefined): RobotT
       effort: telemetry.joint_state.effort,
     } : undefined,
     odometry: telemetry.odometry ? {
+      frame_id: telemetry.odometry.frame_id,
+      child_frame_id: telemetry.odometry.child_frame_id,
       pose: {
         position: telemetry.odometry.pose.position,
         orientation: telemetry.odometry.pose.orientation,
@@ -40,7 +43,52 @@ function toEditorTelemetry(telemetry: RobotTelemetry | null | undefined): RobotT
         angular: telemetry.odometry.twist.angular,
       },
     } : undefined,
+    transforms: telemetry.transforms ? telemetry.transforms.map((transform) => ({
+      frame_id: transform.frame_id,
+      child_frame_id: transform.child_frame_id,
+      translation: transform.translation,
+      rotation: transform.rotation,
+      timestamp_ns: transform.timestamp_ns,
+    })) : undefined,
   }
+}
+
+function extractToolFrameFromParams(params: Record<string, unknown>): string | null {
+  const candidatePatterns = [
+    /^tool$/,
+    /^tool_frame$/,
+    /tool_frame/,
+    /tool$/,
+    /eef/,
+    /end_effector/,
+    /tcp_frame/,
+  ]
+
+  const extractStringValue = (value: unknown): string | null => {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim()
+    }
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const wrapped = value as Record<string, unknown>
+      if (typeof wrapped.data === 'string' && wrapped.data.trim()) {
+        return wrapped.data.trim()
+      }
+    }
+    return null
+  }
+
+  for (const [key, value] of Object.entries(params)) {
+    const normalizedKey = key.toLowerCase()
+    if (!candidatePatterns.some((pattern) => pattern.test(normalizedKey))) {
+      continue
+    }
+    const extracted = extractStringValue(value)
+    if (extracted) {
+      return extracted
+    }
+  }
+
+  return null
 }
 
 const GoalParametersSection = memo(({
@@ -48,6 +96,7 @@ const GoalParametersSection = memo(({
   onToggle,
   isLoadingFields,
   goalFields,
+  actionType,
   params,
   fieldSources,
   availableSteps,
@@ -98,12 +147,23 @@ const GoalParametersSection = memo(({
         ...(liveTelemetry || {}),
         joint_state: liveTelemetry?.joint_state || telemetry?.joint_state,
         odometry: liveTelemetry?.odometry || telemetry?.odometry,
+        transforms: (liveTelemetry?.transforms && liveTelemetry.transforms.length > 0)
+          ? liveTelemetry.transforms
+          : telemetry?.transforms,
         updated_at: liveTelemetry?.updated_at || telemetry?.updated_at || new Date().toISOString(),
       }
     : null
 
   const editorTelemetry = toEditorTelemetry(mergedTelemetry)
-  const hasTelemetry = !!(mergedTelemetry?.joint_state || mergedTelemetry?.odometry)
+  const hasTelemetry = !!(
+    mergedTelemetry?.joint_state ||
+    mergedTelemetry?.odometry ||
+    (mergedTelemetry?.transforms && mergedTelemetry.transforms.length > 0)
+  )
+  const selectedToolFrame = useMemo(
+    () => extractToolFrameFromParams(params),
+    [params]
+  )
 
   return (
     <div className="border-b border-primary">
@@ -195,9 +255,11 @@ const GoalParametersSection = memo(({
                     fieldName={field.name}
                     fieldType={field.type}
                     isArray={field.is_array}
+                    actionType={actionType}
                     value={params[field.name]}
                     onChange={(value) => onUpdateParam(field.name, value)}
                     robotTelemetry={editorTelemetry}
+                    selectedToolFrame={selectedToolFrame}
                     fieldSource={fieldSources[field.name]}
                     availableSteps={availableSteps}
                     onFieldSourceChange={(source) => onUpdateFieldSource(field.name, source)}

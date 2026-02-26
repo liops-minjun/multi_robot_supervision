@@ -188,6 +188,9 @@ type AgentResponse struct {
 	SemanticTags     []string   `json:"semantic_tags,omitempty"`      // Current semantic tags
 	CurrentGraphID   string     `json:"current_graph_id,omitempty"`   // Currently executing graph
 	RobotCount       int        `json:"robot_count"`
+	HasCapabilityTemplate bool  `json:"has_capability_template"`
+	CapabilityTemplateSavedAt *time.Time `json:"capability_template_saved_at,omitempty"`
+	CapabilityTemplateCapabilityCount int `json:"capability_template_capability_count,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`
 	Robots           []string   `json:"robots,omitempty"` // In 1:1 model, contains single agent ID
 }

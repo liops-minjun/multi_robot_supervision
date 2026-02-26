@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -250,22 +251,38 @@ func (s *Server) ListAllCapabilities(w http.ResponseWriter, r *http.Request) {
 
 	// Build agent name map for lookup
 	agentNameMap := make(map[string]string)
+	agentStatusMap := make(map[string]string)
 	for _, agent := range agents {
 		agentNameMap[agent.ID] = agent.Name
+		agentStatusMap[agent.ID] = strings.ToLower(strings.TrimSpace(agent.Status))
 	}
 
 	// Group capabilities by action type (for backward compatibility)
 	actionTypeMap := make(map[string]*ActionTypeInfo)
-	// Deduplicate action servers by action_type (keep first available, or first if none available)
-	// This prevents showing duplicate actions when multiple agents have the same capability
+	// Deduplicate capabilities per-agent.
+	// Keep separate entries across agents so compatibility checks can build accurate
+	// capability templates for each RTM (online/offline saved).
 	actionServerMap := make(map[string]ActionServerInfo)
 	serviceServerMap := make(map[string]ServiceServerInfo)
 
 	for _, cap := range allCaps {
+		agentName, agentExists := agentNameMap[cap.AgentID]
+		if !agentExists {
+			// Skip orphan capability rows for deleted/unknown agents.
+			continue
+		}
+
+		agentIsOnline := agentStatusMap[cap.AgentID] == "online"
+		if agentIsOnline && !cap.IsAvailable {
+			// For currently online RTMs, only expose live capabilities.
+			// Offline template editing is covered by offline/saved RTM snapshots.
+			continue
+		}
+
 		capabilityKind := normalizeCapabilityKind(cap.CapabilityKind, cap.ActionType)
 
 		if capabilityKind == "service" {
-			dedupeKey := cap.ActionType + "|" + cap.ActionServer
+			dedupeKey := cap.AgentID + "|" + cap.ActionType + "|" + cap.ActionServer
 			existing, hasExisting := serviceServerMap[dedupeKey]
 			shouldAdd := !hasExisting || (!existing.IsAvailable && cap.IsAvailable)
 			if shouldAdd {
@@ -273,7 +290,7 @@ func (s *Server) ListAllCapabilities(w http.ResponseWriter, r *http.Request) {
 					ServiceType:     cap.ActionType,
 					ServiceName:     cap.ActionServer,
 					AgentID:         cap.AgentID,
-					AgentName:       agentNameMap[cap.AgentID],
+					AgentName:       agentName,
 					NodeName:        cap.NodeName,
 					IsLifecycleNode: cap.IsLifecycleNode,
 					IsAvailable:     cap.IsAvailable,
@@ -299,9 +316,9 @@ func (s *Server) ListAllCapabilities(w http.ResponseWriter, r *http.Request) {
 			info.AvailableCount++
 		}
 
-		// Deduplicate by action_type + action_server: only true duplicates are removed
-		// Different servers with the same action type should all be shown
-		dedupeKey := cap.ActionType + "|" + cap.ActionServer
+		// Deduplicate by agent + action_type + action_server.
+		// Different agents must keep separate entries.
+		dedupeKey := cap.AgentID + "|" + cap.ActionType + "|" + cap.ActionServer
 		existing, hasExisting := actionServerMap[dedupeKey]
 		shouldAdd := !hasExisting || (!existing.IsAvailable && cap.IsAvailable)
 		if shouldAdd {
@@ -309,7 +326,7 @@ func (s *Server) ListAllCapabilities(w http.ResponseWriter, r *http.Request) {
 				ActionType:      cap.ActionType,
 				ActionServer:    cap.ActionServer,
 				AgentID:         cap.AgentID,
-				AgentName:       agentNameMap[cap.AgentID],
+				AgentName:       agentName,
 				NodeName:        cap.NodeName,
 				IsLifecycleNode: cap.IsLifecycleNode,
 				IsAvailable:     cap.IsAvailable,
@@ -361,17 +378,59 @@ func (s *Server) GetCapabilitiesByActionType(w http.ResponseWriter, r *http.Requ
 	// Get agent name map for lookup
 	agents, _ := s.repo.GetAllAgents()
 	agentNameMap := make(map[string]string)
+	agentStatusMap := make(map[string]string)
 	for _, agent := range agents {
 		agentNameMap[agent.ID] = agent.Name
+		agentStatusMap[agent.ID] = strings.ToLower(strings.TrimSpace(agent.Status))
 	}
 
 	// Filter by action type
 	var caps []db.AgentCapability
 	for _, cap := range allCaps {
-		if cap.ActionType == actionType {
-			caps = append(caps, cap)
+		if cap.ActionType != actionType {
+			continue
 		}
+
+		_, agentExists := agentNameMap[cap.AgentID]
+		if !agentExists {
+			// Skip orphan capabilities for deleted/unknown agents.
+			continue
+		}
+
+		agentIsOnline := agentStatusMap[cap.AgentID] == "online"
+		if agentIsOnline && !cap.IsAvailable {
+			// Online RTM view should prefer live capabilities.
+			continue
+		}
+
+		caps = append(caps, cap)
 	}
+
+	scoreCapability := func(cap db.AgentCapability) int {
+		score := 0
+		if cap.IsAvailable {
+			score += 100
+		}
+		if len(cap.GoalSchema) > 0 {
+			score += 20
+		}
+		if len(cap.ResultSchema) > 0 {
+			score += 10
+		}
+		return score
+	}
+
+	sort.SliceStable(caps, func(i, j int) bool {
+		si := scoreCapability(caps[i])
+		sj := scoreCapability(caps[j])
+		if si != sj {
+			return si > sj
+		}
+		if caps[i].AgentID != caps[j].AgentID {
+			return caps[i].AgentID < caps[j].AgentID
+		}
+		return caps[i].ActionServer < caps[j].ActionServer
+	})
 
 	responses := make([]struct {
 		AgentID        string                 `json:"agent_id"`

@@ -14,6 +14,187 @@ import {
 interface PoseEditorProps extends BaseEditorProps {
   isStamped?: boolean  // PoseStamped vs Pose
   isPoint?: boolean    // Point/PointStamped (no orientation)
+  preferredFrameId?: string
+}
+
+const DEFAULT_POSE_FRAME_ID = 'base_link'
+const IDENTITY_TRANSLATION = { x: 0, y: 0, z: 0 }
+const IDENTITY_ROTATION = { x: 0, y: 0, z: 0, w: 1 }
+
+function normalizeFrameName(frame: string): string {
+  return frame.trim().replace(/^\/+/, '').replace(/\/+$/, '')
+}
+
+function frameBaseName(frame: string): string {
+  const normalized = normalizeFrameName(frame)
+  const parts = normalized.split('/')
+  return parts[parts.length - 1] || ''
+}
+
+function isToolLikeFrame(frame: string): boolean {
+  const base = frameBaseName(frame).toLowerCase()
+  if (base.includes('controller')) return false
+  return (
+    base === 'tool0' ||
+    base.includes('tool') ||
+    base.includes('tcp') ||
+    base.includes('eef') ||
+    base.includes('end_effector') ||
+    base.includes('gripper') ||
+    base.includes('flange')
+  )
+}
+
+type QuaternionLike = { x: number; y: number; z: number; w: number }
+type VectorLike = { x: number; y: number; z: number }
+type TransformLike = {
+  frame_id: string
+  child_frame_id: string
+  translation: VectorLike
+  rotation: QuaternionLike
+  timestamp_ns?: number
+}
+
+function normalizeQuaternion(q: QuaternionLike): QuaternionLike {
+  const norm = Math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w)
+  if (norm < 1e-8) return IDENTITY_ROTATION
+  return {
+    x: q.x / norm,
+    y: q.y / norm,
+    z: q.z / norm,
+    w: q.w / norm,
+  }
+}
+
+function multiplyQuaternionRaw(a: QuaternionLike, b: QuaternionLike): QuaternionLike {
+  return {
+    x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+    y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+    w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+  }
+}
+
+function multiplyQuaternion(a: QuaternionLike, b: QuaternionLike): QuaternionLike {
+  return normalizeQuaternion(multiplyQuaternionRaw(a, b))
+}
+
+function invertQuaternion(q: QuaternionLike): QuaternionLike {
+  const normalized = normalizeQuaternion(q)
+  return { x: -normalized.x, y: -normalized.y, z: -normalized.z, w: normalized.w }
+}
+
+function rotateVector(v: VectorLike, q: QuaternionLike): VectorLike {
+  const p = { x: v.x, y: v.y, z: v.z, w: 0 }
+  const qNorm = normalizeQuaternion(q)
+  const rotated = multiplyQuaternionRaw(
+    multiplyQuaternionRaw(qNorm, p),
+    invertQuaternion(qNorm)
+  )
+  return { x: rotated.x, y: rotated.y, z: rotated.z }
+}
+
+function composeTransform(a: { translation: VectorLike; rotation: QuaternionLike }, b: { translation: VectorLike; rotation: QuaternionLike }) {
+  const rotated = rotateVector(b.translation, a.rotation)
+  return {
+    translation: {
+      x: a.translation.x + rotated.x,
+      y: a.translation.y + rotated.y,
+      z: a.translation.z + rotated.z,
+    },
+    rotation: multiplyQuaternion(a.rotation, b.rotation),
+  }
+}
+
+function invertTransform(t: { translation: VectorLike; rotation: QuaternionLike }) {
+  const invRotation = invertQuaternion(t.rotation)
+  const invTranslation = rotateVector(
+    { x: -t.translation.x, y: -t.translation.y, z: -t.translation.z },
+    invRotation
+  )
+  return { translation: invTranslation, rotation: invRotation }
+}
+
+function selectLatestTransforms(transforms: TransformLike[]): TransformLike[] {
+  const byEdge = new Map<string, TransformLike>()
+
+  transforms.forEach((transform) => {
+    const parent = normalizeFrameName(transform.frame_id)
+    const child = normalizeFrameName(transform.child_frame_id)
+    if (!parent || !child || parent === child) return
+    const key = `${parent}->${child}`
+    const prev = byEdge.get(key)
+    if (!prev) {
+      byEdge.set(key, transform)
+      return
+    }
+
+    const prevTs = prev.timestamp_ns ?? -1
+    const nextTs = transform.timestamp_ns ?? -1
+    if (nextTs >= prevTs) {
+      byEdge.set(key, transform)
+    }
+  })
+
+  return Array.from(byEdge.values())
+}
+
+function resolveTransformBetweenFrames(transforms: TransformLike[], fromFrame: string, toFrame: string) {
+  const source = normalizeFrameName(fromFrame)
+  const target = normalizeFrameName(toFrame)
+  if (!source || !target) return null
+  if (source === target) {
+    return { translation: IDENTITY_TRANSLATION, rotation: IDENTITY_ROTATION }
+  }
+
+  const latestTransforms = selectLatestTransforms(transforms)
+  const adjacency = new Map<string, Array<{ frame: string; transform: { translation: VectorLike; rotation: QuaternionLike } }>>()
+
+  const addEdge = (from: string, to: string, transform: { translation: VectorLike; rotation: QuaternionLike }) => {
+    const edges = adjacency.get(from) || []
+    edges.push({ frame: to, transform })
+    adjacency.set(from, edges)
+  }
+
+  latestTransforms.forEach((transform) => {
+    const parent = normalizeFrameName(transform.frame_id)
+    const child = normalizeFrameName(transform.child_frame_id)
+    if (!parent || !child || parent === child) return
+
+    const forward = {
+      translation: transform.translation,
+      rotation: normalizeQuaternion(transform.rotation),
+    }
+    addEdge(parent, child, forward)
+    addEdge(child, parent, invertTransform(forward))
+  })
+
+  const visited = new Set<string>([source])
+  const queue: string[] = [source]
+  const tfFromSource = new Map<string, { translation: VectorLike; rotation: QuaternionLike }>([
+    [source, { translation: IDENTITY_TRANSLATION, rotation: IDENTITY_ROTATION }],
+  ])
+
+  while (queue.length > 0) {
+    const current = queue.shift()
+    if (!current) continue
+    const currentTf = tfFromSource.get(current)
+    if (!currentTf) continue
+
+    const neighbors = adjacency.get(current) || []
+    for (const neighbor of neighbors) {
+      if (visited.has(neighbor.frame)) continue
+      const composed = composeTransform(currentTf, neighbor.transform)
+      if (neighbor.frame === target) {
+        return composed
+      }
+      visited.add(neighbor.frame)
+      tfFromSource.set(neighbor.frame, composed)
+      queue.push(neighbor.frame)
+    }
+  }
+
+  return null
 }
 
 const PoseEditor = memo(({
@@ -24,6 +205,7 @@ const PoseEditor = memo(({
   robotTelemetry,
   isStamped = false,
   isPoint = false,
+  preferredFrameId,
 }: PoseEditorProps) => {
   // _fieldName and _fieldType kept for interface consistency
   const [mode, setMode] = useState<EditorMode>('telemetry')
@@ -38,18 +220,123 @@ const PoseEditor = memo(({
     return value as PoseValue
   }, [value, isStamped])
 
-  // Get live telemetry pose
-  const livePose = useMemo((): PoseValue | null => {
-    if (!robotTelemetry?.odometry?.pose) return null
-    return robotTelemetry.odometry.pose
-  }, [robotTelemetry])
-
-  // Get frame_id for stamped types
+  // Get frame_id for stamped types (default: base_link)
   const frameId = useMemo(() => {
     if (!isStamped) return null
     const stamped = value as PoseStampedValue | null
-    return stamped?.header?.frame_id || 'map'
+    const existingFrameId = typeof stamped?.header?.frame_id === 'string'
+      ? stamped.header.frame_id.trim()
+      : ''
+    return existingFrameId || DEFAULT_POSE_FRAME_ID
   }, [value, isStamped])
+
+  const normalizedTargetFrame = useMemo(
+    () => normalizeFrameName(frameId || DEFAULT_POSE_FRAME_ID),
+    [frameId]
+  )
+
+  // If a tool frame is selected, prioritize TF pose for that frame.
+  const selectedToolTransform = useMemo(() => {
+    const requested = preferredFrameId ? normalizeFrameName(preferredFrameId) : ''
+    const transforms = robotTelemetry?.transforms || []
+    if (!requested || transforms.length === 0) return null
+
+    const exactMatches = transforms.filter(
+      (transform) => normalizeFrameName(transform.child_frame_id) === requested
+    )
+    if (exactMatches.length > 0) {
+      const exactByFrame = exactMatches.find(
+        (transform) => normalizeFrameName(transform.frame_id) === normalizedTargetFrame
+      )
+      return exactByFrame || exactMatches[0]
+    }
+
+    const requestedBase = frameBaseName(requested).toLowerCase()
+    if (!requestedBase) return null
+
+    const baseMatches = transforms.filter(
+      (transform) => frameBaseName(transform.child_frame_id).toLowerCase() === requestedBase
+    )
+    if (baseMatches.length === 0) return null
+
+    const baseByFrame = baseMatches.find(
+      (transform) => normalizeFrameName(transform.frame_id) === normalizedTargetFrame
+    )
+    return baseByFrame || baseMatches[0]
+  }, [normalizedTargetFrame, preferredFrameId, robotTelemetry?.transforms])
+
+  const autoToolTransform = useMemo(() => {
+    if (selectedToolTransform) return selectedToolTransform
+    const transforms = robotTelemetry?.transforms || []
+    if (transforms.length === 0) return null
+
+    // Prefer tool-like TF frames for Cartesian target capture.
+    const toolLike = transforms.filter((transform) => isToolLikeFrame(transform.child_frame_id))
+    if (toolLike.length === 0) return null
+
+    const matchingTargetFrame = toolLike.filter(
+      (transform) => normalizeFrameName(transform.frame_id) === normalizedTargetFrame
+    )
+    if (matchingTargetFrame.length > 0) {
+      const sortedMatching = [...matchingTargetFrame].sort((a, b) => b.child_frame_id.length - a.child_frame_id.length)
+      return sortedMatching[0]
+    }
+
+    // Prefer deeper frame path first (often actual tool tip under tool0 chain).
+    const sorted = [...toolLike].sort((a, b) => b.child_frame_id.length - a.child_frame_id.length)
+    return sorted[0]
+  }, [normalizedTargetFrame, robotTelemetry?.transforms, selectedToolTransform])
+
+  // Get live telemetry pose (explicit tool_frame TF -> auto tool-like TF -> odometry)
+  const livePoseContext = useMemo(() => {
+    const transforms = robotTelemetry?.transforms || []
+    const resolveTfPose = (targetFrame: string) => {
+      const normalizedSource = normalizeFrameName(frameId || DEFAULT_POSE_FRAME_ID)
+      const normalizedChild = normalizeFrameName(targetFrame)
+      if (!normalizedChild) return null
+
+      const chained = resolveTransformBetweenFrames(transforms, normalizedSource, normalizedChild)
+      if (chained) {
+        return {
+          pose: {
+            position: chained.translation,
+            orientation: chained.rotation,
+          },
+          source: 'tf' as const,
+          sourceFrameId: normalizedSource,
+          sourceChildFrameId: normalizedChild,
+        }
+      }
+      return null
+    }
+
+    if (selectedToolTransform) {
+      const tfPose = resolveTfPose(selectedToolTransform.child_frame_id)
+      if (tfPose) return tfPose
+      return null
+    }
+    if (autoToolTransform) {
+      const tfPose = resolveTfPose(autoToolTransform.child_frame_id)
+      if (tfPose) return tfPose
+    }
+    if (!robotTelemetry?.odometry?.pose) return null
+
+    const odometryFrame = normalizeFrameName(robotTelemetry.odometry.frame_id || '')
+    if (isStamped && odometryFrame && odometryFrame !== normalizedTargetFrame) {
+      return null
+    }
+
+    return {
+      pose: robotTelemetry.odometry.pose,
+      source: 'odometry' as const,
+      sourceFrameId: robotTelemetry.odometry.frame_id || DEFAULT_POSE_FRAME_ID,
+      sourceChildFrameId: robotTelemetry.odometry.child_frame_id || '',
+    }
+  }, [autoToolTransform, frameId, isStamped, normalizedTargetFrame, robotTelemetry, selectedToolTransform])
+
+  const livePose = livePoseContext?.pose || null
+  const hasTransforms = (robotTelemetry?.transforms?.length || 0) > 0
+  const tfChainMissing = !!preferredFrameId && hasTransforms && !livePoseContext
 
   // Capture current telemetry value
   const handleCapture = useCallback(() => {
@@ -59,7 +346,7 @@ const PoseEditor = memo(({
       const newValue: PoseStampedValue = {
         header: {
           stamp: { sec: 0, nanosec: 0 },
-          frame_id: frameId || 'map',
+          frame_id: frameId || DEFAULT_POSE_FRAME_ID,
         },
         pose: isPoint
           ? { position: livePose.position, orientation: { x: 0, y: 0, z: 0, w: 1 } }
@@ -89,13 +376,13 @@ const PoseEditor = memo(({
     if (isStamped) {
       const stamped = value as PoseStampedValue | null
       onChange({
-        header: stamped?.header || { frame_id: 'map' },
+        header: stamped?.header || { frame_id: frameId || DEFAULT_POSE_FRAME_ID },
         pose: newPose,
       })
     } else {
       onChange(newPose)
     }
-  }, [poseValue, value, isStamped, onChange])
+  }, [poseValue, value, isStamped, onChange, frameId])
 
   // Update orientation (from euler angles in degrees)
   const updateOrientation = useCallback((eulerAxis: 'roll' | 'pitch' | 'yaw', degrees: number) => {
@@ -116,13 +403,13 @@ const PoseEditor = memo(({
     if (isStamped) {
       const stamped = value as PoseStampedValue | null
       onChange({
-        header: stamped?.header || { frame_id: 'map' },
+        header: stamped?.header || { frame_id: frameId || DEFAULT_POSE_FRAME_ID },
         pose: newPose,
       })
     } else {
       onChange(newPose)
     }
-  }, [poseValue, value, isStamped, onChange])
+  }, [poseValue, value, isStamped, onChange, frameId])
 
   // Update frame_id
   const updateFrameId = useCallback((newFrameId: string) => {
@@ -158,6 +445,29 @@ const PoseEditor = memo(({
       {/* Telemetry mode */}
       {mode === 'telemetry' && (
         <div className="space-y-2">
+          {(preferredFrameId || autoToolTransform) && (
+            <div className="px-2 py-1 bg-cyan-500/10 rounded border border-cyan-500/30 text-[9px] text-cyan-300">
+              Tool Frame: <span className="font-mono">{preferredFrameId || autoToolTransform?.child_frame_id}</span>
+              {livePoseContext?.source === 'tf' && livePoseContext.sourceChildFrameId && (
+                <span className="text-muted ml-2">
+                  ({livePoseContext.sourceFrameId} → {livePoseContext.sourceChildFrameId})
+                </span>
+              )}
+            </div>
+          )}
+          {isStamped && (
+            <div className="px-2 py-1 bg-emerald-500/10 rounded border border-emerald-500/30 text-[9px] text-emerald-300">
+              frame_id : <span className="font-mono">{frameId || DEFAULT_POSE_FRAME_ID}</span>
+            </div>
+          )}
+          {tfChainMissing && (
+            <div className="px-2 py-1 bg-amber-500/10 rounded border border-amber-500/30 text-[9px] text-amber-300">
+              TF 체인 없음: <span className="font-mono">{frameId || DEFAULT_POSE_FRAME_ID}</span>
+              <span className="text-muted mx-1">→</span>
+              <span className="font-mono">{preferredFrameId}</span>
+            </div>
+          )}
+
           {/* Live preview */}
           <TelemetryPreview
             type={isPoint ? 'point' : 'pose'}
@@ -180,23 +490,35 @@ const PoseEditor = memo(({
           {poseValue && (
             <div className="p-2 bg-gray-800/50 rounded border border-primary/50">
               <div className="text-[8px] text-muted mb-1">저장된 값</div>
-              <div className="grid grid-cols-4 gap-2 text-[10px] font-mono">
-                <div>
-                  <span className="text-muted">x: </span>
-                  <span className="text-amber-400">{formatNumber(poseValue.position.x)}</span>
-                </div>
-                <div>
-                  <span className="text-muted">y: </span>
-                  <span className="text-amber-400">{formatNumber(poseValue.position.y)}</span>
-                </div>
-                <div>
-                  <span className="text-muted">z: </span>
-                  <span className="text-amber-400">{formatNumber(poseValue.position.z)}</span>
+              <div className="space-y-1 text-[10px] font-mono">
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <span className="text-muted">x: </span>
+                    <span className="text-amber-400">{formatNumber(poseValue.position.x)}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted">y: </span>
+                    <span className="text-amber-400">{formatNumber(poseValue.position.y)}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted">z: </span>
+                    <span className="text-amber-400">{formatNumber(poseValue.position.z)}</span>
+                  </div>
                 </div>
                 {!isPoint && (
-                  <div>
-                    <span className="text-muted">yaw: </span>
-                    <span className="text-amber-400">{formatNumber(currentEuler.yaw, 1)}°</span>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <span className="text-muted">roll: </span>
+                      <span className="text-amber-400">{formatNumber(currentEuler.roll, 1)}°</span>
+                    </div>
+                    <div>
+                      <span className="text-muted">pitch: </span>
+                      <span className="text-amber-400">{formatNumber(currentEuler.pitch, 1)}°</span>
+                    </div>
+                    <div>
+                      <span className="text-muted">yaw: </span>
+                      <span className="text-amber-400">{formatNumber(currentEuler.yaw, 1)}°</span>
+                    </div>
                   </div>
                 )}
               </div>
@@ -218,7 +540,7 @@ const PoseEditor = memo(({
                 onChange={(e) => { e.stopPropagation(); updateFrameId(e.target.value) }}
                 onClick={(e) => e.stopPropagation()}
                 className="flex-1 px-2 py-1 bg-sunken border border-primary rounded text-[10px] text-primary focus:outline-none focus:border-amber-500"
-                placeholder="map"
+                placeholder={DEFAULT_POSE_FRAME_ID}
               />
             </div>
           )}
@@ -272,7 +594,7 @@ const PoseEditor = memo(({
         <div>
           <textarea
             value={JSON.stringify(value || (isStamped
-              ? { header: { frame_id: 'map' }, pose: { position: { x: 0, y: 0, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } } }
+              ? { header: { frame_id: DEFAULT_POSE_FRAME_ID }, pose: { position: { x: 0, y: 0, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } } }
               : { position: { x: 0, y: 0, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } }
             ), null, 2)}
             onChange={(e) => { e.stopPropagation(); handleJsonChange(e.target.value) }}
