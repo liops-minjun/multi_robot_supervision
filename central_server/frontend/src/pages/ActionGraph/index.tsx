@@ -887,7 +887,7 @@ function ActionGraphEditor() {
       // Deduplicate by action type + full action server path.
       const serverMap = new Map<string, typeof fleetCapabilities.action_servers[0]>()
       for (const srv of fleetCapabilities.action_servers) {
-        const dedupeKey = `${srv.action_type}|${srv.action_server}`
+        const dedupeKey = `${srv.agent_id}|${srv.action_type}|${srv.action_server}`
         const existing = serverMap.get(dedupeKey)
         if (!existing || (!existing.is_available && srv.is_available)) {
           serverMap.set(dedupeKey, srv)
@@ -926,7 +926,7 @@ function ActionGraphEditor() {
     if (fleetCapabilities?.service_servers && fleetCapabilities.service_servers.length > 0) {
       const serviceMap = new Map<string, typeof fleetCapabilities.service_servers[0]>()
       for (const srv of fleetCapabilities.service_servers) {
-        const dedupeKey = `${srv.service_type}|${srv.service_name}`
+        const dedupeKey = `${srv.agent_id}|${srv.service_type}|${srv.service_name}`
         const existing = serviceMap.get(dedupeKey)
         if (!existing || (!existing.is_available && srv.is_available)) {
           serviceMap.set(dedupeKey, srv)

@@ -9,8 +9,12 @@ interface UserState {
 }
 
 const generateSessionId = (username: string): string => {
-  return `session_${username}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
+  const safeUsername = encodeURIComponent(username)
+  return `session_${safeUsername}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
 }
+
+// Check if a session ID contains only ASCII characters (safe for HTTP headers)
+const isAsciiOnly = (str: string): boolean => /^[\x00-\x7F]*$/.test(str)
 
 export const useUserStore = create<UserState>()(
   persist(
@@ -20,8 +24,8 @@ export const useUserStore = create<UserState>()(
 
       setUsername: (name: string) => {
         const current = get()
-        // Only regenerate sessionId if username changes
-        if (current.username === name && current.sessionId) {
+        // Regenerate if username changes or if existing sessionId contains non-ASCII
+        if (current.username === name && current.sessionId && isAsciiOnly(current.sessionId)) {
           return
         }
         set({
@@ -34,6 +38,15 @@ export const useUserStore = create<UserState>()(
     }),
     {
       name: 'fleet-user',
+      version: 1,
+      migrate: (persisted: any, version: number) => {
+        if (version === 0 && persisted?.sessionId && !isAsciiOnly(persisted.sessionId)) {
+          persisted.sessionId = persisted.username
+            ? generateSessionId(persisted.username)
+            : null
+        }
+        return persisted as UserState
+      },
     }
   )
 )
