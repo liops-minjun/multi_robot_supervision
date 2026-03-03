@@ -935,6 +935,13 @@ func (s *Server) DeployBehaviorTreeToAgent(w http.ResponseWriter, r *http.Reques
 			UpdatedAt:        time.Now(),
 		}
 		s.repo.CreateAgentBehaviorTree(abt)
+	} else {
+		// Update existing assignment before QUIC deploy
+		abt.DeploymentStatus = "deploying"
+		abt.ServerVersion = dbGraph.Version
+		abt.DeploymentError = sql.NullString{}
+		abt.UpdatedAt = time.Now()
+		s.repo.UpdateAgentBehaviorTree(abt)
 	}
 
 	// Deploy via QUIC

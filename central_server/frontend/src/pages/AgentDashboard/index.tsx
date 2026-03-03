@@ -1984,7 +1984,7 @@ export default function AgentDashboard() {
                                 {fleetGraphMeta.deployment_status === 'outdated' && `Graph outdated (server: v${fleetGraphMeta.server_version}, deployed: v${fleetGraphMeta.version})`}
                               </span>
                             </div>
-                            {(fleetGraphMeta.deployment_status === 'pending' || fleetGraphMeta.deployment_status === 'failed' || fleetGraphMeta.deployment_status === 'outdated') && selectedAgentId && (
+                            {(fleetGraphMeta.deployment_status === 'pending' || fleetGraphMeta.deployment_status === 'failed' || fleetGraphMeta.deployment_status === 'outdated' || fleetGraphMeta.deployment_status === 'deploying') && selectedAgentId && (
                               <button
                                 onClick={() => deployGraphMutation.mutate({ graphId: fleetGraphMeta.id, agentId: selectedAgentId })}
                                 disabled={deployGraphMutation.isPending}
@@ -1995,7 +1995,7 @@ export default function AgentDashboard() {
                                 ) : (
                                   <Play className="w-3 h-3" />
                                 )}
-                                {fleetGraphMeta.deployment_status === 'outdated' ? 'Update' : 'Deploy'}
+                                {fleetGraphMeta.deployment_status === 'outdated' ? 'Update' : fleetGraphMeta.deployment_status === 'deploying' ? 'Retry' : 'Deploy'}
                               </button>
                             )}
                           </div>
