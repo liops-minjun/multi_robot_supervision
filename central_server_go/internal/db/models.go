@@ -173,6 +173,9 @@ type BehaviorTree struct {
 	States             datatypes.JSON `gorm:"type:jsonb"`   // []GraphState - available states for this graph
 	AutoGenerateStates bool           `gorm:"default:true"` // Auto-generate states from steps
 
+	// PDDL Planning state variables
+	PlanningStates datatypes.JSON `gorm:"type:jsonb"` // []PlanningStateVar
+
 	// Edit lock fields (for concurrent editing prevention)
 	LockedBy      sql.NullString `gorm:"size:100"` // Display name of user who holds the lock
 	LockedAt      sql.NullTime   // When the lock was acquired
@@ -346,6 +349,27 @@ func (BehaviorTreeDeploymentLog) TableName() string {
 // Parsed Types for Steps (not stored in DB directly)
 // ============================================================
 
+// PlanningCondition represents a PDDL-style precondition for planning
+type PlanningCondition struct {
+	Variable string `json:"variable"`          // e.g., "object_status"
+	Operator string `json:"operator,omitempty"` // ==, != (default: ==)
+	Value    string `json:"value"`             // e.g., "on_table"
+}
+
+// PlanningEffect represents a PDDL-style effect for planning
+type PlanningEffect struct {
+	Variable string `json:"variable"` // e.g., "object_status"
+	Value    string `json:"value"`    // e.g., "in_gripper"
+}
+
+// PlanningStateVar represents a state variable used in PDDL planning
+type PlanningStateVar struct {
+	Name         string `json:"name"`                    // e.g., "object_status"
+	Type         string `json:"type"`                    // bool, int, string
+	InitialValue string `json:"initial_value,omitempty"` // e.g., "on_table"
+	Description  string `json:"description,omitempty"`
+}
+
 // BehaviorTreeStep represents a step in a behavior tree
 type BehaviorTreeStep struct {
 	ID           string `json:"id"`
@@ -370,6 +394,12 @@ type BehaviorTreeStep struct {
 	Action     *StepAction     `json:"action,omitempty"`
 	WaitFor    *WaitFor        `json:"wait_for,omitempty"`
 	Transition *StepTransition `json:"transition,omitempty"`
+
+	// PDDL Planning fields
+	ResourceAcquire       []string            `json:"resource_acquire,omitempty"`
+	ResourceRelease       []string            `json:"resource_release,omitempty"`
+	PlanningPreconditions []PlanningCondition  `json:"planning_preconditions,omitempty"`
+	PlanningEffects       []PlanningEffect     `json:"planning_effects,omitempty"`
 }
 
 type StepAction struct {
@@ -577,4 +607,27 @@ func GetSemanticTagsForState(states []GraphState, stateCode string) []string {
 		}
 	}
 	return nil
+}
+
+// ============================================================
+// PDDL Planning Problem
+// ============================================================
+
+// PlanningProblem represents a PDDL-style planning problem for task distribution
+type PlanningProblem struct {
+	ID             string         `gorm:"primaryKey;size:50"`
+	Name           string         `gorm:"size:200;not null"`
+	BehaviorTreeID string         `gorm:"size:50;not null;index"`
+	InitialState   datatypes.JSON `gorm:"type:jsonb"`          // map[string]string
+	GoalState      datatypes.JSON `gorm:"type:jsonb;not null"` // map[string]string
+	AgentIDs       datatypes.JSON `gorm:"type:jsonb;not null"` // []string
+	Status         string         `gorm:"size:20;default:draft"` // draft, planned, executing, completed, failed
+	PlanResult     datatypes.JSON `gorm:"type:jsonb"`          // pddl.Plan (JSON)
+	ErrorMessage   sql.NullString `gorm:"type:text"`
+	CreatedAt      time.Time      `gorm:"autoCreateTime"`
+	UpdatedAt      time.Time      `gorm:"autoUpdateTime"`
+}
+
+func (PlanningProblem) TableName() string {
+	return "planning_problems"
 }

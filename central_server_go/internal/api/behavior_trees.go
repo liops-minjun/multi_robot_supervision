@@ -101,12 +101,28 @@ func (s *Server) CreateBehaviorTree(w http.ResponseWriter, r *http.Request) {
 	requiredActionTypes := db.ExtractActionTypesFromSteps(dbStepsForExtract)
 	requiredActionTypesJSON, _ := json.Marshal(requiredActionTypes)
 
+	// Convert planning states from request to DB format
+	var planningStatesJSON []byte
+	if len(req.PlanningStates) > 0 {
+		dbPlanningStates := make([]db.PlanningStateVar, len(req.PlanningStates))
+		for i, ps := range req.PlanningStates {
+			dbPlanningStates[i] = db.PlanningStateVar{
+				Name:         ps.Name,
+				Type:         ps.Type,
+				InitialValue: ps.InitialValue,
+				Description:  ps.Description,
+			}
+		}
+		planningStatesJSON, _ = json.Marshal(dbPlanningStates)
+	}
+
 	graph := &db.BehaviorTree{
 		ID:                  req.ID,
 		Name:                req.Name,
 		Preconditions:       datatypes.JSON(preconditionsJSON),
 		Steps:               datatypes.JSON(stepsJSON),
 		States:              datatypes.JSON(statesJSON),
+		PlanningStates:      datatypes.JSON(planningStatesJSON),
 		RequiredActionTypes: datatypes.JSON(requiredActionTypesJSON),
 		AutoGenerateStates:  autoGenerateStates,
 		Version:             1,
@@ -263,6 +279,21 @@ func (s *Server) UpdateBehaviorTree(w http.ResponseWriter, r *http.Request) {
 		}
 		statesJSON, _ := json.Marshal(dbStates)
 		graph.States = datatypes.JSON(statesJSON)
+	}
+
+	// Handle planning states
+	if req.PlanningStates != nil {
+		dbPlanningStates := make([]db.PlanningStateVar, len(req.PlanningStates))
+		for i, ps := range req.PlanningStates {
+			dbPlanningStates[i] = db.PlanningStateVar{
+				Name:         ps.Name,
+				Type:         ps.Type,
+				InitialValue: ps.InitialValue,
+				Description:  ps.Description,
+			}
+		}
+		planningStatesJSON, _ := json.Marshal(dbPlanningStates)
+		graph.PlanningStates = datatypes.JSON(planningStatesJSON)
 	}
 
 	graph.Version++
@@ -692,6 +723,22 @@ func behaviorTreeToResponse(graph *db.BehaviorTree, repo *db.Repository) Behavio
 					Color:        s.Color,
 					Description:  s.Description,
 					SemanticTags: s.SemanticTags,
+				}
+			}
+		}
+	}
+
+	// Parse planning states
+	if graph.PlanningStates != nil && len(graph.PlanningStates) > 0 {
+		var dbPlanningStates []db.PlanningStateVar
+		if err := json.Unmarshal(graph.PlanningStates, &dbPlanningStates); err == nil {
+			response.PlanningStates = make([]PlanningStateVarResponse, len(dbPlanningStates))
+			for i, ps := range dbPlanningStates {
+				response.PlanningStates[i] = PlanningStateVarResponse{
+					Name:         ps.Name,
+					Type:         ps.Type,
+					InitialValue: ps.InitialValue,
+					Description:  ps.Description,
 				}
 			}
 		}

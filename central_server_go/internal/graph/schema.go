@@ -100,8 +100,30 @@ type BehaviorTreeMeta struct {
 	Description string               `json:"description,omitempty"`
 	AgentID     string               `json:"agent_id,omitempty"` // Target agent (empty = template)
 	Requirements *RobotRequirements  `json:"robot_requirements,omitempty"`
+	PlanningStates []PlanningStateVar `json:"planning_states,omitempty"` // PDDL planning state variables
 	CreatedAt   time.Time            `json:"created_at,omitempty"`
 	UpdatedAt   time.Time            `json:"updated_at,omitempty"`
+}
+
+// PlanningStateVar represents a state variable for PDDL planning
+type PlanningStateVar struct {
+	Name         string `json:"name"`
+	Type         string `json:"type"`                    // bool, int, string
+	InitialValue string `json:"initial_value,omitempty"`
+	Description  string `json:"description,omitempty"`
+}
+
+// PlanningCondition represents a PDDL-style precondition
+type PlanningCondition struct {
+	Variable string `json:"variable"`
+	Operator string `json:"operator,omitempty"` // ==, != (default: ==)
+	Value    string `json:"value"`
+}
+
+// PlanningEffect represents a PDDL-style effect
+type PlanningEffect struct {
+	Variable string `json:"variable"`
+	Value    string `json:"value"`
 }
 
 // RobotRequirements specifies robot capability requirements
@@ -155,6 +177,12 @@ type StepData struct {
 
 	// End states (action outcomes)
 	EndStates []EndState `json:"end_states,omitempty"`
+
+	// PDDL Planning fields
+	ResourceAcquire       []string            `json:"resource_acquire,omitempty"`
+	ResourceRelease       []string            `json:"resource_release,omitempty"`
+	PlanningPreconditions []PlanningCondition  `json:"planning_preconditions,omitempty"`
+	PlanningEffects       []PlanningEffect     `json:"planning_effects,omitempty"`
 }
 
 // ActionConfig defines an action to execute

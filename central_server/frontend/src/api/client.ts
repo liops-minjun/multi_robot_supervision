@@ -33,7 +33,10 @@ import type {
   RobotTelemetry,
   JointStateData,
   OdometryData,
-  TransformData
+  TransformData,
+  PlanningProblem,
+  PlanResult,
+  StepAssignment
 } from '../types'
 
 const api = axios.create({
@@ -733,6 +736,61 @@ export const telemetryApi = {
   // Get transforms only
   getTransforms: async (robotId: string): Promise<TransformData[]> => {
     const { data } = await api.get(`/fleet/robots/${robotId}/telemetry/transforms`)
+    return data
+  },
+}
+
+// PDDL Planning APIs
+export const pddlApi = {
+  listProblems: async (behaviorTreeId?: string): Promise<PlanningProblem[]> => {
+    const params = behaviorTreeId ? `?behavior_tree_id=${behaviorTreeId}` : ''
+    const { data } = await api.get(`/pddl/problems${params}`)
+    return data
+  },
+
+  createProblem: async (req: {
+    name: string
+    behavior_tree_id: string
+    initial_state?: Record<string, string>
+    goal_state: Record<string, string>
+    agent_ids: string[]
+  }): Promise<PlanningProblem> => {
+    const { data } = await api.post('/pddl/problems', req)
+    return data
+  },
+
+  getProblem: async (id: string): Promise<PlanningProblem> => {
+    const { data } = await api.get(`/pddl/problems/${id}`)
+    return data
+  },
+
+  deleteProblem: async (id: string): Promise<void> => {
+    await api.delete(`/pddl/problems/${id}`)
+  },
+
+  solveProblem: async (id: string): Promise<PlanningProblem> => {
+    const { data } = await api.post(`/pddl/problems/${id}/solve`)
+    return data
+  },
+
+  executePlan: async (id: string): Promise<{
+    message: string
+    problem_id: string
+    total_steps: number
+    parallel_groups: number
+    assignments: StepAssignment[]
+  }> => {
+    const { data } = await api.post(`/pddl/problems/${id}/execute`)
+    return data
+  },
+
+  preview: async (req: {
+    behavior_tree_id: string
+    initial_state?: Record<string, string>
+    goal_state: Record<string, string>
+    agent_ids: string[]
+  }): Promise<PlanResult> => {
+    const { data } = await api.post('/pddl/preview', req)
     return data
   },
 }

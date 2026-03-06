@@ -1,4 +1,4 @@
-import type { StartStateConfig, EndStateConfig, GraphState, ParameterFieldSource, DuringStateTarget } from '../../../types'
+import type { StartStateConfig, EndStateConfig, GraphState, ParameterFieldSource, DuringStateTarget, PlanningCondition, PlanningEffect } from '../../../types'
 
 export interface StateActionNodeData {
   label: string
@@ -27,6 +27,12 @@ export interface StateActionNodeData {
   availableWaypoints?: Array<{ id: string; name: string }>
   isEditing?: boolean
   isParameterEditing?: boolean
+  // PDDL Planning fields
+  resourceAcquire?: string[]
+  resourceRelease?: string[]
+  planningPreconditions?: PlanningCondition[]
+  planningEffects?: PlanningEffect[]
+  hasPlanningStates?: boolean  // True if parent BT has planning_states defined
 }
 
 export type NormalizedDuringStateTarget = {

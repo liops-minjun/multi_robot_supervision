@@ -241,6 +241,19 @@ func (s *Server) setupRouter() {
 		// Agent compatible templates
 		r.Get("/agents/{agentID}/compatible-templates", s.GetAgentCompatibleTemplates)
 
+		// PDDL Task Distribution
+		r.Route("/pddl", func(r chi.Router) {
+			r.Route("/problems", func(r chi.Router) {
+				r.Get("/", s.ListPlanningProblems)
+				r.Post("/", s.CreatePlanningProblem)
+				r.Get("/{problemID}", s.GetPlanningProblem)
+				r.Delete("/{problemID}", s.DeletePlanningProblem)
+				r.Post("/{problemID}/solve", s.SolvePlanningProblem)
+				r.Post("/{problemID}/execute", s.ExecutePlan)
+			})
+			r.Post("/preview", s.PreviewDistribution)
+		})
+
 		// System/Internal endpoints
 		r.Route("/system", func(r chi.Router) {
 			r.Get("/cache/stats", s.GetCacheStats)

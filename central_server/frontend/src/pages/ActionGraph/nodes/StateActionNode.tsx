@@ -651,6 +651,168 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
         </div>
       </div>
 
+      {/* Planning Section (collapsible, shown when BT has planning_states) */}
+      {data.hasPlanningStates && (
+        <div className="border-t border-primary">
+          <button
+            className="w-full px-3 py-1.5 flex items-center justify-between hover:bg-gray-500/10 transition-colors"
+            onClick={(e) => { e.stopPropagation(); setExpandedSection(expandedSection === 'planning' ? null : 'planning') }}
+          >
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-sm bg-violet-500" />
+              <span className="text-[10px] text-primary uppercase tracking-wider font-medium">Planning</span>
+            </div>
+            {expandedSection === 'planning' ? <ChevronUp className="w-3 h-3 text-muted" /> : <ChevronDown className="w-3 h-3 text-muted" />}
+          </button>
+          {expandedSection === 'planning' && (
+            <div className="px-3 pb-2 space-y-2">
+              {/* Resource Acquire */}
+              <div>
+                <span className="text-[9px] text-muted">Resource Acquire</span>
+                <div className="flex flex-wrap gap-1 mt-0.5">
+                  {(data.resourceAcquire ?? []).map((r, i) => (
+                    <span key={i} className="px-1.5 py-0.5 bg-yellow-500/10 text-yellow-400 text-[9px] rounded flex items-center gap-1">
+                      {r}
+                      <button onClick={(e) => {
+                        e.stopPropagation()
+                        const next = [...(data.resourceAcquire ?? [])]
+                        next.splice(i, 1)
+                        updateData('resourceAcquire', next)
+                      }}><X className="w-2 h-2" /></button>
+                    </span>
+                  ))}
+                  <input
+                    className="w-16 px-1 py-0.5 bg-surface border border-primary rounded text-[9px] text-primary"
+                    placeholder="+add"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && (e.target as HTMLInputElement).value) {
+                        e.stopPropagation()
+                        const val = (e.target as HTMLInputElement).value
+                        updateData('resourceAcquire', [...(data.resourceAcquire ?? []), val]);
+                        (e.target as HTMLInputElement).value = ''
+                      }
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                </div>
+              </div>
+
+              {/* Resource Release */}
+              <div>
+                <span className="text-[9px] text-muted">Resource Release</span>
+                <div className="flex flex-wrap gap-1 mt-0.5">
+                  {(data.resourceRelease ?? []).map((r, i) => (
+                    <span key={i} className="px-1.5 py-0.5 bg-green-500/10 text-green-400 text-[9px] rounded flex items-center gap-1">
+                      {r}
+                      <button onClick={(e) => {
+                        e.stopPropagation()
+                        const next = [...(data.resourceRelease ?? [])]
+                        next.splice(i, 1)
+                        updateData('resourceRelease', next)
+                      }}><X className="w-2 h-2" /></button>
+                    </span>
+                  ))}
+                  <input
+                    className="w-16 px-1 py-0.5 bg-surface border border-primary rounded text-[9px] text-primary"
+                    placeholder="+add"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && (e.target as HTMLInputElement).value) {
+                        e.stopPropagation()
+                        const val = (e.target as HTMLInputElement).value
+                        updateData('resourceRelease', [...(data.resourceRelease ?? []), val]);
+                        (e.target as HTMLInputElement).value = ''
+                      }
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                </div>
+              </div>
+
+              {/* Preconditions */}
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[9px] text-muted">Preconditions</span>
+                  <button onClick={(e) => {
+                    e.stopPropagation()
+                    updateData('planningPreconditions', [...(data.planningPreconditions ?? []), { variable: '', operator: '==', value: '' }])
+                  }} className="text-muted hover:text-primary"><Plus className="w-2.5 h-2.5" /></button>
+                </div>
+                {(data.planningPreconditions ?? []).map((cond, i) => (
+                  <div key={i} className="flex items-center gap-1 mt-0.5">
+                    <input className="w-16 px-1 py-0.5 bg-surface border border-primary rounded text-[9px] text-primary" value={cond.variable} placeholder="var"
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => {
+                        const conds = [...(data.planningPreconditions ?? [])]
+                        conds[i] = { ...conds[i], variable: e.target.value }
+                        updateData('planningPreconditions', conds)
+                      }} />
+                    <select className="w-8 px-0.5 py-0.5 bg-surface border border-primary rounded text-[9px] text-primary" value={cond.operator || '=='}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => {
+                        const conds = [...(data.planningPreconditions ?? [])]
+                        conds[i] = { ...conds[i], operator: e.target.value as '==' | '!=' }
+                        updateData('planningPreconditions', conds)
+                      }}>
+                      <option value="==">==</option>
+                      <option value="!=">!=</option>
+                    </select>
+                    <input className="w-16 px-1 py-0.5 bg-surface border border-primary rounded text-[9px] text-primary" value={cond.value} placeholder="val"
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => {
+                        const conds = [...(data.planningPreconditions ?? [])]
+                        conds[i] = { ...conds[i], value: e.target.value }
+                        updateData('planningPreconditions', conds)
+                      }} />
+                    <button onClick={(e) => {
+                      e.stopPropagation()
+                      const conds = [...(data.planningPreconditions ?? [])]
+                      conds.splice(i, 1)
+                      updateData('planningPreconditions', conds)
+                    }} className="text-muted hover:text-red-400"><X className="w-2.5 h-2.5" /></button>
+                  </div>
+                ))}
+              </div>
+
+              {/* Effects */}
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[9px] text-muted">Effects</span>
+                  <button onClick={(e) => {
+                    e.stopPropagation()
+                    updateData('planningEffects', [...(data.planningEffects ?? []), { variable: '', value: '' }])
+                  }} className="text-muted hover:text-primary"><Plus className="w-2.5 h-2.5" /></button>
+                </div>
+                {(data.planningEffects ?? []).map((eff, i) => (
+                  <div key={i} className="flex items-center gap-1 mt-0.5">
+                    <input className="w-20 px-1 py-0.5 bg-surface border border-primary rounded text-[9px] text-primary" value={eff.variable} placeholder="var"
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => {
+                        const effs = [...(data.planningEffects ?? [])]
+                        effs[i] = { ...effs[i], variable: e.target.value }
+                        updateData('planningEffects', effs)
+                      }} />
+                    <span className="text-[9px] text-muted">=</span>
+                    <input className="w-20 px-1 py-0.5 bg-surface border border-primary rounded text-[9px] text-primary" value={eff.value} placeholder="val"
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => {
+                        const effs = [...(data.planningEffects ?? [])]
+                        effs[i] = { ...effs[i], value: e.target.value }
+                        updateData('planningEffects', effs)
+                      }} />
+                    <button onClick={(e) => {
+                      e.stopPropagation()
+                      const effs = [...(data.planningEffects ?? [])]
+                      effs.splice(i, 1)
+                      updateData('planningEffects', effs)
+                    }} className="text-muted hover:text-red-400"><X className="w-2.5 h-2.5" /></button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* End States Section with Handles */}
       <div className="px-3 py-2 relative">
         <div className="flex items-center justify-between mb-1.5">

@@ -890,6 +890,9 @@ func (r *Repository) GetBehaviorTree(id string) (*BehaviorTree, error) {
 				if statesJSON != "" {
 					bt.States = datatypes.JSON([]byte(statesJSON))
 				}
+				if planningStatesJSON := getString(props, "planning_states_json"); planningStatesJSON != "" {
+					bt.PlanningStates = datatypes.JSON([]byte(planningStatesJSON))
+				}
 				// Parse lock timestamps
 				if lockedAtMs := getInt64(props, "locked_at_ms"); lockedAtMs > 0 {
 					bt.LockedAt = sql.NullTime{Time: time.UnixMilli(lockedAtMs).UTC(), Valid: true}
@@ -1016,6 +1019,9 @@ func (r *Repository) GetBehaviorTrees(agentID string, includeTemplates bool) ([]
 				if statesJSON != "" {
 					bt.States = datatypes.JSON([]byte(statesJSON))
 				}
+				if planningStatesJSON := getString(props, "planning_states_json"); planningStatesJSON != "" {
+					bt.PlanningStates = datatypes.JSON([]byte(planningStatesJSON))
+				}
 				graphs = append(graphs, bt)
 			}
 		}
@@ -1059,6 +1065,7 @@ func (r *Repository) CreateBehaviorTree(graph *BehaviorTree) error {
 	}
 
 	ctx := context.Background()
+	planningStatesJSON := string(graph.PlanningStates)
 	props := map[string]any{
 		"id":                    graph.ID,
 		"name":                  graph.Name,
@@ -1076,6 +1083,7 @@ func (r *Repository) CreateBehaviorTree(graph *BehaviorTree) error {
 		"schema_version":        "1.0.0",
 		"states_json":           statesJSON,
 		"auto_generate_states":  graph.AutoGenerateStates,
+		"planning_states_json":  planningStatesJSON,
 		"created_at_ms":         timeToMillis(graph.CreatedAt),
 		"updated_at_ms":         timeToMillis(graph.UpdatedAt),
 	}
@@ -1098,6 +1106,7 @@ func (r *Repository) CreateBehaviorTree(graph *BehaviorTree) error {
 				schema_version: $schema_version,
 				states_json: $states_json,
 				auto_generate_states: $auto_generate_states,
+				planning_states_json: $planning_states_json,
 				created_at_ms: $created_at_ms,
 				updated_at_ms: $updated_at_ms
 			})
@@ -1155,6 +1164,7 @@ func (r *Repository) UpdateBehaviorTree(graph *BehaviorTree) error {
 		lockExpiresAtMs = graph.LockExpiresAt.Time.UTC().UnixMilli()
 	}
 
+	planningStatesJSON := string(graph.PlanningStates)
 	props := map[string]any{
 		"id":                    graph.ID,
 		"name":                  graph.Name,
@@ -1172,6 +1182,7 @@ func (r *Repository) UpdateBehaviorTree(graph *BehaviorTree) error {
 		"schema_version":        "1.0.0",
 		"states_json":           statesJSON,
 		"auto_generate_states":  graph.AutoGenerateStates,
+		"planning_states_json":  planningStatesJSON,
 		"updated_at_ms":         time.Now().UTC().UnixMilli(),
 		// Lock fields
 		"locked_by":          graph.LockedBy.String,
@@ -1197,6 +1208,7 @@ func (r *Repository) UpdateBehaviorTree(graph *BehaviorTree) error {
 			    g.schema_version = $schema_version,
 			    g.states_json = $states_json,
 			    g.auto_generate_states = $auto_generate_states,
+			    g.planning_states_json = $planning_states_json,
 			    g.updated_at_ms = $updated_at_ms,
 			    g.locked_by = $locked_by,
 			    g.locked_at_ms = $locked_at_ms,
@@ -3400,6 +3412,9 @@ func (r *Repository) GetBehaviorTreesByIDs(ids []string) (map[string]*BehaviorTr
 				if statesJSON != "" {
 					bt.States = datatypes.JSON([]byte(statesJSON))
 				}
+				if planningStatesJSON := getString(props, "planning_states_json"); planningStatesJSON != "" {
+					bt.PlanningStates = datatypes.JSON([]byte(planningStatesJSON))
+				}
 				graphs[bt.ID] = &bt
 			}
 		}
@@ -3409,6 +3424,173 @@ func (r *Repository) GetBehaviorTreesByIDs(ids []string) (map[string]*BehaviorTr
 		return nil, err
 	}
 	return result.(map[string]*BehaviorTree), nil
+}
+
+// =============================================================================
+// PDDL Planning Problems
+// =============================================================================
+
+// CreatePlanningProblem creates a new planning problem node in Neo4j
+func (r *Repository) CreatePlanningProblem(pp *PlanningProblem) error {
+	if pp == nil {
+		return fmt.Errorf("planning problem is nil")
+	}
+	ctx := context.Background()
+	props := map[string]any{
+		"id":               pp.ID,
+		"name":             pp.Name,
+		"behavior_tree_id": pp.BehaviorTreeID,
+		"initial_state":    string(pp.InitialState),
+		"goal_state":       string(pp.GoalState),
+		"agent_ids":        string(pp.AgentIDs),
+		"status":           pp.Status,
+		"plan_result":      string(pp.PlanResult),
+		"error_message":    pp.ErrorMessage.String,
+		"created_at_ms":    timeToMillis(pp.CreatedAt),
+		"updated_at_ms":    timeToMillis(pp.UpdatedAt),
+	}
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		_, err := tx.Run(ctx, `
+			CREATE (p:PlanningProblem {
+				id: $id,
+				name: $name,
+				behavior_tree_id: $behavior_tree_id,
+				initial_state: $initial_state,
+				goal_state: $goal_state,
+				agent_ids: $agent_ids,
+				status: $status,
+				plan_result: $plan_result,
+				error_message: $error_message,
+				created_at_ms: $created_at_ms,
+				updated_at_ms: $updated_at_ms
+			})
+		`, props)
+		return nil, err
+	})
+	return err
+}
+
+// GetPlanningProblem retrieves a planning problem by ID
+func (r *Repository) GetPlanningProblem(id string) (*PlanningProblem, error) {
+	ctx := context.Background()
+	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
+		res, err := tx.Run(ctx, `
+			MATCH (p:PlanningProblem {id: $id})
+			RETURN p
+		`, map[string]any{"id": id})
+		if err != nil {
+			return nil, err
+		}
+		if res.Next(ctx) {
+			node, _ := res.Record().Get("p")
+			if pNode, ok := node.(neo4j.Node); ok {
+				return parsePlanningProblemNode(pNode.Props), nil
+			}
+		}
+		return nil, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, nil
+	}
+	return result.(*PlanningProblem), nil
+}
+
+// ListPlanningProblems lists planning problems, optionally filtered by BT ID
+func (r *Repository) ListPlanningProblems(behaviorTreeID string) ([]PlanningProblem, error) {
+	ctx := context.Background()
+	query := "MATCH (p:PlanningProblem) "
+	params := map[string]any{}
+	if behaviorTreeID != "" {
+		query += "WHERE p.behavior_tree_id = $bt_id "
+		params["bt_id"] = behaviorTreeID
+	}
+	query += "RETURN p ORDER BY p.created_at_ms DESC"
+
+	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
+		res, err := tx.Run(ctx, query, params)
+		if err != nil {
+			return nil, err
+		}
+		var problems []PlanningProblem
+		for res.Next(ctx) {
+			node, _ := res.Record().Get("p")
+			if pNode, ok := node.(neo4j.Node); ok {
+				problems = append(problems, *parsePlanningProblemNode(pNode.Props))
+			}
+		}
+		return problems, res.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return []PlanningProblem{}, nil
+	}
+	return result.([]PlanningProblem), nil
+}
+
+// UpdatePlanningProblemStatus updates the status and optionally the plan result
+func (r *Repository) UpdatePlanningProblemStatus(id, status string, planResult []byte, errMsg string) error {
+	ctx := context.Background()
+	props := map[string]any{
+		"id":            id,
+		"status":        status,
+		"plan_result":   string(planResult),
+		"error_message": errMsg,
+		"updated_at_ms": time.Now().UTC().UnixMilli(),
+	}
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		_, err := tx.Run(ctx, `
+			MATCH (p:PlanningProblem {id: $id})
+			SET p.status = $status,
+			    p.plan_result = $plan_result,
+			    p.error_message = $error_message,
+			    p.updated_at_ms = $updated_at_ms
+		`, props)
+		return nil, err
+	})
+	return err
+}
+
+// DeletePlanningProblem deletes a planning problem
+func (r *Repository) DeletePlanningProblem(id string) error {
+	ctx := context.Background()
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		_, err := tx.Run(ctx, `
+			MATCH (p:PlanningProblem {id: $id})
+			DETACH DELETE p
+		`, map[string]any{"id": id})
+		return nil, err
+	})
+	return err
+}
+
+func parsePlanningProblemNode(props map[string]any) *PlanningProblem {
+	pp := &PlanningProblem{
+		ID:             getString(props, "id"),
+		Name:           getString(props, "name"),
+		BehaviorTreeID: getString(props, "behavior_tree_id"),
+		Status:         getString(props, "status"),
+		ErrorMessage:   toNullString(getString(props, "error_message")),
+		CreatedAt:      time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
+		UpdatedAt:      time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
+	}
+	if is := getString(props, "initial_state"); is != "" {
+		pp.InitialState = datatypes.JSON([]byte(is))
+	}
+	if gs := getString(props, "goal_state"); gs != "" {
+		pp.GoalState = datatypes.JSON([]byte(gs))
+	}
+	if ai := getString(props, "agent_ids"); ai != "" {
+		pp.AgentIDs = datatypes.JSON([]byte(ai))
+	}
+	if pr := getString(props, "plan_result"); pr != "" {
+		pp.PlanResult = datatypes.JSON([]byte(pr))
+	}
+	return pp
 }
 
 // =============================================================================

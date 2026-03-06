@@ -52,6 +52,22 @@ func FromDBModel(bt *db.BehaviorTree) (*CanonicalGraph, error) {
 	if bt.AgentID.Valid {
 		graph.BehaviorTree.AgentID = bt.AgentID.String
 	}
+
+	// Parse PlanningStates
+	if bt.PlanningStates != nil {
+		var dbPlanningStates []db.PlanningStateVar
+		if err := json.Unmarshal(bt.PlanningStates, &dbPlanningStates); err == nil {
+			for _, ps := range dbPlanningStates {
+				graph.BehaviorTree.PlanningStates = append(graph.BehaviorTree.PlanningStates, PlanningStateVar{
+					Name:         ps.Name,
+					Type:         ps.Type,
+					InitialValue: ps.InitialValue,
+					Description:  ps.Description,
+				})
+			}
+		}
+	}
+
 	entryPoint := ""
 	if bt.EntryPoint.Valid {
 		entryPoint = bt.EntryPoint.String
@@ -182,6 +198,12 @@ func stepToVertex(step *db.BehaviorTreeStep) Vertex {
 				}
 			}
 		}
+
+		// PDDL Planning fields
+		stepData.ResourceAcquire = step.ResourceAcquire
+		stepData.ResourceRelease = step.ResourceRelease
+		stepData.PlanningPreconditions = toGraphPlanningConditions(step.PlanningPreconditions)
+		stepData.PlanningEffects = toGraphPlanningEffects(step.PlanningEffects)
 
 		vertex.Step = stepData
 	}
@@ -379,6 +401,12 @@ func vertexToStep(v *Vertex, cg *CanonicalGraph) db.BehaviorTreeStep {
 			}
 		}
 
+		// PDDL Planning fields
+		step.ResourceAcquire = v.Step.ResourceAcquire
+		step.ResourceRelease = v.Step.ResourceRelease
+		step.PlanningPreconditions = toDBPlanningConditions(v.Step.PlanningPreconditions)
+		step.PlanningEffects = toDBPlanningEffects(v.Step.PlanningEffects)
+
 		// Build transitions from edges
 		step.Transition = buildTransitionFromEdges(v.ID, cg)
 	}
@@ -509,6 +537,68 @@ func buildTransitionFromEdges(vertexID string, cg *CanonicalGraph) *db.StepTrans
 	}
 
 	return transition
+}
+
+// =============================================================================
+// Planning Condition/Effect Conversion
+// =============================================================================
+
+func toGraphPlanningConditions(conds []db.PlanningCondition) []PlanningCondition {
+	if len(conds) == 0 {
+		return nil
+	}
+	out := make([]PlanningCondition, 0, len(conds))
+	for _, c := range conds {
+		out = append(out, PlanningCondition{
+			Variable: c.Variable,
+			Operator: c.Operator,
+			Value:    c.Value,
+		})
+	}
+	return out
+}
+
+func toDBPlanningConditions(conds []PlanningCondition) []db.PlanningCondition {
+	if len(conds) == 0 {
+		return nil
+	}
+	out := make([]db.PlanningCondition, 0, len(conds))
+	for _, c := range conds {
+		out = append(out, db.PlanningCondition{
+			Variable: c.Variable,
+			Operator: c.Operator,
+			Value:    c.Value,
+		})
+	}
+	return out
+}
+
+func toGraphPlanningEffects(effects []db.PlanningEffect) []PlanningEffect {
+	if len(effects) == 0 {
+		return nil
+	}
+	out := make([]PlanningEffect, 0, len(effects))
+	for _, e := range effects {
+		out = append(out, PlanningEffect{
+			Variable: e.Variable,
+			Value:    e.Value,
+		})
+	}
+	return out
+}
+
+func toDBPlanningEffects(effects []PlanningEffect) []db.PlanningEffect {
+	if len(effects) == 0 {
+		return nil
+	}
+	out := make([]db.PlanningEffect, 0, len(effects))
+	for _, e := range effects {
+		out = append(out, db.PlanningEffect{
+			Variable: e.Variable,
+			Value:    e.Value,
+		})
+	}
+	return out
 }
 
 func encodeOutcomeCondition(outcome, state string) string {

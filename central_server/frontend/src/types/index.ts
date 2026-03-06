@@ -219,6 +219,33 @@ export interface GraphStep {
   action?: StepAction
   wait_for?: WaitFor
   transition?: Transition
+  // PDDL Planning fields
+  resource_acquire?: string[]
+  resource_release?: string[]
+  planning_preconditions?: PlanningCondition[]
+  planning_effects?: PlanningEffect[]
+}
+
+// ============================================
+// PDDL Planning Types
+// ============================================
+
+export interface PlanningCondition {
+  variable: string
+  operator?: '==' | '!='
+  value: string
+}
+
+export interface PlanningEffect {
+  variable: string
+  value: string
+}
+
+export interface PlanningStateVar {
+  name: string
+  type: 'bool' | 'int' | 'string'
+  initial_value?: string
+  description?: string
 }
 
 export interface Precondition {
@@ -704,6 +731,7 @@ export interface BehaviorTree {
   preconditions: Precondition[] | null
   steps: GraphStep[]
   states?: GraphState[]         // Auto-generated and custom states
+  planning_states?: PlanningStateVar[] // PDDL planning state variables
   auto_generate_states?: boolean // Whether to auto-generate states from steps
   version: number
   is_template: boolean          // true if agent_id is null
@@ -1314,4 +1342,39 @@ export interface RobotTelemetry {
   transforms?: TransformData[]
   updated_at: string
   is_stale?: boolean  // True if telemetry data is older than staleness threshold
+}
+
+// ============================================
+// PDDL Planning Problem & Plan Types
+// ============================================
+
+export interface StepAssignment {
+  step_id: string
+  step_name: string
+  agent_id: string
+  agent_name: string
+  order: number
+  reason: string
+}
+
+export interface PlanResult {
+  assignments: StepAssignment[]
+  is_valid: boolean
+  error_message?: string
+  total_steps: number
+  parallel_groups: number
+}
+
+export interface PlanningProblem {
+  id: string
+  name: string
+  behavior_tree_id: string
+  initial_state?: Record<string, string>
+  goal_state: Record<string, string>
+  agent_ids: string[]
+  status: 'draft' | 'planned' | 'executing' | 'completed' | 'failed'
+  plan_result?: PlanResult
+  error_message?: string
+  created_at: string
+  updated_at: string
 }

@@ -83,6 +83,14 @@ type GraphStateResponse struct {
 	SemanticTags []string `json:"semantic_tags,omitempty"`
 }
 
+// PlanningStateVarResponse represents a PDDL planning state variable in API responses
+type PlanningStateVarResponse struct {
+	Name         string `json:"name"`
+	Type         string `json:"type"`
+	InitialValue string `json:"initial_value,omitempty"`
+	Description  string `json:"description,omitempty"`
+}
+
 type BehaviorTreeResponse struct {
 	ID                 string                   `json:"id"`
 	Name               string                   `json:"name"`
@@ -93,6 +101,7 @@ type BehaviorTreeResponse struct {
 	Preconditions      []map[string]interface{} `json:"preconditions,omitempty"`
 	Steps              []map[string]interface{} `json:"steps"`
 	States             []GraphStateResponse     `json:"states,omitempty"`
+	PlanningStates     []PlanningStateVarResponse `json:"planning_states,omitempty"`
 	AutoGenerateStates bool                     `json:"auto_generate_states"`
 	Version            int                      `json:"version"`
 	IsTemplate         bool                     `json:"is_template"`
@@ -110,6 +119,7 @@ type BehaviorTreeCreateRequest struct {
 	Preconditions      []map[string]interface{} `json:"preconditions,omitempty"`
 	Steps              []map[string]interface{} `json:"steps"`
 	States             []GraphStateResponse     `json:"states,omitempty"`
+	PlanningStates     []PlanningStateVarResponse `json:"planning_states,omitempty"`
 	AutoGenerateStates *bool                    `json:"auto_generate_states,omitempty"` // Pointer to detect if set
 }
 
@@ -120,6 +130,7 @@ type BehaviorTreeUpdateRequest struct {
 	Preconditions      []map[string]interface{} `json:"preconditions,omitempty"`
 	Steps              []map[string]interface{} `json:"steps,omitempty"`
 	States             []GraphStateResponse     `json:"states,omitempty"`
+	PlanningStates     []PlanningStateVarResponse `json:"planning_states,omitempty"`
 	AutoGenerateStates *bool                    `json:"auto_generate_states,omitempty"` // Pointer to detect if set
 }
 

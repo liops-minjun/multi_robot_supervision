@@ -120,6 +120,10 @@ type GlobalStateManager struct {
 	// Callback when agent disconnects
 	onAgentDisconnect AgentDisconnectCallback
 
+	// PDDL Planning state tracking
+	planningStates    map[string]map[string]string // planID -> variable -> value
+	planResources     map[string]map[string]string // planID -> resourceID -> agentID
+
 	// Background worker management
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -146,6 +150,8 @@ func NewGlobalStateManager() *GlobalStateManager {
 		stateRegistry:      NewStateRegistry(),
 		taskLogManager:     NewTaskLogManager(),
 		heartbeatConfig:    DefaultHeartbeatConfig(),
+		planningStates:     make(map[string]map[string]string),
+		planResources:      make(map[string]map[string]string),
 		ctx:                ctx,
 		cancel:             cancel,
 	}
@@ -2253,4 +2259,107 @@ func (m *GlobalStateManager) CompleteMultiExecution(executions []MultiExecutionR
 		// Update state registry
 		m.stateRegistry.UpdateAgentState(exec.AgentID, robot.CurrentStateCode, robot.SemanticTags, "", robot.IsOnline, false)
 	}
+}
+
+// =============================================================================
+// PDDL Planning State Management
+// =============================================================================
+
+// InitPlanningState initializes planning state for a plan execution
+func (m *GlobalStateManager) InitPlanningState(planID string, initial map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	state := make(map[string]string)
+	for k, v := range initial {
+		state[k] = v
+	}
+	m.planningStates[planID] = state
+	m.planResources[planID] = make(map[string]string)
+}
+
+// UpdatePlanningState applies effects to planning state variables
+func (m *GlobalStateManager) UpdatePlanningState(planID string, effects map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	state, ok := m.planningStates[planID]
+	if !ok {
+		return
+	}
+	for k, v := range effects {
+		state[k] = v
+	}
+}
+
+// GetPlanningState returns the current planning state for a plan
+func (m *GlobalStateManager) GetPlanningState(planID string) map[string]string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	state, ok := m.planningStates[planID]
+	if !ok {
+		return nil
+	}
+	result := make(map[string]string, len(state))
+	for k, v := range state {
+		result[k] = v
+	}
+	return result
+}
+
+// ClearPlanningState removes planning state for a completed/failed plan
+func (m *GlobalStateManager) ClearPlanningState(planID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.planningStates, planID)
+	delete(m.planResources, planID)
+}
+
+// TryAcquirePlanResource attempts to acquire a resource for an agent within a plan.
+// Returns (true, "") on success or (false, holderAgentID) if held by another agent.
+func (m *GlobalStateManager) TryAcquirePlanResource(planID, resourceID, agentID string) (bool, string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	resources, ok := m.planResources[planID]
+	if !ok {
+		return false, ""
+	}
+
+	if holder, held := resources[resourceID]; held {
+		if holder == agentID {
+			return true, "" // Already held by this agent
+		}
+		return false, holder
+	}
+
+	resources[resourceID] = agentID
+	return true, ""
+}
+
+// ReleasePlanResource releases a resource held by an agent within a plan
+func (m *GlobalStateManager) ReleasePlanResource(planID, resourceID, agentID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	resources, ok := m.planResources[planID]
+	if !ok {
+		return false
+	}
+
+	if holder, held := resources[resourceID]; held && holder == agentID {
+		delete(resources, resourceID)
+		return true
+	}
+	return false
+}
+
+// ReleaseAllPlanResources releases all resources for a plan
+func (m *GlobalStateManager) ReleaseAllPlanResources(planID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.planResources, planID)
 }
