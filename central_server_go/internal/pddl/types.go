@@ -2,6 +2,13 @@ package pddl
 
 import "central_server_go/internal/db"
 
+type ResourceInfo struct {
+	ID               string
+	Name             string
+	Kind             string
+	ParentResourceID string
+}
+
 // PlanAction represents a single plannable action (maps to a BT step)
 type PlanAction struct {
 	StepID          string
@@ -11,6 +18,7 @@ type PlanAction struct {
 	ResourceRelease []string
 	Preconditions   []db.PlanningCondition
 	Effects         []db.PlanningEffect
+	During          []db.PlanningEffect
 }
 
 // AgentInfo describes an agent available for task assignment
@@ -28,6 +36,7 @@ type PlanProblem struct {
 	GoalState    map[string]string // variable -> value
 	Actions      []PlanAction      // Available steps
 	Agents       []AgentInfo       // Participating agents
+	Resources    []ResourceInfo
 }
 
 // StepAssignment maps a step to an agent with execution order

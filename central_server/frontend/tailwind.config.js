@@ -36,6 +36,8 @@ export default {
         surface: 'var(--color-bg-surface)',
         elevated: 'var(--color-bg-elevated)',
         sunken: 'var(--color-bg-sunken)',
+        'hover': 'var(--color-bg-elevated)',
+        'accent': 'rgb(var(--color-accent-rgb) / <alpha-value>)',
         // Theme-aware button backgrounds
         'btn-blue': 'var(--color-btn-blue-bg)',
         'btn-green': 'var(--color-btn-green-bg)',
@@ -47,6 +49,8 @@ export default {
       borderColor: {
         primary: 'var(--color-border-primary)',
         secondary: 'var(--color-border-secondary)',
+        'accent': 'rgb(var(--color-accent-rgb) / <alpha-value>)',
+        'border': 'var(--color-border-primary)',
         // Theme-aware button borders
         'btn-blue': 'var(--color-btn-blue-border)',
         'btn-green': 'var(--color-btn-green-border)',
@@ -59,6 +63,7 @@ export default {
         primary: 'var(--color-text-primary)',
         secondary: 'var(--color-text-secondary)',
         muted: 'var(--color-text-muted)',
+        'accent': 'rgb(var(--color-accent-rgb) / <alpha-value>)',
         // Theme-aware button text
         'btn-blue': 'var(--color-btn-blue-text)',
         'btn-green': 'var(--color-btn-green-text)',

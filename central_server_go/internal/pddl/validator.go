@@ -1,12 +1,17 @@
 package pddl
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // ValidateProblem checks the planning problem for correctness
 func ValidateProblem(problem *PlanProblem) error {
 	if problem == nil {
 		return fmt.Errorf("problem is nil")
 	}
+
+	resourceCatalog := buildResourceCatalog(problem.Resources)
 
 	// Build set of declared state variable names
 	varNames := make(map[string]bool, len(problem.StateVars))
@@ -31,7 +36,7 @@ func ValidateProblem(problem *PlanProblem) error {
 		}
 	}
 
-	// Check each action's precondition/effect variables exist
+	// Check each action's precondition/effect/during variables exist
 	for _, action := range problem.Actions {
 		for _, cond := range action.Preconditions {
 			if !varNames[cond.Variable] {
@@ -41,6 +46,27 @@ func ValidateProblem(problem *PlanProblem) error {
 		for _, eff := range action.Effects {
 			if !varNames[eff.Variable] {
 				return fmt.Errorf("action %q effect variable %q is not declared in planning_states", action.StepID, eff.Variable)
+			}
+		}
+		for _, dur := range action.During {
+			if !varNames[dur.Variable] {
+				return fmt.Errorf("action %q during variable %q is not declared in planning_states", action.StepID, dur.Variable)
+			}
+		}
+		for _, token := range action.ResourceAcquire {
+			ref := resolveResourceToken(token, resourceCatalog)
+			if ref.Kind == "type" {
+				if _, ok := resourceCatalog.typeByID[ref.Key]; !ok {
+					return fmt.Errorf("action %q references unknown resource type %q", action.StepID, token)
+				}
+				if resourceCatalog.typeCapacity[ref.Key] <= 0 {
+					return fmt.Errorf("action %q references resource type %q but it has no instances", action.StepID, token)
+				}
+			}
+			if strings.HasPrefix(token, "instance:") {
+				if _, ok := resourceCatalog.instanceByID[ref.Key]; !ok {
+					return fmt.Errorf("action %q references unknown resource instance %q", action.StepID, token)
+				}
 			}
 		}
 	}

@@ -69,12 +69,6 @@ func (s *Server) CreateBehaviorTree(w http.ResponseWriter, r *http.Request) {
 	normalizedSteps := normalizeBehaviorTreeSteps(req.Steps)
 	stepsJSON, _ := json.Marshal(normalizedSteps)
 
-	// Handle auto_generate_states (default: true if not specified)
-	autoGenerateStates := true
-	if req.AutoGenerateStates != nil {
-		autoGenerateStates = *req.AutoGenerateStates
-	}
-
 	// Convert states from request to DB format
 	var statesJSON []byte
 	if len(req.States) > 0 {
@@ -124,7 +118,6 @@ func (s *Server) CreateBehaviorTree(w http.ResponseWriter, r *http.Request) {
 		States:              datatypes.JSON(statesJSON),
 		PlanningStates:      datatypes.JSON(planningStatesJSON),
 		RequiredActionTypes: datatypes.JSON(requiredActionTypesJSON),
-		AutoGenerateStates:  autoGenerateStates,
 		Version:             1,
 		IsTemplate:          req.AgentID == "",
 		CreatedAt:           time.Now(),
@@ -139,6 +132,9 @@ func (s *Server) CreateBehaviorTree(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.EntryPoint != "" {
 		graph.EntryPoint = sql.NullString{String: req.EntryPoint, Valid: true}
+	}
+	if req.TaskDistributorID != "" {
+		graph.TaskDistributorID = sql.NullString{String: req.TaskDistributorID, Valid: true}
 	}
 
 	if err := s.repo.CreateBehaviorTree(graph); err != nil {
@@ -257,11 +253,6 @@ func (s *Server) UpdateBehaviorTree(w http.ResponseWriter, r *http.Request) {
 		graph.RequiredActionTypes = datatypes.JSON(requiredActionTypesJSON)
 	}
 
-	// Handle auto_generate_states
-	if req.AutoGenerateStates != nil {
-		graph.AutoGenerateStates = *req.AutoGenerateStates
-	}
-
 	// Handle states
 	if req.States != nil {
 		dbStates := make([]db.GraphState, len(req.States))
@@ -294,6 +285,15 @@ func (s *Server) UpdateBehaviorTree(w http.ResponseWriter, r *http.Request) {
 		}
 		planningStatesJSON, _ := json.Marshal(dbPlanningStates)
 		graph.PlanningStates = datatypes.JSON(planningStatesJSON)
+	}
+
+	// Handle task distributor ID
+	if req.TaskDistributorID != nil {
+		if *req.TaskDistributorID == "" {
+			graph.TaskDistributorID = sql.NullString{}
+		} else {
+			graph.TaskDistributorID = sql.NullString{String: *req.TaskDistributorID, Valid: true}
+		}
 	}
 
 	graph.Version++
@@ -675,10 +675,9 @@ func behaviorTreeToResponse(graph *db.BehaviorTree, repo *db.Repository) Behavio
 	response := BehaviorTreeResponse{
 		ID:                 graph.ID,
 		Name:               graph.Name,
-		Version:            graph.Version,
-		IsTemplate:         graph.IsTemplate,
-		AutoGenerateStates: graph.AutoGenerateStates,
-		CreatedAt:          graph.CreatedAt,
+		Version:    graph.Version,
+		IsTemplate: graph.IsTemplate,
+		CreatedAt:  graph.CreatedAt,
 		UpdatedAt:          graph.UpdatedAt,
 	}
 
@@ -694,6 +693,9 @@ func behaviorTreeToResponse(graph *db.BehaviorTree, repo *db.Repository) Behavio
 	}
 	if graph.EntryPoint.Valid {
 		response.EntryPoint = graph.EntryPoint.String
+	}
+	if graph.TaskDistributorID.Valid {
+		response.TaskDistributorID = graph.TaskDistributorID.String
 	}
 
 	// Parse JSON fields

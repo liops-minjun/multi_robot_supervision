@@ -1,4 +1,14 @@
-import type { StartStateConfig, EndStateConfig, GraphState, ParameterFieldSource, DuringStateTarget, PlanningCondition, PlanningEffect } from '../../../types'
+import type {
+  StartStateConfig,
+  EndStateConfig,
+  GraphState,
+  ParameterFieldSource,
+  DuringStateTarget,
+  PlanningCondition,
+  PlanningEffect,
+  TaskDistributorState,
+  TaskDistributorResource,
+} from '../../../types'
 
 export interface StateActionNodeData {
   label: string
@@ -32,7 +42,11 @@ export interface StateActionNodeData {
   resourceRelease?: string[]
   planningPreconditions?: PlanningCondition[]
   planningEffects?: PlanningEffect[]
+  planningDuring?: PlanningEffect[]
   hasPlanningStates?: boolean  // True if parent BT has planning_states defined
+  taskDistributorId?: string
+  taskDistributorStates?: TaskDistributorState[]
+  taskDistributorResources?: TaskDistributorResource[]
 }
 
 export type NormalizedDuringStateTarget = {

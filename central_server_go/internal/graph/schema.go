@@ -100,7 +100,7 @@ type BehaviorTreeMeta struct {
 	Description string               `json:"description,omitempty"`
 	AgentID     string               `json:"agent_id,omitempty"` // Target agent (empty = template)
 	Requirements *RobotRequirements  `json:"robot_requirements,omitempty"`
-	PlanningStates []PlanningStateVar `json:"planning_states,omitempty"` // PDDL planning state variables
+	TaskDistributorID string            `json:"task_distributor_id,omitempty"` // Task Distributor reference
 	CreatedAt   time.Time            `json:"created_at,omitempty"`
 	UpdatedAt   time.Time            `json:"updated_at,omitempty"`
 }
@@ -157,8 +157,7 @@ type StepData struct {
 	StepType StepType `json:"step_type"` // action, wait, condition
 
 	// Job name (user-defined name for this step)
-	JobName            string `json:"job_name,omitempty"`
-	AutoGenerateStates bool   `json:"auto_generate_states,omitempty"`
+	JobName string `json:"job_name,omitempty"`
 
 	// Action configuration (when StepType == "action")
 	Action *ActionConfig `json:"action,omitempty"`
@@ -168,9 +167,6 @@ type StepData struct {
 
 	// Condition configuration (when StepType == "condition")
 	Condition *ConditionConfig `json:"condition,omitempty"`
-
-	// Start conditions (AND/OR list)
-	StartConditions []StartCondition `json:"start_conditions,omitempty"`
 
 	// State management
 	States *StateConfig `json:"states,omitempty"`
@@ -183,6 +179,7 @@ type StepData struct {
 	ResourceRelease       []string            `json:"resource_release,omitempty"`
 	PlanningPreconditions []PlanningCondition  `json:"planning_preconditions,omitempty"`
 	PlanningEffects       []PlanningEffect     `json:"planning_effects,omitempty"`
+	PlanningDuring        []PlanningEffect     `json:"planning_during,omitempty"`
 }
 
 // ActionConfig defines an action to execute

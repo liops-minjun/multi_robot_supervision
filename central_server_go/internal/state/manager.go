@@ -55,6 +55,14 @@ type ZoneReservation struct {
 	ExpiresAt  time.Time
 }
 
+// PlanResourceHold tracks a resource lock held during plan execution.
+type PlanResourceHold struct {
+	ResourceID string
+	AgentID    string
+	StepID     string
+	AcquiredAt time.Time
+}
+
 // FleetSnapshot is a point-in-time snapshot of the fleet state
 type FleetSnapshot struct {
 	Timestamp time.Time
@@ -121,8 +129,8 @@ type GlobalStateManager struct {
 	onAgentDisconnect AgentDisconnectCallback
 
 	// PDDL Planning state tracking
-	planningStates    map[string]map[string]string // planID -> variable -> value
-	planResources     map[string]map[string]string // planID -> resourceID -> agentID
+	planningStates map[string]map[string]string           // planID -> variable -> value
+	planResources  map[string]map[string]PlanResourceHold // planID -> resourceID -> hold
 
 	// Background worker management
 	ctx    context.Context
@@ -151,7 +159,7 @@ func NewGlobalStateManager() *GlobalStateManager {
 		taskLogManager:     NewTaskLogManager(),
 		heartbeatConfig:    DefaultHeartbeatConfig(),
 		planningStates:     make(map[string]map[string]string),
-		planResources:      make(map[string]map[string]string),
+		planResources:      make(map[string]map[string]PlanResourceHold),
 		ctx:                ctx,
 		cancel:             cancel,
 	}
@@ -1470,11 +1478,11 @@ type TransformData struct {
 
 // RobotTelemetry holds telemetry data for a robot
 type RobotTelemetry struct {
-	JointState *JointStateData  `json:"joint_state,omitempty"`
-	Odometry   *OdometryData    `json:"odometry,omitempty"`
-	Transforms []TransformData  `json:"transforms,omitempty"`
-	UpdatedAt  time.Time        `json:"updated_at"`
-	IsStale    bool             `json:"is_stale,omitempty"` // True if data is older than staleness threshold
+	JointState *JointStateData `json:"joint_state,omitempty"`
+	Odometry   *OdometryData   `json:"odometry,omitempty"`
+	Transforms []TransformData `json:"transforms,omitempty"`
+	UpdatedAt  time.Time       `json:"updated_at"`
+	IsStale    bool            `json:"is_stale,omitempty"` // True if data is older than staleness threshold
 }
 
 // DefaultTelemetryStaleThreshold is the default duration after which telemetry is considered stale
@@ -2275,7 +2283,7 @@ func (m *GlobalStateManager) InitPlanningState(planID string, initial map[string
 		state[k] = v
 	}
 	m.planningStates[planID] = state
-	m.planResources[planID] = make(map[string]string)
+	m.planResources[planID] = make(map[string]PlanResourceHold)
 }
 
 // UpdatePlanningState applies effects to planning state variables
@@ -2319,7 +2327,7 @@ func (m *GlobalStateManager) ClearPlanningState(planID string) {
 
 // TryAcquirePlanResource attempts to acquire a resource for an agent within a plan.
 // Returns (true, "") on success or (false, holderAgentID) if held by another agent.
-func (m *GlobalStateManager) TryAcquirePlanResource(planID, resourceID, agentID string) (bool, string) {
+func (m *GlobalStateManager) TryAcquirePlanResource(planID, resourceID, agentID, stepID string) (bool, string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -2328,14 +2336,19 @@ func (m *GlobalStateManager) TryAcquirePlanResource(planID, resourceID, agentID 
 		return false, ""
 	}
 
-	if holder, held := resources[resourceID]; held {
-		if holder == agentID {
+	if hold, held := resources[resourceID]; held {
+		if hold.AgentID == agentID {
 			return true, "" // Already held by this agent
 		}
-		return false, holder
+		return false, hold.AgentID
 	}
 
-	resources[resourceID] = agentID
+	resources[resourceID] = PlanResourceHold{
+		ResourceID: resourceID,
+		AgentID:    agentID,
+		StepID:     stepID,
+		AcquiredAt: time.Now().UTC(),
+	}
 	return true, ""
 }
 
@@ -2349,11 +2362,28 @@ func (m *GlobalStateManager) ReleasePlanResource(planID, resourceID, agentID str
 		return false
 	}
 
-	if holder, held := resources[resourceID]; held && holder == agentID {
+	if hold, held := resources[resourceID]; held && hold.AgentID == agentID {
 		delete(resources, resourceID)
 		return true
 	}
 	return false
+}
+
+// GetPlanResources returns the currently held resources for a plan.
+func (m *GlobalStateManager) GetPlanResources(planID string) []PlanResourceHold {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	resources, ok := m.planResources[planID]
+	if !ok {
+		return nil
+	}
+
+	result := make([]PlanResourceHold, 0, len(resources))
+	for _, hold := range resources {
+		result = append(result, hold)
+	}
+	return result
 }
 
 // ReleaseAllPlanResources releases all resources for a plan

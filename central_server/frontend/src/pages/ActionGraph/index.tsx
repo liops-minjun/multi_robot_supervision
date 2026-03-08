@@ -24,13 +24,14 @@ import {
   Cpu, FileCode, Users, Link2, Unlink, Check, AlertCircle, Clock, Layout, Save, Radio,
   Edit, Lock, Unlock, Eye, EyeOff, Search
 } from 'lucide-react'
-import { templateApi, stateDefinitionApi, agentApi, capabilityApi, behaviorTreeLockApi } from '../../api/client'
+import { templateApi, stateDefinitionApi, agentApi, capabilityApi, behaviorTreeLockApi, taskDistributorApi } from '../../api/client'
 import { useWebSocket, BehaviorTreeLockMessage, GraphSyncMessage } from '../../contexts/WebSocketContext'
 import { useUserStore } from '../../stores/userStore'
 import type {
   ActionGraph, StateDefinition, ActionMapping,
   AssignmentInfo, TemplateListItem,
-  StartCondition, StartStateConfig, EndStateConfig, ActionOutcome, OutcomeTransition, DuringStateTarget, LifecycleState
+  EndStateConfig, ActionOutcome, OutcomeTransition, LifecycleState,
+  TaskDistributor, TaskDistributorState, TaskDistributorResource
 } from '../../types'
 
 // State-based Node Components
@@ -334,98 +335,12 @@ const inferOutcome = (endState: EndStateConfig, index: number): ActionOutcome =>
   return index === 0 ? 'success' : 'failed'
 }
 
-const normalizeDuringStateTargets = (
-  targets?: DuringStateTarget[] | null,
-  fallbackStates?: string[]
-): DuringStateTarget[] => {
-  if (targets && targets.length > 0) {
-    return targets.map(target => ({
-      ...target,
-      target_type: target.target_type || 'self',
-    }))
-  }
-  if (!fallbackStates || fallbackStates.length === 0) {
-    return []
-  }
-  const fallbackState = fallbackStates.find(Boolean)
-  if (!fallbackState) {
-    return []
-  }
-  return [{ state: fallbackState, target_type: 'self' }]
-}
-
 const outcomeCategory = (outcome: ActionOutcome): 'success' | 'failure' => {
   return outcome === 'success' ? 'success' : 'failure'
 }
 
 // Generate unique node IDs to avoid collisions with existing nodes
 const getNodeId = () => `node_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-
-const mapStartStatesToConditions = (startStates: StartStateConfig[] = []): StartCondition[] => {
-  return startStates
-    .filter(state => state.state)
-    .map((state) => {
-      const quantifier = state.quantifier === 'every' ? 'all' : state.quantifier
-      const condition: StartCondition = {
-        id: state.id,
-        operator: state.operator,
-        quantifier,
-        state: state.state,
-        state_operator: '==',
-        require_online: true,
-      }
-
-      if (quantifier === 'self') {
-        condition.target_type = 'self'
-      } else if (quantifier === 'specific') {
-        if (state.agentId || state.agentType) {
-          condition.target_type = 'agent'
-          condition.agent_id = state.agentId || state.agentType
-        } else {
-          condition.target_type = 'agent'
-        }
-      } else if (state.agentId || state.agentType) {
-        condition.target_type = 'agent'
-        condition.agent_id = state.agentId || state.agentType
-      } else {
-        condition.target_type = 'all'
-      }
-
-      return condition
-    })
-}
-
-const mapStartConditionsToStates = (conditions: StartCondition[] = []): StartStateConfig[] => {
-  return conditions
-    .filter(cond => cond.state)
-    .map((cond, index) => {
-      let rawQuantifier = cond.quantifier || (cond.target_type === 'self' ? 'self' : 'every')
-      if (rawQuantifier === 'all') {
-        rawQuantifier = 'every'
-      }
-      if (rawQuantifier !== 'self' && rawQuantifier !== 'every' && rawQuantifier !== 'any' && rawQuantifier !== 'specific') {
-        rawQuantifier = 'self'
-      }
-      const quantifier = rawQuantifier as StartStateConfig['quantifier']
-
-      const state: StartStateConfig = {
-        id: cond.id || `start-${index}`,
-        quantifier,
-        state: cond.state || '',
-        operator: index > 0 ? cond.operator : undefined,
-      }
-
-      if (quantifier === 'specific') {
-        if (cond.agent_id) {
-          state.agentId = cond.agent_id
-        }
-      } else if (quantifier === 'every' || quantifier === 'any') {
-        state.agentId = cond.agent_id
-      }
-
-      return state
-    })
-}
 
 const categorizeEndStates = (endStates: EndStateConfig[] = []) => {
   const successStates: string[] = []
@@ -785,6 +700,49 @@ function ActionGraphEditor() {
     refetchStateDefinitions()
   }
 
+  // Fetch all task distributors for selection dropdown
+  const { data: taskDistributors = [] } = useQuery<Omit<TaskDistributor, 'states' | 'resources'>[]>({
+    queryKey: ['task-distributors'],
+    queryFn: () => taskDistributorApi.list(),
+  })
+
+  // Fetch task distributor data when BT has one linked
+  const taskDistributorId = selectedTemplate?.task_distributor_id
+  const { data: taskDistributorFull } = useQuery({
+    queryKey: ['task-distributor-full', taskDistributorId],
+    queryFn: () => taskDistributorApi.getFull(taskDistributorId!),
+    enabled: !!taskDistributorId,
+  })
+  const tdStates: TaskDistributorState[] = taskDistributorFull?.states || []
+  const tdResources: TaskDistributorResource[] = taskDistributorFull?.resources || []
+
+  // Handle task distributor change
+  const handleTaskDistributorChange = useCallback(async (tdId: string) => {
+    if (!selectedTemplateId) return
+    const normalizedTdId = tdId || undefined
+    const queryKey = ['template', selectedTemplateId]
+    const previousTemplate = queryClient.getQueryData<ActionGraph>(queryKey)
+    try {
+      if (previousTemplate) {
+        queryClient.setQueryData<ActionGraph>(queryKey, {
+          ...previousTemplate,
+          task_distributor_id: normalizedTdId,
+        })
+      }
+      await templateApi.update(selectedTemplateId, { task_distributor_id: normalizedTdId } as Partial<ActionGraph>, sessionId)
+      queryClient.invalidateQueries({ queryKey })
+      queryClient.invalidateQueries({ queryKey: ['templates-all'] })
+      if (tdId) {
+        queryClient.invalidateQueries({ queryKey: ['task-distributor-full', tdId] })
+      }
+    } catch (err) {
+      if (previousTemplate) {
+        queryClient.setQueryData<ActionGraph>(queryKey, previousTemplate)
+      }
+      console.error('Failed to update task distributor:', err)
+    }
+  }, [selectedTemplateId, sessionId, queryClient])
+
   // Fetch assignments for selected template
   const { data: templateAssignments = [] } = useQuery({
     queryKey: ['template-assignments', selectedTemplateId],
@@ -828,21 +786,16 @@ function ActionGraphEditor() {
       templateId,
       steps,
       entryPoint,
-      states,
       lockSessionId,
     }: {
       templateId: string
       steps: ActionGraph['steps']
       entryPoint?: string
-      states?: ActionGraph['states']
       lockSessionId?: string
     }) => {
       const payload: Partial<ActionGraph> = { steps }
       if (entryPoint) {
         payload.entry_point = entryPoint
-      }
-      if (states && states.length > 0) {
-        payload.states = states
       }
       return templateApi.update(templateId, payload, lockSessionId)
     },
@@ -1300,51 +1253,25 @@ function ActionGraphEditor() {
   }, [templateId])
 
   // Track last applied states to prevent infinite loops
-  const lastAppliedCombinedStatesRef = useRef<string>('')
+  const lastAppliedStatesRef = useRef<string>('')
   const lastAppliedAgentsRef = useRef<Array<{ id: string; name: string }>>([])
+  const lastAppliedTDRef = useRef<string>('')
 
-  // Collect all generated state codes from all nodes
-  const allGeneratedStateCodes = useMemo(() => {
-    const codes: string[] = []
-    nodes.forEach((node) => {
-      if (node.data.autoGenerateStates && node.data.generatedStates?.length > 0) {
-        node.data.generatedStates.forEach((gs: { code: string }) => {
-          if (gs.code && !codes.includes(gs.code)) {
-            codes.push(gs.code)
-          }
-        })
-      }
-    })
-    return codes.sort() // Sort for consistent comparison
-  }, [nodes])
-
-  // Combine base states with all generated states from all nodes
-  const combinedAvailableStates = useMemo(() => {
-    const combined = [...availableStates]
-    allGeneratedStateCodes.forEach((code) => {
-      if (!combined.includes(code)) {
-        combined.push(code)
-      }
-    })
-    return combined
-  }, [availableStates, allGeneratedStateCodes])
-
-  // Update existing nodes' availableStates when state definition loads OR when generated states change
+  // Update existing nodes' availableStates when state definition loads
   useEffect(() => {
-    // Only update if states actually changed (by value, not reference)
-    const combinedKey = JSON.stringify(combinedAvailableStates.slice().sort())
-    const statesChanged = combinedKey !== lastAppliedCombinedStatesRef.current
+    const statesKey = JSON.stringify(availableStates.slice().sort())
+    const statesChanged = statesKey !== lastAppliedStatesRef.current
 
-    if (combinedAvailableStates.length > 0 && statesChanged) {
-      lastAppliedCombinedStatesRef.current = combinedKey
+    if (availableStates.length > 0 && statesChanged) {
+      lastAppliedStatesRef.current = statesKey
       setNodes((nds) =>
         nds.map((node) => ({
           ...node,
-          data: { ...node.data, availableStates: combinedAvailableStates },
+          data: { ...node.data, availableStates },
         }))
       )
     }
-  }, [combinedAvailableStates, setNodes])
+  }, [availableStates, setNodes])
 
   useEffect(() => {
     const agentsChanged = JSON.stringify(availableAgents) !== JSON.stringify(lastAppliedAgentsRef.current)
@@ -1359,20 +1286,42 @@ function ActionGraphEditor() {
     }
   }, [availableAgents, setNodes])
 
+  // Propagate task distributor data to all nodes when it changes
+  useEffect(() => {
+    const tdKey = JSON.stringify({ states: tdStates, resources: tdResources })
+    if (tdKey !== lastAppliedTDRef.current) {
+      lastAppliedTDRef.current = tdKey
+      const validTypeIds = new Set(tdResources.filter(resource => resource.kind === 'type').map(resource => resource.id))
+      const validInstanceIds = new Set(tdResources.filter(resource => (resource.kind || 'instance') !== 'type').map(resource => resource.id))
+      const filterResourceTokens = (values?: string[]) => (values || []).filter(value => {
+        if (value.startsWith('type:')) return validTypeIds.has(value.slice(5))
+        if (value.startsWith('instance:')) return validInstanceIds.has(value.slice(9))
+        return true
+      })
+      setNodes((nds) =>
+        nds.map((node) => ({
+          ...node,
+          data: {
+            ...node.data,
+            taskDistributorId,
+            taskDistributorStates: tdStates,
+            taskDistributorResources: tdResources,
+            resourceAcquire: filterResourceTokens(node.data.resourceAcquire),
+            resourceRelease: filterResourceTokens(node.data.resourceRelease),
+          },
+        }))
+      )
+    }
+  }, [tdStates, tdResources, taskDistributorId, setNodes])
+
   // Convert ReactFlow nodes/edges back to ActionGraph steps
   const convertGraphToSteps = useCallback((): {
     steps: ActionGraph['steps']
     entryPoint?: string
-    generatedStates?: ActionGraph['states']
   } => {
     const steps: ActionGraph['steps'] = []
-    const allGeneratedStates: NonNullable<ActionGraph['states']> = []
 
     nodes.forEach((node) => {
-      // Collect auto-generated states from nodes
-      if (node.data.autoGenerateStates && node.data.generatedStates?.length > 0) {
-        allGeneratedStates.push(...node.data.generatedStates)
-      }
       if (node.type === 'event') {
         // Event nodes (Start/End) are terminal steps
         if (node.data.subtype === 'End' || node.data.subtype === 'Error') {
@@ -1412,23 +1361,7 @@ function ActionGraphEditor() {
       const fallbackSuccess = outcomeTransitions.find(t => t.outcome === 'success')
       const fallbackFailure = outcomeTransitions.find(t => t.outcome !== 'success')
 
-      const rawPreStates = node.data.preStates || []
-      const preStates = Array.isArray(rawPreStates)
-        ? rawPreStates
-          .map((state: any) => (typeof state === 'string' ? state : state?.state))
-          .filter(Boolean)
-        : []
-
-      const normalizedDuringTargets = normalizeDuringStateTargets(
-        node.data.duringStateTargets,
-        node.data.duringStates
-      )
       const normalizedNodeServer = normalizeLegacyNamespaceServer(node.data.server)
-      const selfDuringTarget = normalizedDuringTargets.find(target =>
-        (!target.target_type || target.target_type === 'self' || target.target_type === 'all') &&
-        target.state
-      )
-      const selfDuringStates = selfDuringTarget?.state ? [selfDuringTarget.state] : []
 
       const step: ActionGraph['steps'][0] = {
         id: node.id,
@@ -1437,10 +1370,7 @@ function ActionGraphEditor() {
           x: node.position.x,
           y: node.position.y,
         },
-        // Job name for this step (user-defined name)
         job_name: node.data.jobName || undefined,
-        auto_generate_states: node.data.autoGenerateStates || undefined,
-        // Regular action steps don't need type set (only 'fallback' or 'terminal' use type)
         action: {
           type: node.data.actionType || node.data.subtype,
           server: normalizedNodeServer || node.data.server,
@@ -1459,10 +1389,6 @@ function ActionGraphEditor() {
                 data: node.data.params || {},
               },
         },
-        start_conditions: mapStartStatesToConditions(node.data.startStates || []),
-        pre_states: preStates,
-        during_states: selfDuringStates,
-        during_state_targets: normalizedDuringTargets.length > 0 ? normalizedDuringTargets : undefined,
         end_states: endStates,
         success_states: resolvedSuccessStates,
         failure_states: resolvedFailureStates,
@@ -1476,10 +1402,10 @@ function ActionGraphEditor() {
       // Debug: Log transitions being saved
       console.log(`[SAVE] Step ${node.id} (${node.data.label}): on_success=${fallbackSuccess?.next}, on_failure=${fallbackFailure?.next}, outcomeTransitions=`, outcomeTransitions)
 
-      // Add preconditions if any
-      if (node.data.preconditions && node.data.preconditions.length > 0) {
-        step.preconditions = node.data.preconditions
-      }
+      // PDDL Planning fields
+      if (node.data.resourceAcquire?.length) step.resource_acquire = node.data.resourceAcquire
+      if (node.data.resourceRelease?.length) step.resource_release = node.data.resourceRelease
+      if (node.data.planningDuring?.length) step.planning_during = node.data.planningDuring.slice(0, 1)
 
       steps.push(step)
     })
@@ -1496,7 +1422,6 @@ function ActionGraphEditor() {
     return {
       steps,
       entryPoint,
-      generatedStates: allGeneratedStates.length > 0 ? allGeneratedStates : undefined,
     }
   }, [nodes, edges])
 
@@ -1595,8 +1520,8 @@ function ActionGraphEditor() {
       edges: JSON.stringify(edges),
     }
 
-    const { steps, entryPoint, generatedStates } = convertGraphToSteps()
-    saveTemplate.mutate({ templateId: selectedTemplateId, steps, entryPoint, states: generatedStates, lockSessionId: sessionId }, {
+    const { steps, entryPoint } = convertGraphToSteps()
+    saveTemplate.mutate({ templateId: selectedTemplateId, steps, entryPoint, lockSessionId: sessionId }, {
       onSuccess: () => {
         // Update lastSavedStateRef only after successful save
         lastSavedStateRef.current = stateToSave
@@ -1687,16 +1612,13 @@ function ActionGraphEditor() {
     // This prevents accidental overwrite with empty canvas during transient data unload.
     if (hasUnsavedChanges) {
       // Save changes before releasing lock
-      const { steps, entryPoint, generatedStates } = convertGraphToSteps()
+      const { steps, entryPoint } = convertGraphToSteps()
 
       try {
         // Save the current state
         const payload: Partial<ActionGraph> = { steps }
         if (entryPoint) {
           payload.entry_point = entryPoint
-        }
-        if (generatedStates && generatedStates.length > 0) {
-          payload.states = generatedStates
         }
         await templateApi.update(selectedTemplateId, payload, sessionId)
 
@@ -2008,13 +1930,8 @@ function ActionGraphEditor() {
           capabilityKind: isActionLikeNode
             ? (data.capabilityKind || (data.type === 'service' ? 'service' : 'action'))
             : undefined,
-          preStates: [],
-          duringStateTargets: data.duringState
-            ? [{ state: data.duringState, target_type: 'self' }]
-            : [],
           successStates: [defaultSuccessState],
           failureStates: [defaultFailureState],
-          duringState: data.duringState,
           successState: defaultSuccessState,
           failureState: defaultFailureState,
           initialState: defaultSuccessState,
@@ -2023,14 +1940,12 @@ function ActionGraphEditor() {
           toState: data.subtype,
           availableStates,
           availableAgents,
-          preconditions: [],
           params: {},
           jobName: defaultJobName,
-          // Auto-generate states feature (enabled by default)
-          autoGenerateStates: true,
-          generatedStates: [],
-          // Default end states for handle rendering
           endStates: defaultEndStates,
+          // Task Distributor data
+          taskDistributorStates: tdStates,
+          taskDistributorResources: tdResources,
           isEditing,
         },
       }
@@ -2043,7 +1958,7 @@ function ActionGraphEditor() {
         return newNodes
       })
     },
-    [screenToFlowPosition, setNodes, availableStates, availableAgents, isEditing]
+    [screenToFlowPosition, setNodes, availableStates, availableAgents, isEditing, tdStates, tdResources]
   )
 
   const onDragStart = (event: React.DragEvent<HTMLDivElement>, item: PaletteItem) => {
@@ -2251,6 +2166,35 @@ function ActionGraphEditor() {
       {/* Middle: Node Palette (when task loaded) */}
       {selectedTemplate && (
         <div className="w-56 bg-surface border-r border-primary flex flex-col">
+          {/* PDDL Task Distributor Selection */}
+          <div className="px-3 py-2 border-b border-primary">
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <FileCode size={12} className="text-violet-400" />
+              <span className="text-[10px] font-semibold text-violet-400 uppercase tracking-wider">PDDL Task Distributor</span>
+            </div>
+            <select
+              value={taskDistributorId || ''}
+              onChange={(e) => handleTaskDistributorChange(e.target.value)}
+              className="w-full px-2 py-1.5 bg-elevated border border-primary rounded-lg text-xs text-primary focus:outline-none focus:border-violet-500 cursor-pointer"
+            >
+              <option value="">TD 선택 안함</option>
+              {taskDistributors.map((td) => (
+                <option key={td.id} value={td.id}>{td.name}</option>
+              ))}
+            </select>
+            {taskDistributorId && taskDistributorFull ? (
+              <div className="mt-1.5 flex items-center gap-2 text-[10px] text-muted">
+                <span className="px-1.5 py-0.5 bg-violet-500/10 text-violet-400 rounded">States: {tdStates.length}</span>
+                <span className="px-1.5 py-0.5 bg-violet-500/10 text-violet-400 rounded">Resources: {tdResources.length}</span>
+              </div>
+            ) : !taskDistributorId ? (
+              <div className="mt-1.5 flex items-center gap-1 text-[10px] text-yellow-400">
+                <AlertCircle size={10} />
+                <span>TD를 선택해야 PDDL 설정 가능</span>
+              </div>
+            ) : null}
+          </div>
+
           {/* States Management */}
           <div className="px-3 py-3 border-b border-primary">
             {selectedStateDef ? (
@@ -3073,27 +3017,18 @@ function convertActionGraphToGraph(
     const capabilityKind = normalizeCapabilityKind(step.action?.capability_kind, step.action?.type)
     let color = capabilityKind === 'service' ? '#0ea5e9' : '#f87171'
     let actionType = step.action?.type
-    let duringStates: string[] = []
 
     const mapping = actionMappings.find(m => m.action_type === step.action?.type) ||
       actionMappings.find(m => m.server === step.action?.server)
     if (mapping && capabilityKind !== 'service') {
       color = getActionColor(mapping.action_type)
       actionType = mapping.action_type
-      duringStates = mapping.during_states || (mapping.during_state ? [mapping.during_state] : [])
     } else if (step.action?.type) {
       color = capabilityKind === 'service' ? '#0ea5e9' : getActionColor(step.action.type)
     }
 
-    const stepStartStates = step.startStates || mapStartConditionsToStates(step.start_conditions || [])
-    const stepDuringStates = step.duringStates || step.during_states || duringStates
-    const stepDuringTargets = normalizeDuringStateTargets(
-      step.duringStateTargets || step.during_state_targets,
-      stepDuringStates
-    )
     const stepSuccessStates = step.successStates || step.success_states || [defaultState]
     const stepFailureStates = step.failureStates || step.failure_states || [errorState]
-    const stepPreStates = step.preStates || step.pre_states || []
     const outcomeTransitions = step.transition?.on_outcomes || []
     const outcomeEndStates = buildEndStatesFromOutcomes(outcomeTransitions, defaultState, errorState)
     let stepEndStates = step.endStates || step.end_states || (outcomeEndStates.length > 0
@@ -3136,26 +3071,23 @@ function convertActionGraphToGraph(
         actionType,
         server: normalizedServer || step.action?.server,
         capabilityKind,
-        startStates: stepStartStates,
-        preStates: stepPreStates,
-        duringStateTargets: stepDuringTargets,
-        duringStates: stepDuringStates,
         successStates: stepSuccessStates,
         failureStates: stepFailureStates,
         endStates: stepEndStates,
-        duringState: stepDuringStates[0],
         successState: stepSuccessStates[0] || defaultState,
         failureState: stepFailureStates[0] || errorState,
         params: step.action?.params?.data || {},
         fieldSources: step.action?.params?.field_sources,
         waypointId: step.action?.params?.waypoint_id,
         jobName: step.job_name || (isTerminal ? '' : getDefaultJobNameTemplate(normalizedServer || step.action?.server, step.name || step.id)),
-        autoGenerateStates: step.auto_generate_states ?? true,
         finalState: isTerminal ? (step.terminal_type === 'success' ? defaultState : errorState) : undefined,
-        preconditions: [],
         availableStates,
         availableAgents,
         isEditing: false,
+        // PDDL Planning fields
+        resourceAcquire: step.resource_acquire || [],
+        resourceRelease: step.resource_release || [],
+        planningDuring: (step.planning_during || []).slice(0, 1),
       },
     })
 

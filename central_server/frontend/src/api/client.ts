@@ -36,7 +36,12 @@ import type {
   TransformData,
   PlanningProblem,
   PlanResult,
-  StepAssignment
+  PlanExecution,
+  ResourceAllocation,
+  StepAssignment,
+  TaskDistributor,
+  TaskDistributorState,
+  TaskDistributorResource
 } from '../types'
 
 const api = axios.create({
@@ -751,6 +756,7 @@ export const pddlApi = {
   createProblem: async (req: {
     name: string
     behavior_tree_id: string
+    task_distributor_id?: string
     initial_state?: Record<string, string>
     goal_state: Record<string, string>
     agent_ids: string[]
@@ -776,6 +782,7 @@ export const pddlApi = {
   executePlan: async (id: string): Promise<{
     message: string
     problem_id: string
+    execution_id: string
     total_steps: number
     parallel_groups: number
     assignments: StepAssignment[]
@@ -786,12 +793,114 @@ export const pddlApi = {
 
   preview: async (req: {
     behavior_tree_id: string
+    task_distributor_id?: string
     initial_state?: Record<string, string>
     goal_state: Record<string, string>
     agent_ids: string[]
   }): Promise<PlanResult> => {
     const { data } = await api.post('/pddl/preview', req)
     return data
+  },
+
+  // Plan Executions
+  listExecutions: async (): Promise<PlanExecution[]> => {
+    const { data } = await api.get('/pddl/executions')
+    return data
+  },
+
+  getExecution: async (id: string): Promise<PlanExecution> => {
+    const { data } = await api.get(`/pddl/executions/${id}`)
+    return data
+  },
+
+  cancelExecution: async (id: string): Promise<void> => {
+    await api.post(`/pddl/executions/${id}/cancel`)
+  },
+
+  // Resources
+  getResources: async (): Promise<ResourceAllocation[]> => {
+    const { data } = await api.get('/pddl/resources')
+    return data
+  },
+}
+
+// Task Distributor APIs
+export const taskDistributorApi = {
+  list: async (): Promise<Omit<TaskDistributor, 'states' | 'resources'>[]> => {
+    const { data } = await api.get('/task-distributors')
+    return data
+  },
+
+  get: async (id: string): Promise<Omit<TaskDistributor, 'states' | 'resources'>> => {
+    const { data } = await api.get(`/task-distributors/${id}`)
+    return data
+  },
+
+  getFull: async (id: string): Promise<TaskDistributor> => {
+    const { data } = await api.get(`/task-distributors/${id}/full`)
+    return data
+  },
+
+  create: async (req: { name: string; description?: string }): Promise<Omit<TaskDistributor, 'states' | 'resources'>> => {
+    const { data } = await api.post('/task-distributors', req)
+    return data
+  },
+
+  update: async (id: string, req: { name: string; description?: string }): Promise<Omit<TaskDistributor, 'states' | 'resources'>> => {
+    const { data } = await api.put(`/task-distributors/${id}`, req)
+    return data
+  },
+
+  delete: async (id: string): Promise<void> => {
+    await api.delete(`/task-distributors/${id}`)
+  },
+
+  // States
+  listStates: async (distributorId: string): Promise<TaskDistributorState[]> => {
+    const { data } = await api.get(`/task-distributors/${distributorId}/states`)
+    return data
+  },
+
+  createState: async (distributorId: string, req: { name: string; type?: string; initial_value?: string; description?: string }): Promise<TaskDistributorState> => {
+    const { data } = await api.post(`/task-distributors/${distributorId}/states`, req)
+    return data
+  },
+
+  updateState: async (distributorId: string, stateId: string, req: { name: string; type?: string; initial_value?: string; description?: string }): Promise<void> => {
+    await api.put(`/task-distributors/${distributorId}/states/${stateId}`, req)
+  },
+
+  deleteState: async (distributorId: string, stateId: string): Promise<void> => {
+    await api.delete(`/task-distributors/${distributorId}/states/${stateId}`)
+  },
+
+  // Resources
+  listResources: async (distributorId: string): Promise<TaskDistributorResource[]> => {
+    const { data } = await api.get(`/task-distributors/${distributorId}/resources`)
+    return data
+  },
+
+  createResource: async (distributorId: string, req: {
+    name: string
+    kind?: 'type' | 'instance' | string
+    parent_resource_id?: string
+    description?: string
+  }): Promise<TaskDistributorResource> => {
+    const { data } = await api.post(`/task-distributors/${distributorId}/resources`, req)
+    return data
+  },
+
+  updateResource: async (distributorId: string, resourceId: string, req: {
+    name: string
+    kind?: 'type' | 'instance' | string
+    parent_resource_id?: string
+    description?: string
+  }): Promise<void> => {
+    await api.put(`/task-distributors/${distributorId}/resources/${resourceId}`, req)
+  },
+
+  deleteResource: async (distributorId: string, resourceId: string): Promise<void> => {
+    await api.delete(`/task-distributors/${distributorId}/resources/${resourceId}`)
   },
 }
 

@@ -1,13 +1,16 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
 
 	"central_server_go/internal/db"
+	"central_server_go/internal/executor"
 	"central_server_go/internal/pddl"
+	"central_server_go/internal/state"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -20,34 +23,37 @@ import (
 
 // PlanningProblemCreateRequest represents a request to create a planning problem
 type PlanningProblemCreateRequest struct {
-	Name           string            `json:"name"`
-	BehaviorTreeID string            `json:"behavior_tree_id"`
-	InitialState   map[string]string `json:"initial_state,omitempty"`
-	GoalState      map[string]string `json:"goal_state"`
-	AgentIDs       []string          `json:"agent_ids"`
+	Name              string            `json:"name"`
+	BehaviorTreeID    string            `json:"behavior_tree_id"`
+	TaskDistributorID string            `json:"task_distributor_id,omitempty"`
+	InitialState      map[string]string `json:"initial_state,omitempty"`
+	GoalState         map[string]string `json:"goal_state"`
+	AgentIDs          []string          `json:"agent_ids"`
 }
 
 // PlanningProblemResponse represents a planning problem in API responses
 type PlanningProblemResponse struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	BehaviorTreeID string            `json:"behavior_tree_id"`
-	InitialState   map[string]string `json:"initial_state,omitempty"`
-	GoalState      map[string]string `json:"goal_state"`
-	AgentIDs       []string          `json:"agent_ids"`
-	Status         string            `json:"status"`
-	PlanResult     *pddl.Plan        `json:"plan_result,omitempty"`
-	ErrorMessage   string            `json:"error_message,omitempty"`
-	CreatedAt      time.Time         `json:"created_at"`
-	UpdatedAt      time.Time         `json:"updated_at"`
+	ID                string            `json:"id"`
+	Name              string            `json:"name"`
+	BehaviorTreeID    string            `json:"behavior_tree_id"`
+	TaskDistributorID string            `json:"task_distributor_id,omitempty"`
+	InitialState      map[string]string `json:"initial_state,omitempty"`
+	GoalState         map[string]string `json:"goal_state"`
+	AgentIDs          []string          `json:"agent_ids"`
+	Status            string            `json:"status"`
+	PlanResult        *pddl.Plan        `json:"plan_result,omitempty"`
+	ErrorMessage      string            `json:"error_message,omitempty"`
+	CreatedAt         time.Time         `json:"created_at"`
+	UpdatedAt         time.Time         `json:"updated_at"`
 }
 
 // PreviewDistributionRequest represents a request to preview task distribution without saving
 type PreviewDistributionRequest struct {
-	BehaviorTreeID string            `json:"behavior_tree_id"`
-	InitialState   map[string]string `json:"initial_state,omitempty"`
-	GoalState      map[string]string `json:"goal_state"`
-	AgentIDs       []string          `json:"agent_ids"`
+	BehaviorTreeID    string            `json:"behavior_tree_id"`
+	TaskDistributorID string            `json:"task_distributor_id,omitempty"`
+	InitialState      map[string]string `json:"initial_state,omitempty"`
+	GoalState         map[string]string `json:"goal_state"`
+	AgentIDs          []string          `json:"agent_ids"`
 }
 
 // ============================================================
@@ -112,15 +118,16 @@ func (s *Server) CreatePlanningProblem(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().UTC()
 	pp := &db.PlanningProblem{
-		ID:             uuid.New().String()[:8],
-		Name:           req.Name,
-		BehaviorTreeID: req.BehaviorTreeID,
-		InitialState:   datatypes.JSON(initialStateJSON),
-		GoalState:      datatypes.JSON(goalStateJSON),
-		AgentIDs:       datatypes.JSON(agentIDsJSON),
-		Status:         "draft",
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		ID:                uuid.New().String()[:8],
+		Name:              req.Name,
+		BehaviorTreeID:    req.BehaviorTreeID,
+		TaskDistributorID: sql.NullString{String: req.TaskDistributorID, Valid: req.TaskDistributorID != ""},
+		InitialState:      datatypes.JSON(initialStateJSON),
+		GoalState:         datatypes.JSON(goalStateJSON),
+		AgentIDs:          datatypes.JSON(agentIDsJSON),
+		Status:            "draft",
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 
 	if err := s.repo.CreatePlanningProblem(pp); err != nil {
@@ -220,32 +227,64 @@ func (s *Server) ExecutePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Initialize planning state tracking
-	var initialState map[string]string
-	if pp.InitialState != nil {
-		json.Unmarshal(pp.InitialState, &initialState)
-	}
-	s.stateManager.InitPlanningState(id, initialState)
-
 	// Update status to executing
 	if err := s.repo.UpdatePlanningProblemStatus(id, "executing", pp.PlanResult, ""); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update status: %v", err))
 		return
 	}
 
-	// Group assignments by order for sequential/parallel execution
-	orderGroups := make(map[int][]pddl.StepAssignment)
-	for _, a := range plan.Assignments {
-		orderGroups[a.Order] = append(orderGroups[a.Order], a)
+	// Start plan execution via PlanExecutor
+	executionID, err := s.planExecutor.StartPlanExecution(r.Context(), id, pp.BehaviorTreeID, &plan)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to start execution: %v", err))
+		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"message":         "plan execution started",
+		"execution_id":    executionID,
 		"problem_id":      id,
 		"total_steps":     plan.TotalSteps,
 		"parallel_groups": plan.ParallelGroups,
 		"assignments":     plan.Assignments,
 	})
+}
+
+// ListPlanExecutions returns all active plan executions
+func (s *Server) ListPlanExecutions(w http.ResponseWriter, r *http.Request) {
+	executions := s.planExecutor.ListExecutions()
+	responses := make([]PlanExecutionResponse, 0, len(executions))
+	for _, exec := range executions {
+		responses = append(responses, toPlanExecutionResponse(exec, s.stateManager))
+	}
+	writeJSON(w, http.StatusOK, responses)
+}
+
+// GetPlanExecution returns a specific plan execution
+func (s *Server) GetPlanExecution(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "executionID")
+	exec, ok := s.planExecutor.GetExecution(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "execution not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, toPlanExecutionResponse(exec, s.stateManager))
+}
+
+// CancelPlanExecution cancels a running plan execution
+func (s *Server) CancelPlanExecution(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "executionID")
+	if err := s.planExecutor.CancelExecution(id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": "execution cancelled"})
+}
+
+// GetPlanResources returns current resource allocations
+func (s *Server) GetPlanResources(w http.ResponseWriter, r *http.Request) {
+	allocations := s.planExecutor.GetResourceAllocations()
+	writeJSON(w, http.StatusOK, allocations)
 }
 
 // PreviewDistribution previews task distribution without saving
@@ -275,10 +314,11 @@ func (s *Server) PreviewDistribution(w http.ResponseWriter, r *http.Request) {
 	agentIDsJSON, _ := json.Marshal(req.AgentIDs)
 
 	pp := &db.PlanningProblem{
-		BehaviorTreeID: req.BehaviorTreeID,
-		InitialState:   datatypes.JSON(initialStateJSON),
-		GoalState:      datatypes.JSON(goalStateJSON),
-		AgentIDs:       datatypes.JSON(agentIDsJSON),
+		BehaviorTreeID:    req.BehaviorTreeID,
+		TaskDistributorID: sql.NullString{String: req.TaskDistributorID, Valid: req.TaskDistributorID != ""},
+		InitialState:      datatypes.JSON(initialStateJSON),
+		GoalState:         datatypes.JSON(goalStateJSON),
+		AgentIDs:          datatypes.JSON(agentIDsJSON),
 	}
 
 	plan, err := s.solveProblem(pp)
@@ -313,10 +353,45 @@ func (s *Server) solveProblem(pp *db.PlanningProblem) (*pddl.Plan, error) {
 		}
 	}
 
-	// Parse planning state vars
+	// Parse planning state vars: prefer TaskDistributor, fallback to BT.PlanningStates
 	var stateVars []db.PlanningStateVar
-	if bt.PlanningStates != nil {
+	selectedTDID := ""
+	if pp.TaskDistributorID.Valid && pp.TaskDistributorID.String != "" {
+		selectedTDID = pp.TaskDistributorID.String
+	} else if bt.TaskDistributorID.Valid && bt.TaskDistributorID.String != "" {
+		selectedTDID = bt.TaskDistributorID.String
+	}
+
+	if selectedTDID != "" {
+		tdStates, err := s.repo.ListTaskDistributorStates(selectedTDID)
+		if err == nil {
+			for _, ts := range tdStates {
+				stateVars = append(stateVars, db.PlanningStateVar{
+					Name:         ts.Name,
+					Type:         ts.Type,
+					InitialValue: ts.InitialValue,
+					Description:  ts.Description,
+				})
+			}
+		}
+	} else if bt.PlanningStates != nil {
 		json.Unmarshal(bt.PlanningStates, &stateVars)
+	}
+
+	resources := make([]pddl.ResourceInfo, 0)
+	if selectedTDID != "" {
+		tdResources, err := s.repo.ListTaskDistributorResources(selectedTDID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load task distributor resources: %w", err)
+		}
+		for _, resource := range tdResources {
+			resources = append(resources, pddl.ResourceInfo{
+				ID:               resource.ID,
+				Name:             resource.Name,
+				Kind:             resource.Kind,
+				ParentResourceID: resource.ParentResourceID,
+			})
+		}
 	}
 
 	// Parse agent IDs
@@ -372,6 +447,7 @@ func (s *Server) solveProblem(pp *db.PlanningProblem) (*pddl.Plan, error) {
 			ResourceRelease: step.ResourceRelease,
 			Preconditions:   step.PlanningPreconditions,
 			Effects:         step.PlanningEffects,
+			During:          step.PlanningDuring,
 		})
 	}
 
@@ -390,20 +466,80 @@ func (s *Server) solveProblem(pp *db.PlanningProblem) (*pddl.Plan, error) {
 		GoalState:    goalState,
 		Actions:      actions,
 		Agents:       agents,
+		Resources:    resources,
 	}
 
 	return pddl.Solve(problem), nil
 }
 
+func toPlanExecutionResponse(exec *executor.PlanExecution, stateManager *state.GlobalStateManager) PlanExecutionResponse {
+	snapshot := exec.Snapshot()
+
+	resp := PlanExecutionResponse{
+		ID:             snapshot.ID,
+		ProblemID:      snapshot.ProblemID,
+		BehaviorTreeID: snapshot.BehaviorTreeID,
+		Status:         snapshot.Status,
+		CurrentOrder:   snapshot.CurrentOrder,
+		TotalOrders:    snapshot.TotalOrders,
+		StartedAt:      snapshot.StartedAt,
+		Error:          snapshot.Error,
+	}
+
+	if snapshot.CompletedAt != nil {
+		resp.CompletedAt = snapshot.CompletedAt
+	}
+
+	resp.Steps = make([]PlanExecutionStepResponse, 0, len(snapshot.Steps))
+	agentNames := make(map[string]string, len(snapshot.Steps))
+	for _, ss := range snapshot.Steps {
+		agentNames[ss.AgentID] = ss.AgentName
+		resp.Steps = append(resp.Steps, PlanExecutionStepResponse{
+			StepID:    ss.StepID,
+			StepName:  ss.StepName,
+			AgentID:   ss.AgentID,
+			AgentName: ss.AgentName,
+			Order:     ss.Order,
+			Status:    ss.Status,
+			TaskID:    ss.TaskID,
+			Error:     ss.Error,
+		})
+	}
+
+	if stateManager != nil {
+		resp.PlanningState = stateManager.GetPlanningState(snapshot.ProblemID)
+		for _, hold := range stateManager.GetPlanResources(snapshot.ProblemID) {
+			holderName := agentNames[hold.AgentID]
+			if holderName == "" {
+				holderName = hold.AgentID
+			}
+			resp.Resources = append(resp.Resources, PlanExecutionResourceResponse{
+				Resource:        hold.ResourceID,
+				HolderAgent:     holderName,
+				HolderAgentID:   hold.AgentID,
+				HolderAgentName: holderName,
+				PlanID:          snapshot.ProblemID,
+				ProblemID:       snapshot.ProblemID,
+				PlanExecutionID: snapshot.ID,
+				StepID:          hold.StepID,
+				AcquiredAt:      hold.AcquiredAt,
+			})
+		}
+	}
+
+	return resp
+}
+
 func toPlanningProblemResponse(pp *db.PlanningProblem) PlanningProblemResponse {
 	resp := PlanningProblemResponse{
-		ID:             pp.ID,
-		Name:           pp.Name,
-		BehaviorTreeID: pp.BehaviorTreeID,
-		Status:         pp.Status,
-		ErrorMessage:   pp.ErrorMessage.String,
-		CreatedAt:      pp.CreatedAt,
-		UpdatedAt:      pp.UpdatedAt,
+		ID:                pp.ID,
+		Name:              pp.Name,
+		BehaviorTreeID:    pp.BehaviorTreeID,
+		TaskDistributorID: pp.TaskDistributorID.String,
+		Status:            pp.Status,
+		ErrorMessage:      pp.ErrorMessage.String,
+		CreatedAt:         pp.CreatedAt,
+		UpdatedAt:         pp.UpdatedAt,
 	}
 
 	if pp.InitialState != nil {
