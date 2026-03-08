@@ -1,11 +1,13 @@
-import { CheckCircle2, XCircle, AlertCircle, Loader2, Clock3, Lock, Unlock, Bot, Layers3, Activity, type LucideIcon } from 'lucide-react'
-import type { PlanResult, GraphStep, PlanExecution, TaskDistributorResource } from '../../../types'
+import { CheckCircle2, XCircle, AlertCircle, Loader2, Clock3, Lock, Bot, Layers3, Activity, type LucideIcon } from 'lucide-react'
+import type { PlanResult, PlanExecution, PlanningTaskSpec, TaskDistributorResource } from '../../../types'
 import { useTranslation } from '../../../i18n'
 
 interface Props {
   plan: PlanResult | null
   isLoading: boolean
-  steps?: GraphStep[]
+  taskPlanning?: PlanningTaskSpec | null
+  taskName?: string
+  requiredActionTypes?: string[]
   execution?: PlanExecution | null
   resources?: TaskDistributorResource[]
 }
@@ -18,7 +20,15 @@ const STEP_STATUS_STYLES: Record<string, { bg: string; text: string; border: str
   cancelled: { bg: 'bg-gray-500/10', text: 'text-gray-400', border: 'border-gray-500/20' },
 }
 
-export default function PlanVisualization({ plan, isLoading, steps = [], execution, resources = [] }: Props) {
+export default function PlanVisualization({
+  plan,
+  isLoading,
+  taskPlanning,
+  taskName,
+  requiredActionTypes = [],
+  execution,
+  resources = [],
+}: Props) {
   const { t } = useTranslation()
   const formatResourceToken = (token: string) => {
     if (token.startsWith('type:')) {
@@ -84,7 +94,7 @@ export default function PlanVisualization({ plan, isLoading, steps = [], executi
   const execStepStatus = new Map<string, string>()
   if (execution?.steps) {
     for (const step of execution.steps) {
-      execStepStatus.set(step.step_id, step.status)
+      execStepStatus.set(`${step.task_id}:${step.agent_id}`, step.status)
     }
   }
 
@@ -129,11 +139,11 @@ export default function PlanVisualization({ plan, isLoading, steps = [], executi
               ) : (
                 <CheckCircle2 size={18} className="text-emerald-400" />
               )}
-              {t('pddl.planSummary', { steps: String(plan.total_steps), waves: String(plan.parallel_groups) })}
+              {t('pddl.planSummary', { steps: String(plan.total_tasks ?? plan.total_steps), waves: String(plan.parallel_groups) })}
             </div>
             <p className="mt-2 text-sm text-secondary">
               {execution
-                ? `${executionStatus} · ${completedStepCount}/${plan.total_steps} ${t('pddl.steps')}`
+                ? `${executionStatus} · ${completedStepCount}/${plan.total_tasks ?? plan.total_steps} Task`
                 : t('pddl.readyToExecuteHint')}
             </p>
           </div>
@@ -148,7 +158,7 @@ export default function PlanVisualization({ plan, isLoading, steps = [], executi
 
         <div className="mt-4 grid grid-cols-3 gap-2">
           <MetricCard icon={Layers3} label={t('pddl.wave')} value={String(plan.parallel_groups)} />
-          <MetricCard icon={Activity} label={t('pddl.steps')} value={String(plan.total_steps)} />
+          <MetricCard icon={Activity} label="Task" value={String(plan.total_tasks ?? plan.total_steps)} />
           <MetricCard icon={Bot} label={t('pddl.selectAgents')} value={String(assignedAgentCount)} />
         </div>
 
@@ -220,25 +230,23 @@ export default function PlanVisualization({ plan, isLoading, steps = [], executi
 
               <div className="grid gap-2 p-3">
                 {waveAssignments.map(assignment => {
-                  const stepData = steps.find(step => step.id === assignment.step_id)
-                  const acquiredResources = stepData?.resource_acquire ?? []
-                  const releasedResources = stepData?.resource_release ?? []
-                  const stepStatus = execStepStatus.get(assignment.step_id) || 'pending'
+                  const requiredResources = taskPlanning?.required_resources ?? []
+                  const stepStatus = execStepStatus.get(`${assignment.task_id}:${assignment.agent_id}`) || 'pending'
                   const statusStyle = STEP_STATUS_STYLES[stepStatus] || STEP_STATUS_STYLES.pending
-                  const executionStep = executionSteps.find(step => step.step_id === assignment.step_id)
+                  const executionStep = executionSteps.find(step => step.task_id === assignment.task_id && step.agent_id === assignment.agent_id)
 
                   return (
                     <div
-                      key={assignment.step_id}
+                      key={`${assignment.task_id}:${assignment.agent_id}:${assignment.order}`}
                       className={`rounded-2xl border p-4 ${statusStyle.border} ${statusStyle.bg}`}
                     >
                       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                         <div className="min-w-0">
                           <div className="text-sm font-semibold text-primary">
-                            {assignment.step_name || assignment.step_id}
+                            {assignment.task_name || taskName || assignment.task_id}
                           </div>
                           <div className="mt-1 text-[11px] text-secondary">
-                            {t('pddl.assignmentAnchor')}: {stepData?.action?.type?.split('/').pop() || assignment.step_id}
+                            Capability: {requiredActionTypes.length > 0 ? requiredActionTypes.map(item => item.split('/').pop()).join(', ') : 'Any'}
                           </div>
                         </div>
                         <div className="flex flex-wrap gap-2">
@@ -253,17 +261,11 @@ export default function PlanVisualization({ plan, isLoading, steps = [], executi
 
                       <p className="mt-3 text-sm leading-6 text-secondary">{assignment.reason}</p>
 
-                      {(acquiredResources.length > 0 || releasedResources.length > 0) && (
+                      {requiredResources.length > 0 && (
                         <div className="mt-3 flex flex-wrap gap-2">
-                          {acquiredResources.map(resource => (
+                          {requiredResources.map(resource => (
                             <span key={`acq-${resource}`} className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2.5 py-1 text-[11px] text-amber-400">
                               <Lock size={12} />
-                              {formatResourceToken(resource)}
-                            </span>
-                          ))}
-                          {releasedResources.map(resource => (
-                            <span key={`rel-${resource}`} className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-400">
-                              <Unlock size={12} />
                               {formatResourceToken(resource)}
                             </span>
                           ))}

@@ -246,6 +246,12 @@ export interface PlanningEffect {
   value: string
 }
 
+export interface PlanningTaskSpec {
+  required_resources?: string[]
+  during_state?: PlanningEffect[]
+  result_states?: PlanningEffect[]
+}
+
 export interface PlanningStateVar {
   name: string
   type: 'bool' | 'int' | 'string'
@@ -737,7 +743,9 @@ export interface BehaviorTree {
   steps: GraphStep[]
   states?: GraphState[]         // Auto-generated and custom states
   planning_states?: PlanningStateVar[] // PDDL planning state variables
+  planning_task?: PlanningTaskSpec
   task_distributor_id?: string
+  required_action_types?: string[]
   auto_generate_states?: boolean // Whether to auto-generate states from steps
   version: number
   is_template: boolean          // true if agent_id is null
@@ -758,6 +766,7 @@ export interface GraphListItem {
   entry_point?: string | null
   step_count: number
   state_count?: number          // Number of states in the graph
+  required_action_types?: string[]
   version: number
   is_template: boolean
   deployment_status: string | null
@@ -774,6 +783,7 @@ export interface GraphCreateRequest {
   preconditions?: Precondition[]
   steps: GraphStep[]
   states?: GraphState[]         // Custom states (optional)
+  planning_task?: PlanningTaskSpec
   auto_generate_states?: boolean // Whether to auto-generate states (default: true)
 }
 
@@ -1355,6 +1365,9 @@ export interface RobotTelemetry {
 // ============================================
 
 export interface StepAssignment {
+  task_id: string
+  task_name: string
+  behavior_tree_id?: string
   step_id: string
   step_name: string
   agent_id: string
@@ -1367,6 +1380,7 @@ export interface PlanResult {
   assignments: StepAssignment[]
   is_valid: boolean
   error_message?: string
+  total_tasks?: number
   total_steps: number
   parallel_groups: number
 }
@@ -1422,18 +1436,21 @@ export interface ResourceAllocation {
   plan_id?: string
   problem_id?: string
   plan_execution_id?: string
+  task_id?: string
   step_id?: string
   acquired_at?: string
 }
 
 export interface PlanExecutionStep {
+  task_id: string
+  task_name?: string
+  runtime_task_id?: string
   step_id: string
   step_name: string
   agent_id: string
   agent_name: string
   order: number
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | string
-  task_id?: string
   started_at?: string
   ended_at?: string
   error?: string

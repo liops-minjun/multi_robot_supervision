@@ -57,10 +57,24 @@ type ZoneReservation struct {
 
 // PlanResourceHold tracks a resource lock held during plan execution.
 type PlanResourceHold struct {
-	ResourceID string
-	AgentID    string
-	StepID     string
-	AcquiredAt time.Time
+	PlanID        string
+	ResourceID    string
+	AgentID       string
+	TaskID        string
+	RuntimeTaskID string
+	StepID        string
+	AcquiredAt    time.Time
+}
+
+type TaskRuntimeContext struct {
+	PlanID          string
+	PlanExecutionID string
+	LogicalTaskID   string
+	LogicalTaskName string
+	BehaviorTreeID  string
+	AgentID         string
+	Bindings        map[string]string
+	HeldResources   map[string]struct{}
 }
 
 // FleetSnapshot is a point-in-time snapshot of the fleet state
@@ -129,8 +143,10 @@ type GlobalStateManager struct {
 	onAgentDisconnect AgentDisconnectCallback
 
 	// PDDL Planning state tracking
-	planningStates map[string]map[string]string           // planID -> variable -> value
-	planResources  map[string]map[string]PlanResourceHold // planID -> resourceID -> hold
+	planningStates    map[string]map[string]string           // planID -> variable -> value
+	planResources     map[string]map[string]PlanResourceHold // planID -> resourceID -> hold
+	resourceHolds     map[string]PlanResourceHold            // resourceID -> hold
+	taskRuntimeScopes map[string]TaskRuntimeContext          // runtimeTaskID -> context
 
 	// Background worker management
 	ctx    context.Context
@@ -158,10 +174,12 @@ func NewGlobalStateManager() *GlobalStateManager {
 		stateRegistry:      NewStateRegistry(),
 		taskLogManager:     NewTaskLogManager(),
 		heartbeatConfig:    DefaultHeartbeatConfig(),
-		planningStates:     make(map[string]map[string]string),
-		planResources:      make(map[string]map[string]PlanResourceHold),
-		ctx:                ctx,
-		cancel:             cancel,
+		planningStates:    make(map[string]map[string]string),
+		planResources:     make(map[string]map[string]PlanResourceHold),
+		resourceHolds:     make(map[string]PlanResourceHold),
+		taskRuntimeScopes: make(map[string]TaskRuntimeContext),
+		ctx:               ctx,
+		cancel:            cancel,
 	}
 }
 
@@ -2325,48 +2343,198 @@ func (m *GlobalStateManager) ClearPlanningState(planID string) {
 	delete(m.planResources, planID)
 }
 
-// TryAcquirePlanResource attempts to acquire a resource for an agent within a plan.
-// Returns (true, "") on success or (false, holderAgentID) if held by another agent.
-func (m *GlobalStateManager) TryAcquirePlanResource(planID, resourceID, agentID, stepID string) (bool, string) {
+func (m *GlobalStateManager) RegisterTaskRuntime(runtimeTaskID string, ctx TaskRuntimeContext) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	resources, ok := m.planResources[planID]
+	if strings.TrimSpace(runtimeTaskID) == "" {
+		return
+	}
+
+	existing := m.taskRuntimeScopes[runtimeTaskID]
+	if ctx.HeldResources == nil {
+		ctx.HeldResources = existing.HeldResources
+	}
+	if ctx.HeldResources == nil {
+		ctx.HeldResources = make(map[string]struct{})
+	}
+	if ctx.Bindings == nil {
+		ctx.Bindings = existing.Bindings
+	}
+	m.taskRuntimeScopes[runtimeTaskID] = ctx
+}
+
+func (m *GlobalStateManager) UnregisterTaskRuntime(runtimeTaskID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.taskRuntimeScopes, runtimeTaskID)
+}
+
+func (m *GlobalStateManager) GetTaskRuntime(runtimeTaskID string) (TaskRuntimeContext, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	ctx, ok := m.taskRuntimeScopes[runtimeTaskID]
 	if !ok {
+		return TaskRuntimeContext{}, false
+	}
+	copyCtx := ctx
+	if len(ctx.Bindings) > 0 {
+		copyCtx.Bindings = make(map[string]string, len(ctx.Bindings))
+		for k, v := range ctx.Bindings {
+			copyCtx.Bindings[k] = v
+		}
+	}
+	if len(ctx.HeldResources) > 0 {
+		copyCtx.HeldResources = make(map[string]struct{}, len(ctx.HeldResources))
+		for k := range ctx.HeldResources {
+			copyCtx.HeldResources[k] = struct{}{}
+		}
+	}
+	return copyCtx, true
+}
+
+// TryAcquirePlanResource attempts to acquire a resource for a runtime task.
+// Returns (true, "") on success or (false, holderAgentID) if held by another agent.
+func (m *GlobalStateManager) TryAcquirePlanResource(planID, resourceID, agentID, runtimeTaskID, logicalTaskID, stepID string) (bool, string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	resourceID = strings.TrimSpace(resourceID)
+	if resourceID == "" {
 		return false, ""
 	}
 
-	if hold, held := resources[resourceID]; held {
-		if hold.AgentID == agentID {
-			return true, "" // Already held by this agent
+	if hold, held := m.resourceHolds[resourceID]; held {
+		if hold.AgentID == agentID && hold.RuntimeTaskID == runtimeTaskID {
+			return true, ""
 		}
 		return false, hold.AgentID
 	}
 
-	resources[resourceID] = PlanResourceHold{
-		ResourceID: resourceID,
-		AgentID:    agentID,
-		StepID:     stepID,
-		AcquiredAt: time.Now().UTC(),
+	if logicalTaskID == "" {
+		logicalTaskID = runtimeTaskID
 	}
+
+	hold := PlanResourceHold{
+		PlanID:        planID,
+		ResourceID:    resourceID,
+		AgentID:       agentID,
+		TaskID:        logicalTaskID,
+		RuntimeTaskID: runtimeTaskID,
+		StepID:        stepID,
+		AcquiredAt:    time.Now().UTC(),
+	}
+	m.resourceHolds[resourceID] = hold
+	if planID != "" {
+		if _, ok := m.planResources[planID]; !ok {
+			m.planResources[planID] = make(map[string]PlanResourceHold)
+		}
+		m.planResources[planID][resourceID] = hold
+	}
+	if ctx, ok := m.taskRuntimeScopes[runtimeTaskID]; ok {
+		if ctx.HeldResources == nil {
+			ctx.HeldResources = make(map[string]struct{})
+		}
+		ctx.HeldResources[resourceID] = struct{}{}
+		m.taskRuntimeScopes[runtimeTaskID] = ctx
+	}
+	m.updatePlanningOccupancyStateLocked(planID, resourceID, true)
 	return true, ""
 }
 
-// ReleasePlanResource releases a resource held by an agent within a plan
+// HandleTaskResourceEvent reconciles runtime acquire/release events reported by an agent.
+func (m *GlobalStateManager) HandleTaskResourceEvent(runtimeTaskID, agentID, stepID, resourceID string, acquired bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ctx, ok := m.taskRuntimeScopes[runtimeTaskID]
+	if !ok {
+		return fmt.Errorf("task runtime %s is not registered", runtimeTaskID)
+	}
+
+	if acquired {
+		hold := m.resourceHolds[resourceID]
+		if hold.ResourceID != "" {
+			if hold.AgentID == agentID && hold.RuntimeTaskID == runtimeTaskID {
+				return nil
+			}
+			return fmt.Errorf("resource %s already held by %s", resourceID, hold.AgentID)
+		}
+		logicalTaskID := ctx.LogicalTaskID
+		if logicalTaskID == "" {
+			logicalTaskID = runtimeTaskID
+		}
+		hold = PlanResourceHold{
+			PlanID:        ctx.PlanID,
+			ResourceID:    resourceID,
+			AgentID:       agentID,
+			TaskID:        logicalTaskID,
+			RuntimeTaskID: runtimeTaskID,
+			StepID:        stepID,
+			AcquiredAt:    time.Now().UTC(),
+		}
+		m.resourceHolds[resourceID] = hold
+		if ctx.PlanID != "" {
+			if _, exists := m.planResources[ctx.PlanID]; !exists {
+				m.planResources[ctx.PlanID] = make(map[string]PlanResourceHold)
+			}
+			m.planResources[ctx.PlanID][resourceID] = hold
+		}
+		if ctx.HeldResources == nil {
+			ctx.HeldResources = make(map[string]struct{})
+		}
+		ctx.HeldResources[resourceID] = struct{}{}
+		m.taskRuntimeScopes[runtimeTaskID] = ctx
+		m.updatePlanningOccupancyStateLocked(ctx.PlanID, resourceID, true)
+		return nil
+	}
+
+	hold, held := m.resourceHolds[resourceID]
+	if !held {
+		return nil
+	}
+	if hold.AgentID != agentID || hold.RuntimeTaskID != runtimeTaskID {
+		return fmt.Errorf("resource %s is held by %s/%s", resourceID, hold.AgentID, hold.RuntimeTaskID)
+	}
+
+	delete(m.resourceHolds, resourceID)
+	if hold.PlanID != "" {
+		if resources, exists := m.planResources[hold.PlanID]; exists {
+			delete(resources, resourceID)
+		}
+	}
+	if ctx.HeldResources != nil {
+		delete(ctx.HeldResources, resourceID)
+		m.taskRuntimeScopes[runtimeTaskID] = ctx
+	}
+	m.updatePlanningOccupancyStateLocked(hold.PlanID, resourceID, false)
+	return nil
+}
+
+// ReleasePlanResource releases a resource held by an agent within a plan.
 func (m *GlobalStateManager) ReleasePlanResource(planID, resourceID, agentID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	resources, ok := m.planResources[planID]
-	if !ok {
+	hold, held := m.resourceHolds[resourceID]
+	if !held || hold.AgentID != agentID {
 		return false
 	}
 
-	if hold, held := resources[resourceID]; held && hold.AgentID == agentID {
-		delete(resources, resourceID)
-		return true
+	delete(m.resourceHolds, resourceID)
+	if planID != "" {
+		if resources, ok := m.planResources[planID]; ok {
+			delete(resources, resourceID)
+		}
 	}
-	return false
+	if ctx, ok := m.taskRuntimeScopes[hold.RuntimeTaskID]; ok && ctx.HeldResources != nil {
+		delete(ctx.HeldResources, resourceID)
+		m.taskRuntimeScopes[hold.RuntimeTaskID] = ctx
+	}
+	m.updatePlanningOccupancyStateLocked(planID, resourceID, false)
+	return true
 }
 
 // GetPlanResources returns the currently held resources for a plan.
@@ -2386,10 +2554,112 @@ func (m *GlobalStateManager) GetPlanResources(planID string) []PlanResourceHold 
 	return result
 }
 
-// ReleaseAllPlanResources releases all resources for a plan
+func (m *GlobalStateManager) GetAllResourceHolds() []PlanResourceHold {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make([]PlanResourceHold, 0, len(m.resourceHolds))
+	for _, hold := range m.resourceHolds {
+		result = append(result, hold)
+	}
+	return result
+}
+
+func (m *GlobalStateManager) GetAgentHeldResources(agentID string) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make([]string, 0)
+	for resourceID, hold := range m.resourceHolds {
+		if hold.AgentID == agentID {
+			result = append(result, resourceID)
+		}
+	}
+	return result
+}
+
+// ReleaseTaskResources releases all resources currently held by a runtime task.
+func (m *GlobalStateManager) ReleaseTaskResources(runtimeTaskID, agentID string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ctx, ok := m.taskRuntimeScopes[runtimeTaskID]
+	if !ok || len(ctx.HeldResources) == 0 {
+		return nil
+	}
+
+	released := make([]string, 0, len(ctx.HeldResources))
+	for resourceID := range ctx.HeldResources {
+		hold, held := m.resourceHolds[resourceID]
+		if !held {
+			continue
+		}
+		if agentID != "" && hold.AgentID != agentID {
+			continue
+		}
+		delete(m.resourceHolds, resourceID)
+		if hold.PlanID != "" {
+			if resources, exists := m.planResources[hold.PlanID]; exists {
+				delete(resources, resourceID)
+			}
+		}
+		m.updatePlanningOccupancyStateLocked(hold.PlanID, resourceID, false)
+		released = append(released, resourceID)
+	}
+	ctx.HeldResources = make(map[string]struct{})
+	m.taskRuntimeScopes[runtimeTaskID] = ctx
+	return released
+}
+
+// ReleaseAllPlanResources releases all resources tracked for a plan.
 func (m *GlobalStateManager) ReleaseAllPlanResources(planID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	resources := m.planResources[planID]
+	for resourceID, hold := range resources {
+		delete(m.resourceHolds, resourceID)
+		if ctx, ok := m.taskRuntimeScopes[hold.RuntimeTaskID]; ok && ctx.HeldResources != nil {
+			delete(ctx.HeldResources, resourceID)
+			m.taskRuntimeScopes[hold.RuntimeTaskID] = ctx
+		}
+		m.updatePlanningOccupancyStateLocked(planID, resourceID, false)
+	}
 	delete(m.planResources, planID)
+}
+
+func (m *GlobalStateManager) updatePlanningOccupancyStateLocked(planID, resourceID string, occupied bool) {
+	if planID == "" {
+		return
+	}
+	state, ok := m.planningStates[planID]
+	if !ok {
+		return
+	}
+
+	value := "false"
+	if occupied {
+		value = "true"
+	}
+
+	for _, candidate := range occupancyStateCandidates(resourceID) {
+		if _, exists := state[candidate]; exists {
+			state[candidate] = value
+			return
+		}
+	}
+}
+
+func occupancyStateCandidates(resourceID string) []string {
+	trimmed := strings.TrimSpace(resourceID)
+	if trimmed == "" {
+		return nil
+	}
+	return []string{
+		trimmed + " 점유",
+		trimmed + " Occupied",
+		trimmed + " occupied",
+		trimmed + "_occupied",
+		trimmed + ".occupied",
+	}
 }

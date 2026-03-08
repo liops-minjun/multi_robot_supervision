@@ -159,6 +159,9 @@ func (s *Server) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 		preconJSON, _ := json.Marshal(req.Preconditions)
 		graph.Preconditions = preconJSON
 	}
+	if req.PlanningTask != nil {
+		graph.PlanningTask = planningTaskRequestToJSON(req.PlanningTask)
+	}
 
 	if err := s.repo.CreateBehaviorTree(graph); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -265,6 +268,9 @@ func (s *Server) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		}
 		planningStatesJSON, _ := json.Marshal(dbPlanningStates)
 		template.PlanningStates = planningStatesJSON
+	}
+	if req.PlanningTask != nil {
+		template.PlanningTask = planningTaskRequestToJSON(req.PlanningTask)
 	}
 	if req.TaskDistributorID != nil {
 		if *req.TaskDistributorID == "" {

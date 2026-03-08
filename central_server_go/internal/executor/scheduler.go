@@ -66,6 +66,13 @@ const (
 	logRetentionInterval       = 24 * time.Hour
 	logRetentionWindow         = 30 * 24 * time.Hour
 	taskDispatchLease          = 5 * time.Second
+
+	taskParamPlanProblemID     = "__fleet_plan_problem_id"
+	taskParamPlanExecutionID   = "__fleet_plan_execution_id"
+	taskParamLogicalTaskID     = "__fleet_logical_task_id"
+	taskParamLogicalTaskName   = "__fleet_logical_task_name"
+	taskParamTaskDistributorID = "__fleet_task_distributor_id"
+	taskParamResourceBindings  = "__fleet_resource_bindings"
 )
 
 // RunningTask represents an actively executing task
@@ -73,6 +80,14 @@ type RunningTask struct {
 	ID                 string
 	BehaviorTreeID     string
 	AgentID            string
+	TaskDistributorID  string
+	PlanProblemID      string
+	PlanExecutionID    string
+	LogicalTaskID      string
+	LogicalTaskName    string
+	RequiredResources  []string
+	Bindings           map[string]string
+	Params             map[string]string
 	Steps              []db.BehaviorTreeStep
 	StepIndex          map[string]int // Step ID -> index for O(1) lookup
 	CurrentStep        int
@@ -202,6 +217,28 @@ func (s *Scheduler) ObserveAgentExecution(agentID string, isExecuting bool, curr
 	}
 }
 
+func (s *Scheduler) DispatchIdleAgents() {
+	s.tasksMu.RLock()
+	agentIDs := make([]string, 0, len(s.taskQueues))
+	for agentID := range s.taskQueues {
+		agentIDs = append(agentIDs, agentID)
+	}
+	s.tasksMu.RUnlock()
+
+	for _, agentID := range agentIDs {
+		robot, exists := s.stateManager.GetRobotState(agentID)
+		if !exists {
+			continue
+		}
+		if robot.IsExecuting || strings.TrimSpace(robot.CurrentTaskID) != "" {
+			continue
+		}
+		if err := s.dispatchNextQueuedTask(agentID); err != nil {
+			log.Printf("[Scheduler] Failed to dispatch queued task for idle agent %s: %v", agentID, err)
+		}
+	}
+}
+
 func (s *Scheduler) acknowledgeQueuedTask(agentID, taskID string) {
 	taskID = strings.TrimSpace(taskID)
 	if taskID == "" {
@@ -268,6 +305,9 @@ func (s *Scheduler) dispatchNextQueuedTask(agentID string) error {
 		if !task.DispatchLeaseUntil.IsZero() && !now.Before(task.DispatchLeaseUntil) {
 			log.Printf("[Scheduler] Dispatch lease expired for task %s on agent %s, retrying", task.ID, agentID)
 			s.stateManager.CompleteExecution(task.AgentID, task.ReservedZones)
+			s.stateManager.ReleaseTaskResources(task.ID, task.AgentID)
+			s.stateManager.UnregisterTaskRuntime(task.ID)
+			task.Bindings = make(map[string]string)
 			task.DispatchLeaseUntil = time.Time{}
 			task.Status = TaskPending
 		}
@@ -284,9 +324,68 @@ func (s *Scheduler) dispatchNextQueuedTask(agentID string) error {
 	return nil
 }
 
+func (s *Scheduler) reserveTaskResourcesForDispatch(task *RunningTask) (bool, error) {
+	runtimeCtx := state.TaskRuntimeContext{
+		PlanID:          task.PlanProblemID,
+		PlanExecutionID: task.PlanExecutionID,
+		LogicalTaskID:   task.LogicalTaskID,
+		LogicalTaskName: task.LogicalTaskName,
+		BehaviorTreeID:  task.BehaviorTreeID,
+		AgentID:         task.AgentID,
+		Bindings:        make(map[string]string),
+		HeldResources:   make(map[string]struct{}),
+	}
+
+	if len(task.RequiredResources) == 0 {
+		task.Bindings = make(map[string]string)
+		s.stateManager.RegisterTaskRuntime(task.ID, runtimeCtx)
+		return true, nil
+	}
+
+	catalog, err := loadRuntimeResourceCatalog(s.repo, task.TaskDistributorID)
+	if err != nil {
+		return false, err
+	}
+
+	bindings, err := resolveRuntimeBindings(task.RequiredResources, s.stateManager.GetAllResourceHolds(), nil, catalog)
+	if err != nil {
+		if strings.Contains(err.Error(), "no free instance") {
+			return false, nil
+		}
+		return false, err
+	}
+
+	runtimeCtx.Bindings = bindings
+	s.stateManager.RegisterTaskRuntime(task.ID, runtimeCtx)
+
+	logicalTaskID := task.LogicalTaskID
+	if logicalTaskID == "" {
+		logicalTaskID = task.ID
+	}
+
+	for _, resourceID := range bindings {
+		ok, _ := s.stateManager.TryAcquirePlanResource(task.PlanProblemID, resourceID, task.AgentID, task.ID, logicalTaskID, task.EntryStepID)
+		if !ok {
+			s.stateManager.ReleaseTaskResources(task.ID, task.AgentID)
+			s.stateManager.UnregisterTaskRuntime(task.ID)
+			task.Bindings = make(map[string]string)
+			return false, nil
+		}
+	}
+
+	task.Bindings = bindings
+	return true, nil
+}
+
 func (s *Scheduler) dispatchQueuedTaskLocked(task *RunningTask, now time.Time) error {
 	if s.quicHandler == nil {
 		return fmt.Errorf("raw QUIC handler is not configured")
+	}
+
+	if ready, err := s.reserveTaskResourcesForDispatch(task); err != nil {
+		return err
+	} else if !ready {
+		return nil
 	}
 
 	success, errMsg := s.stateManager.TryStartExecution(
@@ -298,6 +397,9 @@ func (s *Scheduler) dispatchQueuedTaskLocked(task *RunningTask, now time.Time) e
 		task.Preconditions,
 	)
 	if !success {
+		s.stateManager.ReleaseTaskResources(task.ID, task.AgentID)
+		s.stateManager.UnregisterTaskRuntime(task.ID)
+		task.Bindings = make(map[string]string)
 		log.Printf("[Scheduler] Task %s is still waiting to start on %s: %s", task.ID, task.AgentID, errMsg)
 		return nil
 	}
@@ -319,10 +421,31 @@ func (s *Scheduler) dispatchQueuedTaskLocked(task *RunningTask, now time.Time) e
 		log.Printf("[Scheduler] Failed to update task %s before dispatch: %v", task.ID, err)
 	}
 
-	if err := s.quicHandler.SendStartTask(task.AgentID, task.ID, task.BehaviorTreeID, task.AgentID, nil); err != nil {
+	sendParams := make(map[string]string, len(task.Params)+1)
+	for key, value := range task.Params {
+		sendParams[key] = value
+	}
+	if len(task.Bindings) > 0 {
+		bindingJSON, err := json.Marshal(task.Bindings)
+		if err != nil {
+			s.stateManager.ReleaseTaskResources(task.ID, task.AgentID)
+			s.stateManager.UnregisterTaskRuntime(task.ID)
+			s.stateManager.CompleteExecution(task.AgentID, task.ReservedZones)
+			task.DispatchLeaseUntil = time.Time{}
+			task.DispatchSent = false
+			task.Bindings = make(map[string]string)
+			return fmt.Errorf("marshal resource bindings for %s: %w", task.ID, err)
+		}
+		sendParams[taskParamResourceBindings] = string(bindingJSON)
+	}
+
+	if err := s.quicHandler.SendStartTask(task.AgentID, task.ID, task.BehaviorTreeID, task.AgentID, sendParams); err != nil {
+		s.stateManager.ReleaseTaskResources(task.ID, task.AgentID)
+		s.stateManager.UnregisterTaskRuntime(task.ID)
 		s.stateManager.CompleteExecution(task.AgentID, task.ReservedZones)
 		task.DispatchLeaseUntil = time.Time{}
 		task.DispatchSent = false
+		task.Bindings = make(map[string]string)
 		return fmt.Errorf("send start_task failed for %s: %w", task.ID, err)
 	}
 
@@ -442,6 +565,38 @@ func (s *Scheduler) ValidateCapabilities(behaviorTreeID, agentID string) (*Capab
 // Task Execution
 // ============================================================
 
+func stringifyTaskParams(params map[string]interface{}) (map[string]string, error) {
+	if len(params) == 0 {
+		return map[string]string{}, nil
+	}
+
+	result := make(map[string]string, len(params))
+	for key, value := range params {
+		switch typed := value.(type) {
+		case nil:
+			result[key] = ""
+		case string:
+			result[key] = typed
+		default:
+			raw, err := json.Marshal(typed)
+			if err != nil {
+				return nil, fmt.Errorf("marshal param %q: %w", key, err)
+			}
+			result[key] = string(raw)
+		}
+	}
+	return result, nil
+}
+
+func takeTaskMeta(params map[string]string, key string) string {
+	if params == nil {
+		return ""
+	}
+	value := strings.TrimSpace(params[key])
+	delete(params, key)
+	return value
+}
+
 // StartTask starts a new task for an agent
 // This is the main entry point for task execution.
 // The task is queued first and only dispatched when the agent's next
@@ -466,6 +621,33 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 	}
 	log.Printf("Capability validation passed for graph=%s agent=%s", actionGraphID, agentID)
 
+	dbGraph, err := s.repo.GetBehaviorTree(actionGraphID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get behavior tree: %w", err)
+	}
+	if dbGraph == nil {
+		return "", fmt.Errorf("behavior tree %s not found", actionGraphID)
+	}
+
+	paramStrings, err := stringifyTaskParams(params)
+	if err != nil {
+		return "", err
+	}
+	planProblemID := takeTaskMeta(paramStrings, taskParamPlanProblemID)
+	planExecutionID := takeTaskMeta(paramStrings, taskParamPlanExecutionID)
+	logicalTaskID := takeTaskMeta(paramStrings, taskParamLogicalTaskID)
+	logicalTaskName := takeTaskMeta(paramStrings, taskParamLogicalTaskName)
+	taskDistributorID := takeTaskMeta(paramStrings, taskParamTaskDistributorID)
+	if taskDistributorID == "" && dbGraph.TaskDistributorID.Valid {
+		taskDistributorID = dbGraph.TaskDistributorID.String
+	}
+
+	planningTask, err := db.DecodePlanningTaskSpec(dbGraph.PlanningTask)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode task planning metadata: %w", err)
+	}
+	requiredResources := append([]string{}, planningTask.RequiredResources...)
+
 	// Try to get behavior tree from cache first
 	var steps []db.BehaviorTreeStep
 	var preconditions []state.Precondition
@@ -483,14 +665,6 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 	} else {
 		// Cache miss - load from database
 		log.Printf("Cache MISS for graph %s (agent=%s), loading from DB", actionGraphID, agentID)
-
-		dbGraph, err := s.repo.GetBehaviorTree(actionGraphID)
-		if err != nil {
-			return "", fmt.Errorf("failed to get behavior tree: %w", err)
-		}
-		if dbGraph == nil {
-			return "", fmt.Errorf("behavior tree %s not found", actionGraphID)
-		}
 
 		graphVersion = dbGraph.Version
 		if dbGraph.EntryPoint.Valid {
@@ -583,20 +757,28 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 
 	// Create running task
 	task := &RunningTask{
-		ID:             taskID,
-		BehaviorTreeID: actionGraphID,
-		AgentID:        agentID,
-		Steps:          steps,
-		StepIndex:      stepIndex,
-		CurrentStep:    entryIndex,
-		EntryStepID:    entryStepID,
-		Status:         TaskPending,
-		RetryCount:     make(map[string]int),
-		ReservedZones:  requiredZones,
-		Preconditions:  preconditions,
-		StepResults:    make(map[string]map[string]interface{}),
-		ResultChan:     make(chan *StepResult, 1),
-		CancelFunc:     taskCancel,
+		ID:                taskID,
+		BehaviorTreeID:    actionGraphID,
+		AgentID:           agentID,
+		TaskDistributorID: taskDistributorID,
+		PlanProblemID:     planProblemID,
+		PlanExecutionID:   planExecutionID,
+		LogicalTaskID:     logicalTaskID,
+		LogicalTaskName:   logicalTaskName,
+		RequiredResources: requiredResources,
+		Bindings:          make(map[string]string),
+		Params:            paramStrings,
+		Steps:             steps,
+		StepIndex:         stepIndex,
+		CurrentStep:       entryIndex,
+		EntryStepID:       entryStepID,
+		Status:            TaskPending,
+		RetryCount:        make(map[string]int),
+		ReservedZones:     requiredZones,
+		Preconditions:     preconditions,
+		StepResults:       make(map[string]map[string]interface{}),
+		ResultChan:        make(chan *StepResult, 1),
+		CancelFunc:        taskCancel,
 	}
 	// Initialize pause condition variable
 	task.pauseCond = sync.NewCond(&task.pauseMu)
@@ -642,6 +824,8 @@ func (s *Scheduler) runTask(ctx context.Context, task *RunningTask) {
 
 		// Cleanup state
 		s.stateManager.CompleteExecution(task.AgentID, task.ReservedZones)
+		s.stateManager.ReleaseTaskResources(task.ID, task.AgentID)
+		s.stateManager.UnregisterTaskRuntime(task.ID)
 
 		// Update database
 		s.repo.UpdateTaskStatus(task.ID, string(task.Status), "", task.CurrentStep, "")
@@ -651,6 +835,8 @@ func (s *Scheduler) runTask(ctx context.Context, task *RunningTask) {
 		s.removeQueuedTaskLocked(task.AgentID, task.ID)
 		delete(s.tasks, task.ID)
 		s.tasksMu.Unlock()
+
+		s.DispatchIdleAgents()
 
 		log.Printf("[Scheduler] Task completed: %s status=%s", task.ID, task.Status)
 	}()

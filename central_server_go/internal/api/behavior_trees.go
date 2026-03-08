@@ -109,6 +109,7 @@ func (s *Server) CreateBehaviorTree(w http.ResponseWriter, r *http.Request) {
 		}
 		planningStatesJSON, _ = json.Marshal(dbPlanningStates)
 	}
+	planningTaskJSON := planningTaskRequestToJSON(req.PlanningTask)
 
 	graph := &db.BehaviorTree{
 		ID:                  req.ID,
@@ -117,6 +118,7 @@ func (s *Server) CreateBehaviorTree(w http.ResponseWriter, r *http.Request) {
 		Steps:               datatypes.JSON(stepsJSON),
 		States:              datatypes.JSON(statesJSON),
 		PlanningStates:      datatypes.JSON(planningStatesJSON),
+		PlanningTask:        datatypes.JSON(planningTaskJSON),
 		RequiredActionTypes: datatypes.JSON(requiredActionTypesJSON),
 		Version:             1,
 		IsTemplate:          req.AgentID == "",
@@ -285,6 +287,9 @@ func (s *Server) UpdateBehaviorTree(w http.ResponseWriter, r *http.Request) {
 		}
 		planningStatesJSON, _ := json.Marshal(dbPlanningStates)
 		graph.PlanningStates = datatypes.JSON(planningStatesJSON)
+	}
+	if req.PlanningTask != nil {
+		graph.PlanningTask = datatypes.JSON(planningTaskRequestToJSON(req.PlanningTask))
 	}
 
 	// Handle task distributor ID
@@ -652,6 +657,7 @@ func behaviorTreeToListResponse(graph *db.BehaviorTree, repo *db.Repository) Beh
 	var steps []interface{}
 	json.Unmarshal(graph.Steps, &steps)
 	response.StepCount = len(steps)
+	response.RequiredActionTypes = decodeStringSlice(graph.RequiredActionTypes)
 
 	// Count states
 	if graph.States != nil && len(graph.States) > 0 {
@@ -697,6 +703,7 @@ func behaviorTreeToResponse(graph *db.BehaviorTree, repo *db.Repository) Behavio
 	if graph.TaskDistributorID.Valid {
 		response.TaskDistributorID = graph.TaskDistributorID.String
 	}
+	response.RequiredActionTypes = decodeStringSlice(graph.RequiredActionTypes)
 
 	// Parse JSON fields
 	if graph.Preconditions != nil {
@@ -745,6 +752,7 @@ func behaviorTreeToResponse(graph *db.BehaviorTree, repo *db.Repository) Behavio
 			}
 		}
 	}
+	response.PlanningTask = planningTaskJSONToResponse(graph.PlanningTask)
 
 	// Get deployment status
 	if graph.AgentID.Valid {
@@ -755,6 +763,82 @@ func behaviorTreeToResponse(graph *db.BehaviorTree, repo *db.Repository) Behavio
 	}
 
 	return response
+}
+
+func planningTaskRequestToJSON(task *PlanningTaskResponse) []byte {
+	if task == nil {
+		return nil
+	}
+
+	spec := db.PlanningTaskSpec{
+		RequiredResources: append([]string{}, task.RequiredResources...),
+	}
+	if len(task.DuringState) > 0 {
+		spec.DuringState = make([]db.PlanningEffect, 0, len(task.DuringState))
+		for _, effect := range task.DuringState {
+			spec.DuringState = append(spec.DuringState, db.PlanningEffect{
+				Variable: effect.Variable,
+				Value:    effect.Value,
+			})
+		}
+	}
+	if len(task.ResultStates) > 0 {
+		spec.ResultStates = make([]db.PlanningEffect, 0, len(task.ResultStates))
+		for _, effect := range task.ResultStates {
+			spec.ResultStates = append(spec.ResultStates, db.PlanningEffect{
+				Variable: effect.Variable,
+				Value:    effect.Value,
+			})
+		}
+	}
+
+	encoded, _ := json.Marshal(spec)
+	return encoded
+}
+
+func planningTaskJSONToResponse(raw []byte) *PlanningTaskResponse {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	var spec db.PlanningTaskSpec
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		return nil
+	}
+
+	response := &PlanningTaskResponse{
+		RequiredResources: append([]string{}, spec.RequiredResources...),
+	}
+	if len(spec.DuringState) > 0 {
+		response.DuringState = make([]PlanningEffectResponse, 0, len(spec.DuringState))
+		for _, effect := range spec.DuringState {
+			response.DuringState = append(response.DuringState, PlanningEffectResponse{
+				Variable: effect.Variable,
+				Value:    effect.Value,
+			})
+		}
+	}
+	if len(spec.ResultStates) > 0 {
+		response.ResultStates = make([]PlanningEffectResponse, 0, len(spec.ResultStates))
+		for _, effect := range spec.ResultStates {
+			response.ResultStates = append(response.ResultStates, PlanningEffectResponse{
+				Variable: effect.Variable,
+				Value:    effect.Value,
+			})
+		}
+	}
+	return response
+}
+
+func decodeStringSlice(raw []byte) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil
+	}
+	return values
 }
 
 // =============================================================================

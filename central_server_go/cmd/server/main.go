@@ -59,6 +59,19 @@ func main() {
 
 	// Create repository
 	repo := db.NewRepository(database)
+	migrationStats, err := repo.MigrateBehaviorTreePlanningTasks()
+	if err != nil {
+		log.Fatalf("Failed to migrate behavior tree planning metadata: %v", err)
+	}
+	log.Printf(
+		"Behavior tree planning migration complete: scanned=%d migrated=%d required_action_types_backfilled=%d already_configured=%d skipped_missing_legacy=%d skipped_invalid_steps=%d",
+		migrationStats.Scanned,
+		migrationStats.PlanningTasksMigrated,
+		migrationStats.RequiredActionTypesBackfilled,
+		migrationStats.AlreadyConfigured,
+		migrationStats.SkippedMissingLegacyData,
+		migrationStats.SkippedInvalidSteps,
+	)
 
 	// Create global state manager
 	stateManager := state.NewGlobalStateManager()
@@ -106,6 +119,9 @@ func main() {
 		})
 		rawQUICHandler.SetTaskObserveCallback(func(agentID string, isExecuting bool, currentTaskID string) {
 			scheduler.ObserveAgentExecution(agentID, isExecuting, currentTaskID)
+		})
+		rawQUICHandler.SetResourceChangeCallback(func() {
+			scheduler.DispatchIdleAgents()
 		})
 	}
 

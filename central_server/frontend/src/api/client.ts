@@ -783,6 +783,7 @@ export const pddlApi = {
     message: string
     problem_id: string
     execution_id: string
+    total_tasks: number
     total_steps: number
     parallel_groups: number
     assignments: StepAssignment[]

@@ -78,6 +78,9 @@ message AgentHeartbeat {
 
   // Telemetry payload for parameter loading
   TelemetryPayload telemetry = 12;
+
+  // Runtime resource occupancy changes reported by the agent.
+  repeated ResourceEvent resource_events = 13;
 }
 
 message AgentStatusUpdate {
@@ -513,6 +516,18 @@ message StartTaskCommand {
   map<string, string> params = 4;
 }
 
+enum ResourceEventKind {
+  RESOURCE_EVENT_UNKNOWN = 0;
+  RESOURCE_EVENT_ACQUIRED = 1;
+  RESOURCE_EVENT_RELEASED = 2;
+}
+
+message ResourceEvent {
+  string resource_id = 1;
+  string step_id = 2;
+  ResourceEventKind kind = 3;
+}
+
 // Agent → Server: Task state update (agent-driven execution)
 message TaskStateUpdate {
   string task_id = 1;
@@ -526,6 +541,9 @@ message TaskStateUpdate {
   StepResultInfo step_result = 7;
 
   int64 timestamp_ms = 8;
+
+  // Runtime resource occupancy changes reported by the agent.
+  repeated ResourceEvent resource_events = 9;
 }
 
 // Step result info (included in TaskStateUpdate)

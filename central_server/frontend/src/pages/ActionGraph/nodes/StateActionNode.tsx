@@ -1,6 +1,6 @@
 import { memo, useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { Handle, Position, NodeProps, useReactFlow, useUpdateNodeInternals, useNodes } from 'reactflow'
-import { ChevronDown, ChevronUp, X, Loader2, Download } from 'lucide-react'
+import { ChevronDown, ChevronUp, X, Loader2, Download, Lock, Unlock } from 'lucide-react'
 import type { EndStateConfig, ActionField, ParameterFieldSource } from '../../../types'
 import { capabilityApi } from '../../../api/client'
 
@@ -69,30 +69,6 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
     }
     return DEFAULT_END_STATES
   }, [data.endStates])
-
-  // PDDL planning states/resources from TaskDistributor
-  const pStates = data.taskDistributorStates || []
-  const pResources = data.taskDistributorResources || []
-  const typeResources = useMemo(
-    () => pResources.filter(resource => resource.kind === 'type'),
-    [pResources]
-  )
-  const instanceResources = useMemo(
-    () => pResources.filter(resource => (resource.kind || 'instance') !== 'type'),
-    [pResources]
-  )
-
-  const formatResourceToken = useCallback((token: string) => {
-    if (token.startsWith('type:')) {
-      const resource = typeResources.find(item => item.id === token.slice(5))
-      return resource ? `TYPE ${resource.name}` : token
-    }
-    if (token.startsWith('instance:')) {
-      const resource = instanceResources.find(item => item.id === token.slice(9))
-      return resource ? resource.name : token
-    }
-    return token
-  }, [instanceResources, typeResources])
 
   const updateData = useCallback((field: string, value: unknown) => {
     setNodes((nds) => nds.map((n) => n.id === id ? { ...n, data: { ...n.data, [field]: value } } : n))
@@ -167,6 +143,44 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
 
   const params = data.params || {}
   const fieldSources = data.fieldSources || {}
+  const runtimeResources = data.taskDistributorResources || []
+  const runtimeResourceTypes = useMemo(
+    () => runtimeResources.filter(resource => resource.kind === 'type'),
+    [runtimeResources]
+  )
+  const runtimeResourceInstances = useMemo(
+    () => runtimeResources.filter(resource => (resource.kind || 'instance') !== 'type'),
+    [runtimeResources]
+  )
+  const acquiredResources = data.resourceAcquire || []
+  const releasedResources = data.resourceRelease || []
+  const heldUntilTaskEnd = useMemo(
+    () => acquiredResources.filter(token => !releasedResources.includes(token)),
+    [acquiredResources, releasedResources]
+  )
+
+  const formatRuntimeResourceToken = useCallback((token: string) => {
+    if (token.startsWith('type:')) {
+      const resource = runtimeResources.find(item => item.id === token.slice(5))
+      return resource ? `TYPE ${resource.name}` : token
+    }
+    if (token.startsWith('instance:')) {
+      const resource = runtimeResources.find(item => item.id === token.slice(9))
+      return resource ? resource.name : token
+    }
+    return token
+  }, [runtimeResources])
+
+  const addResourceToken = useCallback((field: 'resourceAcquire' | 'resourceRelease', token: string) => {
+    if (!token) return
+    const currentValues = field === 'resourceAcquire' ? acquiredResources : releasedResources
+    updateData(field, Array.from(new Set([...currentValues, token])))
+  }, [acquiredResources, releasedResources, updateData])
+
+  const removeResourceToken = useCallback((field: 'resourceAcquire' | 'resourceRelease', token: string) => {
+    const currentValues = field === 'resourceAcquire' ? acquiredResources : releasedResources
+    updateData(field, currentValues.filter(value => value !== token))
+  }, [acquiredResources, releasedResources, updateData])
 
   const availableSteps: AvailableStep[] = useMemo(() => {
     return allNodes
@@ -227,98 +241,6 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
       updateParameterEditingMode(false)
     }
   }, [expandedSection, updateParameterEditingMode])
-
-  // PDDL helpers
-  const hasPDDLData = pStates.length > 0 || pResources.length > 0
-  const activePlanningDuring = (data.planningDuring ?? []).find(effect => effect.variable) || null
-
-  const renderVarSelect = (value: string, onChange: (v: string) => void) => (
-    <select className="w-20 px-0.5 py-0.5 bg-surface border border-primary rounded text-[9px] text-primary" value={value}
-      onClick={(e) => e.stopPropagation()}
-      onChange={(e) => { e.stopPropagation(); onChange(e.target.value) }}>
-      <option value="">var...</option>
-      {pStates.map(sv => <option key={sv.name} value={sv.name}>{sv.name}</option>)}
-    </select>
-  )
-
-  const renderValueInput = (variable: string, value: string, onChange: (v: string) => void) => {
-    if (!variable) {
-      return (
-        <input
-          disabled
-          className="w-16 px-1 py-0.5 bg-surface border border-primary rounded text-[9px] text-muted opacity-60"
-          value=""
-          placeholder="value"
-          onClick={(e) => e.stopPropagation()}
-        />
-      )
-    }
-    const varDef = pStates.find(sv => sv.name === variable)
-    if (varDef?.type === 'bool') {
-      return (
-        <select className="w-14 px-0.5 py-0.5 bg-surface border border-primary rounded text-[9px] text-primary" value={value}
-          onClick={(e) => e.stopPropagation()}
-          onChange={(e) => { e.stopPropagation(); onChange(e.target.value) }}>
-          <option value="true">true</option>
-          <option value="false">false</option>
-        </select>
-      )
-    }
-    if (varDef?.type === 'int') {
-      return <input type="number" className="w-14 px-1 py-0.5 bg-surface border border-primary rounded text-[9px] text-primary" value={value} placeholder="0"
-        onClick={(e) => e.stopPropagation()} onChange={(e) => { e.stopPropagation(); onChange(e.target.value) }} />
-    }
-    return <input className="w-16 px-1 py-0.5 bg-surface border border-primary rounded text-[9px] text-primary" value={value} placeholder="val"
-      onClick={(e) => e.stopPropagation()} onChange={(e) => { e.stopPropagation(); onChange(e.target.value) }} />
-  }
-
-  const getPlanningDefaultValue = useCallback((variable: string) => {
-    const varDef = pStates.find(sv => sv.name === variable)
-    if (varDef?.type === 'bool') return 'true'
-    if (varDef?.type === 'int') return '0'
-    return ''
-  }, [pStates])
-
-  const updatePlanningDuring = useCallback((variable: string, value?: string) => {
-    if (!variable) {
-      updateData('planningDuring', [])
-      return
-    }
-
-    const previous = activePlanningDuring
-    const resolvedValue = value ?? (
-      previous?.variable === variable && previous.value !== ''
-        ? previous.value
-        : getPlanningDefaultValue(variable)
-    )
-
-    updateData('planningDuring', [{ variable, value: resolvedValue }])
-  }, [activePlanningDuring, getPlanningDefaultValue, updateData])
-
-  const renderResourceTokenSelect = useCallback((onPick: (token: string) => void) => (
-    <select
-      className="w-24 px-1 py-0.5 bg-surface border border-primary rounded text-[9px] text-primary"
-      onClick={(e) => e.stopPropagation()}
-      onChange={(e) => {
-        e.stopPropagation()
-        if (!e.target.value) return
-        onPick(e.target.value)
-        e.target.value = ''
-      }}
-    >
-      <option value="">+ add</option>
-      {typeResources.length > 0 && (
-        <optgroup label="Types">
-          {typeResources.map(resource => <option key={resource.id} value={`type:${resource.id}`}>{resource.name}</option>)}
-        </optgroup>
-      )}
-      {instanceResources.length > 0 && (
-        <optgroup label="Instances">
-          {instanceResources.map(resource => <option key={resource.id} value={`instance:${resource.id}`}>{resource.name}</option>)}
-        </optgroup>
-      )}
-    </select>
-  ), [instanceResources, typeResources])
 
   return (
     <div
@@ -444,118 +366,140 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
         )}
       </div>
 
-      {/* PDDL Settings Section — always visible */}
+      {/* Runtime resource occupancy stays on the action node */}
+      <div className="border-b border-primary">
+        <div className="px-3 py-2">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-1.5">
+              <div className="w-2 h-2 rounded-sm bg-amber-500" />
+              <span className="text-[10px] text-primary uppercase tracking-wider font-medium">Runtime Resources</span>
+            </div>
+            <span className="text-[8px] text-muted">Step Level</span>
+          </div>
+
+          {!data.taskDistributorId ? (
+            <div className="rounded border border-dashed border-border bg-base/40 px-2 py-2 text-[9px] leading-5 text-muted">
+              Task Distributor를 연결하면 이 Action Node가 점유/해제하는 resource를 설정할 수 있습니다.
+            </div>
+          ) : runtimeResources.length === 0 ? (
+            <div className="rounded border border-dashed border-border bg-base/40 px-2 py-2 text-[9px] leading-5 text-muted">
+              등록된 resource가 없습니다.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="rounded border border-amber-500/20 bg-amber-500/5 p-2">
+                <div className="mb-1.5 flex items-center gap-1 text-[9px] text-amber-300">
+                  <Lock size={10} />
+                  Acquire
+                </div>
+                <select
+                  className="w-full rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none disabled:opacity-40"
+                  defaultValue=""
+                  disabled={!isEditing}
+                  onChange={(e) => {
+                    if (!e.target.value) return
+                    addResourceToken('resourceAcquire', e.target.value)
+                    e.target.value = ''
+                  }}
+                >
+                  <option value="">resource 추가</option>
+                  {runtimeResourceTypes.length > 0 && (
+                    <optgroup label="Types">
+                      {runtimeResourceTypes.map(resource => (
+                        <option key={resource.id} value={`type:${resource.id}`}>{resource.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {runtimeResourceInstances.length > 0 && (
+                    <optgroup label="Instances">
+                      {runtimeResourceInstances.map(resource => (
+                        <option key={resource.id} value={`instance:${resource.id}`}>{resource.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {acquiredResources.length === 0 ? (
+                    <span className="text-[9px] text-muted">획득 resource 없음</span>
+                  ) : acquiredResources.map(token => (
+                    <span key={`acq-${token}`} className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[9px] text-amber-200">
+                      {formatRuntimeResourceToken(token)}
+                      {isEditing && (
+                        <button onClick={() => removeResourceToken('resourceAcquire', token)}>
+                          <X size={9} />
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded border border-sky-500/20 bg-sky-500/5 p-2">
+                <div className="mb-1.5 flex items-center gap-1 text-[9px] text-sky-300">
+                  <Unlock size={10} />
+                  Release
+                </div>
+                <select
+                  className="w-full rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none disabled:opacity-40"
+                  defaultValue=""
+                  disabled={!isEditing}
+                  onChange={(e) => {
+                    if (!e.target.value) return
+                    addResourceToken('resourceRelease', e.target.value)
+                    e.target.value = ''
+                  }}
+                >
+                  <option value="">release 추가</option>
+                  {acquiredResources.length > 0 ? acquiredResources.map(token => (
+                    <option key={`release-${token}`} value={token}>{formatRuntimeResourceToken(token)}</option>
+                  )) : (
+                    runtimeResourceInstances.map(resource => (
+                      <option key={resource.id} value={`instance:${resource.id}`}>{resource.name}</option>
+                    ))
+                  )}
+                </select>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {releasedResources.length === 0 ? (
+                    <span className="text-[9px] text-muted">명시적 release 없음</span>
+                  ) : releasedResources.map(token => (
+                    <span key={`rel-${token}`} className="inline-flex items-center gap-1 rounded-full bg-sky-500/10 px-2 py-0.5 text-[9px] text-sky-200">
+                      {formatRuntimeResourceToken(token)}
+                      {isEditing && (
+                        <button onClick={() => removeResourceToken('resourceRelease', token)}>
+                          <X size={9} />
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded border border-border bg-base/40 px-2 py-2 text-[9px] text-secondary">
+                {heldUntilTaskEnd.length === 0
+                  ? '현재 acquire resource는 모두 release 경로가 있습니다.'
+                  : `Task 종료까지 유지: ${heldUntilTaskEnd.map(formatRuntimeResourceToken).join(', ')}`}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Task-level planning moved to the Task Planning panel */}
       <div className="border-b border-primary">
         <div className="px-3 py-2">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-1.5">
               <div className="w-2 h-2 rounded-sm bg-violet-500" />
-              <span className="text-[10px] text-primary uppercase tracking-wider font-medium">PDDL 설정</span>
+              <span className="text-[10px] text-primary uppercase tracking-wider font-medium">Task Planning</span>
             </div>
-            <span className="text-[8px] text-muted">State / Resources</span>
+            <span className="text-[8px] text-muted">Root Panel</span>
           </div>
-
-          {!hasPDDLData ? (
-            <p className="text-[9px] text-yellow-400 italic">Task Distributor를 먼저 설정하세요</p>
-          ) : (
-            <div className="space-y-2">
-              <div className="rounded border border-violet-500/20 bg-violet-500/5 p-2">
-                <div className="mb-1 flex items-center justify-between">
-                  <span className="text-[9px] font-medium uppercase tracking-wider text-violet-300">State</span>
-                  {activePlanningDuring && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); updateData('planningDuring', []) }}
-                      className="text-[8px] text-muted hover:text-red-400"
-                    >
-                      clear
-                    </button>
-                  )}
-                </div>
-                {pStates.length === 0 ? (
-                  <p className="text-[9px] text-muted italic">사용 가능한 state 없음</p>
-                ) : (
-                  <>
-                    <div className="flex items-center gap-1">
-                      {renderVarSelect(activePlanningDuring?.variable || '', (variable) => updatePlanningDuring(variable))}
-                      <span className="text-[9px] text-muted">=</span>
-                      {renderValueInput(
-                        activePlanningDuring?.variable || '',
-                        activePlanningDuring?.value || '',
-                        (value) => updatePlanningDuring(activePlanningDuring?.variable || '', value)
-                      )}
-                    </div>
-                    <div className="mt-1 text-[8px] text-secondary">
-                      during state는 1개만 저장됩니다.
-                    </div>
-                  </>
-                )}
-              </div>
-
-              <div className="rounded border border-amber-500/20 bg-amber-500/5 p-2">
-                <div className="mb-1 flex items-center justify-between">
-                  <span className="text-[9px] font-medium uppercase tracking-wider text-amber-300">Resources</span>
-                  <span className="text-[8px] text-muted">type / instance</span>
-                </div>
-                {pResources.length === 0 ? (
-                  <p className="text-[9px] text-muted italic">사용 가능한 resource 없음</p>
-                ) : (
-                  <div className="space-y-1.5">
-                    <div>
-                      <div className="mb-1 flex items-center justify-between gap-2">
-                        <span className="text-[8px] font-medium text-yellow-400">Acquire</span>
-                        {renderResourceTokenSelect((token) => updateData('resourceAcquire', [...(data.resourceAcquire ?? []), token]))}
-                      </div>
-                      <div className="flex flex-wrap gap-1">
-                        {(data.resourceAcquire ?? []).length === 0 ? (
-                          <span className="text-[8px] text-muted">없음</span>
-                        ) : (data.resourceAcquire ?? []).map((resource, index) => (
-                          <span key={`${resource}-${index}`} className="inline-flex items-center gap-1 rounded-full bg-yellow-500/10 px-1.5 py-0.5 text-[9px] text-yellow-400">
-                            {formatResourceToken(resource)}
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                const next = [...(data.resourceAcquire ?? [])]
-                                next.splice(index, 1)
-                                updateData('resourceAcquire', next)
-                              }}
-                            >
-                              <X className="w-2 h-2" />
-                            </button>
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="mb-1 flex items-center justify-between gap-2">
-                        <span className="text-[8px] font-medium text-green-400">Release</span>
-                        {renderResourceTokenSelect((token) => updateData('resourceRelease', [...(data.resourceRelease ?? []), token]))}
-                      </div>
-                      <div className="flex flex-wrap gap-1">
-                        {(data.resourceRelease ?? []).length === 0 ? (
-                          <span className="text-[8px] text-muted">없음</span>
-                        ) : (data.resourceRelease ?? []).map((resource, index) => (
-                          <span key={`${resource}-${index}`} className="inline-flex items-center gap-1 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[9px] text-green-400">
-                            {formatResourceToken(resource)}
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                const next = [...(data.resourceRelease ?? [])]
-                                next.splice(index, 1)
-                                updateData('resourceRelease', next)
-                              }}
-                            >
-                              <X className="w-2 h-2" />
-                            </button>
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+          <div className="rounded border border-violet-500/20 bg-violet-500/5 p-2">
+            <p className="text-[9px] leading-5 text-secondary">
+              PDDL planning state / result state editing is task-level로 이동했습니다.
+              Resource occupancy는 위 Runtime Resources에서 step 단위로 설정되고, task panel이 이를 집계합니다.
+            </p>
+          </div>
         </div>
       </div>
 

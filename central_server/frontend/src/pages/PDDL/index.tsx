@@ -5,13 +5,14 @@ import {
   Circle, Edit, Gem, ToggleLeft, Bot,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
-import { behaviorTreeApi, agentApi, capabilityApi, pddlApi, taskDistributorApi } from '../../api/client'
+import { behaviorTreeApi, agentApi, capabilityApi, pddlApi, taskDistributorApi, fleetApi } from '../../api/client'
 import type {
   BehaviorTree, Agent, PlanResult, PlanExecution, ResourceAllocation,
-  TaskDistributor, GraphListItem, TaskDistributorState, TaskDistributorResource, GraphStep,
+  TaskDistributor, GraphListItem, TaskDistributorState, TaskDistributorResource, RobotStateSnapshot,
 } from '../../types'
 import GoalEditor from './components/GoalEditor'
 import PlanVisualization from './components/PlanVisualization'
+import { ActionGraphViewer } from '../../components/BehaviorTreeViewer'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -123,6 +124,16 @@ function isResourceType(resource: TaskDistributorResource) {
 
 function isResourceInstance(resource: TaskDistributorResource) {
   return !resource.kind || resource.kind === 'instance'
+}
+
+function resolveRuntimeStateLabel(runtime?: RobotStateSnapshot | null, fallback?: Agent | null) {
+  return runtime?.current_state || runtime?.state_code || fallback?.current_state_code || fallback?.current_state || 'idle'
+}
+
+function resolveRuntimeStepId(graph: BehaviorTree | null, runtime?: RobotStateSnapshot | null) {
+  if (!graph || !runtime?.current_step_id) return null
+  if (runtime.current_graph_id && runtime.current_graph_id !== graph.id) return null
+  return runtime.current_step_id
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +279,7 @@ export default function PDDL() {
   const [executionId, setExecutionId] = useState<string | null>(null)
   const [execution, setExecution] = useState<PlanExecution | null>(null)
   const [resourceAllocations, setResourceAllocations] = useState<ResourceAllocation[]>([])
+  const [agentRuntimeMap, setAgentRuntimeMap] = useState<Record<string, RobotStateSnapshot>>({})
 
   // -----------------------------------------------------------------------
   // Inline TD creation state
@@ -357,12 +369,15 @@ export default function PDDL() {
     [resourceTypeName, resourceTypeCount]
   )
 
-  const allSteps = useMemo<GraphStep[]>(
-    () => selectedBT?.steps || [],
+  const selectedTaskPlanning = useMemo(
+    () => selectedBT?.planning_task || { required_resources: [], during_state: [], result_states: [] },
     [selectedBT]
   )
 
   const requiredActionTypes = useMemo(() => {
+    if (selectedBT?.required_action_types?.length) {
+      return selectedBT.required_action_types
+    }
     const types = new Set<string>()
     for (const step of selectedBT?.steps || []) {
       if (step.action?.type) types.add(step.action.type)
@@ -444,6 +459,60 @@ export default function PDDL() {
     }, 1000)
     return () => clearInterval(interval)
   }, [executionId])
+
+  const runtimeAgentIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const id of selectedAgentIds) ids.add(id)
+    for (const assignment of plan?.assignments || []) {
+      if (assignment.agent_id) ids.add(assignment.agent_id)
+    }
+    for (const step of execution?.steps || []) {
+      if (step.agent_id) ids.add(step.agent_id)
+    }
+    return Array.from(ids)
+  }, [selectedAgentIds, plan?.assignments, execution?.steps])
+
+  useEffect(() => {
+    if (runtimeAgentIds.length === 0) {
+      setAgentRuntimeMap({})
+      return
+    }
+
+    let cancelled = false
+
+    const refreshRuntime = async () => {
+      try {
+        const snapshot = await fleetApi.getState({ agentIds: runtimeAgentIds })
+        if (cancelled) return
+
+        const nextMap: Record<string, RobotStateSnapshot> = {}
+        for (const runtime of Object.values(snapshot.robots || {})) {
+          const agentId = runtime.agent_id || runtime.id
+          if (!agentId) continue
+          const existing = nextMap[agentId]
+          if (!existing) {
+            nextMap[agentId] = runtime
+            continue
+          }
+          const prefersCurrent = Boolean(runtime.is_executing) && !existing.is_executing
+          const fresher = (runtime.staleness_sec ?? Number.POSITIVE_INFINITY) < (existing.staleness_sec ?? Number.POSITIVE_INFINITY)
+          if (prefersCurrent || fresher) {
+            nextMap[agentId] = runtime
+          }
+        }
+        setAgentRuntimeMap(nextMap)
+      } catch (err) {
+        console.error('Failed to poll fleet runtime:', err)
+      }
+    }
+
+    void refreshRuntime()
+    const interval = setInterval(refreshRuntime, 1000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [runtimeAgentIds])
 
   const selectionKey = useMemo(
     () => `${[...selectedBTIds].sort().join(',')}|${selectedDistributorId || ''}`,
@@ -888,6 +957,33 @@ export default function PDDL() {
     }
     return m
   }, [activeResourceAllocations])
+  const runtimeViewAgents = useMemo(() => {
+    return runtimeAgentIds
+      .map(agentId => {
+        const agentEntry = agents.find(item => item.agent.id === agentId) || null
+        const runtime = agentRuntimeMap[agentId] || null
+        const currentStepId = resolveRuntimeStepId(selectedBT, runtime)
+        const currentStepName = currentStepId
+          ? selectedBT?.steps.find(step => step.id === currentStepId)?.job_name || selectedBT?.steps.find(step => step.id === currentStepId)?.name || currentStepId
+          : null
+        const dispatches = agentDispatchMap.get(agentId) || []
+        const heldResources = heldResourcesByAgent.get(agentId)
+          || (agentEntry ? heldResourcesByAgent.get(agentEntry.agent.name) : undefined)
+          || []
+        return {
+          agentId,
+          agent: agentEntry?.agent || null,
+          isOnline: agentEntry?.isOnline ?? Boolean(runtime?.is_online),
+          runtime,
+          currentStepId,
+          currentStepName,
+          dispatches,
+          heldResources,
+          stateLabel: resolveRuntimeStateLabel(runtime, agentEntry?.agent || null),
+        }
+      })
+      .sort((left, right) => left.agentId.localeCompare(right.agentId))
+  }, [runtimeAgentIds, agents, agentRuntimeMap, selectedBT, agentDispatchMap, heldResourcesByAgent])
   const planStatus = execution?.status
     ? translateStatus(execution.status)
     : plan?.is_valid
@@ -1091,7 +1187,7 @@ export default function PDDL() {
                           <span className="shrink-0 text-[10px] text-muted">v{item.version}</span>
                         </div>
                         <div className="mt-0.5 text-[10px] text-secondary">
-                          {item.step_count} {t('pddl.steps')}
+                          {item.required_action_types?.length || 0} {t('pddl.requiredActions')}
                         </div>
                       </div>
                       {linkedTd && (
@@ -1107,7 +1203,7 @@ export default function PDDL() {
             )}
             {selectedBT && (
               <div className="mt-2 rounded-xl border border-border bg-surface px-3 py-2 text-[11px] text-secondary">
-                {t('pddl.sidebarTasksSummary', { steps: String(allSteps.length), actions: String(requiredActionTypes.length) })}
+                Capability {requiredActionTypes.length} · Resource {(selectedTaskPlanning.required_resources || []).length} · Result {(selectedTaskPlanning.result_states || []).length}
               </div>
             )}
           </SidebarSection>
@@ -1452,7 +1548,12 @@ export default function PDDL() {
                   const selected = selectedAgentIds.includes(agent.id)
                   const activeDispatch = (agentDispatchMap.get(agent.id) || [])[0]
                   const heldResources = heldResourcesByAgent.get(agent.id) || heldResourcesByAgent.get(agent.name) || []
-                  const agentStateLabel = agent.current_state_code || agent.current_state || (isOnline ? t('pddl.agentReadyState') : t('pddl.agentOfflineState'))
+                  const runtime = agentRuntimeMap[agent.id]
+                  const agentStateLabel = resolveRuntimeStateLabel(runtime, agent) || (isOnline ? t('pddl.agentReadyState') : t('pddl.agentOfflineState'))
+                  const currentStepId = resolveRuntimeStepId(selectedBT, runtime)
+                  const currentStepName = currentStepId
+                    ? selectedBT?.steps.find(step => step.id === currentStepId)?.job_name || selectedBT?.steps.find(step => step.id === currentStepId)?.name || currentStepId
+                    : null
                   return (
                     <button
                       key={agent.id}
@@ -1468,12 +1569,17 @@ export default function PDDL() {
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[9px] text-secondary">
                         <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-emerald-300">{agentStateLabel}</span>
-                        {agent.current_graph_id && (
-                          <span className="rounded bg-surface px-1.5 py-0.5 text-secondary">{agent.current_graph_id}</span>
+                        {(runtime?.current_graph_id || agent.current_graph_id) && (
+                          <span className="rounded bg-surface px-1.5 py-0.5 text-secondary">{runtime?.current_graph_id || agent.current_graph_id}</span>
                         )}
                         {activeDispatch && (
                           <span className="rounded bg-surface px-1.5 py-0.5 text-secondary">
-                            {translateStatus(activeDispatch.status)} · {activeDispatch.step_name || activeDispatch.step_id}
+                            {translateStatus(activeDispatch.status)} · {activeDispatch.task_name || activeDispatch.step_name || activeDispatch.task_id || activeDispatch.step_id}
+                          </span>
+                        )}
+                        {currentStepName && (
+                          <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-blue-300">
+                            step · {currentStepName}
                           </span>
                         )}
                       </div>
@@ -1519,7 +1625,7 @@ export default function PDDL() {
             <ThemedSection
               icon={Layers}
               title={t('pddl.operationsBoardTitle')}
-              count={plan ? (plan.is_valid ? `${plan.total_steps} ${t('pddl.steps')}` : t('status.failed')) : undefined}
+              count={plan ? (plan.is_valid ? `${plan.total_tasks ?? plan.total_steps} Task` : t('status.failed')) : undefined}
               theme={SECTION_THEME.plan}
             >
               {pendingRequirements.length > 0 && (
@@ -1531,10 +1637,96 @@ export default function PDDL() {
               <PlanVisualization
                 plan={plan}
                 isLoading={isSolving}
-                steps={allSteps.length > 0 ? allSteps : undefined}
+                taskPlanning={selectedTaskPlanning}
+                taskName={selectedBT?.name}
+                requiredActionTypes={requiredActionTypes}
                 execution={execution}
                 resources={selectedDistributor?.resources || []}
               />
+
+              {selectedBT && runtimeViewAgents.length > 0 && (
+                <div className="mt-4 space-y-3">
+                  <div className="flex items-center gap-2 px-1">
+                    <Bot size={14} className="text-emerald-400" />
+                    <span className="text-xs font-semibold uppercase tracking-wider text-emerald-300">
+                      RTM Live View
+                    </span>
+                    <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-300">
+                      {runtimeViewAgents.length}
+                    </span>
+                  </div>
+
+                  <div className="grid gap-3 xl:grid-cols-2">
+                    {runtimeViewAgents.map((entry) => {
+                      const activeDispatch = entry.dispatches[0]
+                      const graphMismatch = entry.runtime?.current_graph_id && entry.runtime.current_graph_id !== selectedBT.id
+
+                      return (
+                        <div key={entry.agentId} className="rounded-2xl border border-border bg-base/60 p-3">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div>
+                              <div className="text-sm font-semibold text-primary">
+                                {entry.agent?.name || entry.agentId}
+                              </div>
+                              <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-secondary">
+                                <span className={`rounded-full px-2 py-0.5 ${
+                                  entry.isOnline ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'
+                                }`}>
+                                  {entry.stateLabel}
+                                </span>
+                                {entry.runtime?.semantic_tags?.slice(0, 3).map(tag => (
+                                  <span key={`${entry.agentId}:${tag}`} className="rounded-full bg-surface px-2 py-0.5 text-[10px] text-secondary">
+                                    {tag}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                            {activeDispatch && (
+                              <span className="rounded-full bg-surface px-2 py-1 text-[10px] text-secondary">
+                                {translateStatus(activeDispatch.status)} · {activeDispatch.task_name || activeDispatch.step_name || activeDispatch.task_id}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="mt-3 grid gap-2 md:grid-cols-3">
+                            <div className="rounded-xl border border-border bg-surface px-3 py-2">
+                              <div className="text-[10px] uppercase tracking-wider text-muted">Graph</div>
+                              <div className="mt-1 truncate text-xs text-primary">
+                                {entry.runtime?.current_graph_id || entry.agent?.current_graph_id || selectedBT.id}
+                              </div>
+                            </div>
+                            <div className="rounded-xl border border-border bg-surface px-3 py-2">
+                              <div className="text-[10px] uppercase tracking-wider text-muted">Current Step</div>
+                              <div className="mt-1 truncate text-xs text-primary">
+                                {entry.currentStepName || (graphMismatch ? '다른 BT 실행 중' : 'idle')}
+                              </div>
+                            </div>
+                            <div className="rounded-xl border border-border bg-surface px-3 py-2">
+                              <div className="text-[10px] uppercase tracking-wider text-muted">Held Resources</div>
+                              <div className="mt-1 truncate text-xs text-primary">
+                                {entry.heldResources.length > 0
+                                  ? entry.heldResources.map(resource => resource.resource).join(', ')
+                                  : 'none'}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="mt-3 h-56 overflow-hidden rounded-2xl border border-border bg-base">
+                            <ActionGraphViewer
+                              actionGraph={selectedBT}
+                              currentStepId={entry.currentStepId}
+                              className="h-full"
+                              compact={true}
+                              showControls={false}
+                              showMiniMap={false}
+                            />
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
             </ThemedSection>
 
           </div>

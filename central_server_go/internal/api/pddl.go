@@ -244,6 +244,7 @@ func (s *Server) ExecutePlan(w http.ResponseWriter, r *http.Request) {
 		"message":         "plan execution started",
 		"execution_id":    executionID,
 		"problem_id":      id,
+		"total_tasks":     plan.TotalTasks,
 		"total_steps":     plan.TotalSteps,
 		"parallel_groups": plan.ParallelGroups,
 		"assignments":     plan.Assignments,
@@ -345,14 +346,6 @@ func (s *Server) solveProblem(pp *db.PlanningProblem) (*pddl.Plan, error) {
 		return nil, fmt.Errorf("behavior tree not found")
 	}
 
-	// Parse steps
-	var steps []db.BehaviorTreeStep
-	if bt.Steps != nil {
-		if err := json.Unmarshal(bt.Steps, &steps); err != nil {
-			return nil, fmt.Errorf("failed to parse steps: %w", err)
-		}
-	}
-
 	// Parse planning state vars: prefer TaskDistributor, fallback to BT.PlanningStates
 	var stateVars []db.PlanningStateVar
 	selectedTDID := ""
@@ -429,27 +422,26 @@ func (s *Server) solveProblem(pp *db.PlanningProblem) (*pddl.Plan, error) {
 		})
 	}
 
-	// Build plan actions from steps
-	actions := make([]pddl.PlanAction, 0, len(steps))
-	for _, step := range steps {
-		if step.Type == "terminal" {
-			continue
-		}
-		actionType := ""
-		if step.Action != nil {
-			actionType = step.Action.Type
-		}
-		actions = append(actions, pddl.PlanAction{
-			StepID:          step.ID,
-			StepName:        step.Name,
-			ActionType:      actionType,
-			ResourceAcquire: step.ResourceAcquire,
-			ResourceRelease: step.ResourceRelease,
-			Preconditions:   step.PlanningPreconditions,
-			Effects:         step.PlanningEffects,
-			During:          step.PlanningDuring,
-		})
+	taskSpec, err := db.DecodePlanningTaskSpec(bt.PlanningTask)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse task planning metadata: %w", err)
 	}
+	if !taskSpec.HasData() {
+		return nil, fmt.Errorf("behavior tree %q does not define task planning metadata", bt.ID)
+	}
+	if len(taskSpec.ResultStates) == 0 {
+		return nil, fmt.Errorf("behavior tree %q does not define task result states", bt.ID)
+	}
+
+	tasks := []pddl.PlanTask{{
+		TaskID:              bt.ID,
+		TaskName:            bt.Name,
+		BehaviorTreeID:      bt.ID,
+		RequiredActionTypes: decodeStringSlice(bt.RequiredActionTypes),
+		RequiredResources:   append([]string{}, taskSpec.RequiredResources...),
+		ResultStates:        append([]db.PlanningEffect{}, taskSpec.ResultStates...),
+		DuringState:         append([]db.PlanningEffect{}, taskSpec.DuringState...),
+	}}
 
 	// Parse initial and goal states
 	var initialState, goalState map[string]string
@@ -464,7 +456,7 @@ func (s *Server) solveProblem(pp *db.PlanningProblem) (*pddl.Plan, error) {
 		StateVars:    stateVars,
 		InitialState: initialState,
 		GoalState:    goalState,
-		Actions:      actions,
+		Tasks:        tasks,
 		Agents:       agents,
 		Resources:    resources,
 	}
@@ -495,14 +487,16 @@ func toPlanExecutionResponse(exec *executor.PlanExecution, stateManager *state.G
 	for _, ss := range snapshot.Steps {
 		agentNames[ss.AgentID] = ss.AgentName
 		resp.Steps = append(resp.Steps, PlanExecutionStepResponse{
-			StepID:    ss.StepID,
-			StepName:  ss.StepName,
-			AgentID:   ss.AgentID,
-			AgentName: ss.AgentName,
-			Order:     ss.Order,
-			Status:    ss.Status,
-			TaskID:    ss.TaskID,
-			Error:     ss.Error,
+			TaskID:        ss.TaskID,
+			TaskName:      ss.TaskName,
+			RuntimeTaskID: ss.RuntimeTaskID,
+			StepID:        ss.StepID,
+			StepName:      ss.StepName,
+			AgentID:       ss.AgentID,
+			AgentName:     ss.AgentName,
+			Order:         ss.Order,
+			Status:        ss.Status,
+			Error:         ss.Error,
 		})
 	}
 
@@ -521,6 +515,7 @@ func toPlanExecutionResponse(exec *executor.PlanExecution, stateManager *state.G
 				PlanID:          snapshot.ProblemID,
 				ProblemID:       snapshot.ProblemID,
 				PlanExecutionID: snapshot.ID,
+				TaskID:          hold.TaskID,
 				StepID:          hold.StepID,
 				AcquiredAt:      hold.AcquiredAt,
 			})
@@ -529,7 +524,6 @@ func toPlanExecutionResponse(exec *executor.PlanExecution, stateManager *state.G
 
 	return resp
 }
-
 func toPlanningProblemResponse(pp *db.PlanningProblem) PlanningProblemResponse {
 	resp := PlanningProblemResponse{
 		ID:                pp.ID,

@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	"gorm.io/datatypes"
@@ -173,8 +174,10 @@ type BehaviorTree struct {
 	States datatypes.JSON `gorm:"type:jsonb"` // []GraphState - available states for this graph
 
 	// PDDL Planning state variables
-	PlanningStates    datatypes.JSON `gorm:"type:jsonb"` // []PlanningStateVar (legacy, fallback)
-	TaskDistributorID sql.NullString `gorm:"size:50"`    // Link to TaskDistributor for states/resources
+	PlanningStates datatypes.JSON `gorm:"type:jsonb"` // []PlanningStateVar (legacy, fallback)
+	PlanningTask   datatypes.JSON `gorm:"type:jsonb"` // PlanningTaskSpec
+
+	TaskDistributorID sql.NullString `gorm:"size:50"` // Link to TaskDistributor for states/resources
 
 	// Edit lock fields (for concurrent editing prevention)
 	LockedBy      sql.NullString `gorm:"size:100"` // Display name of user who holds the lock
@@ -368,6 +371,33 @@ type PlanningStateVar struct {
 	Type         string `json:"type"`                    // bool, int, string
 	InitialValue string `json:"initial_value,omitempty"` // e.g., "on_table"
 	Description  string `json:"description,omitempty"`
+}
+
+// PlanningTaskSpec describes task-level planning metadata for a behavior tree.
+// The behavior tree itself is the runtime task; the planner only needs the
+// task's resource requirements and state transitions.
+type PlanningTaskSpec struct {
+	RequiredResources []string         `json:"required_resources,omitempty"`
+	DuringState       []PlanningEffect `json:"during_state,omitempty"`
+	ResultStates      []PlanningEffect `json:"result_states,omitempty"`
+}
+
+// HasData reports whether the task spec contains any planning metadata.
+func (spec PlanningTaskSpec) HasData() bool {
+	return len(spec.RequiredResources) > 0 || len(spec.DuringState) > 0 || len(spec.ResultStates) > 0
+}
+
+// DecodePlanningTaskSpec parses task-level planning metadata from stored JSON.
+func DecodePlanningTaskSpec(raw []byte) (PlanningTaskSpec, error) {
+	if len(raw) == 0 {
+		return PlanningTaskSpec{}, nil
+	}
+
+	var spec PlanningTaskSpec
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		return PlanningTaskSpec{}, err
+	}
+	return spec, nil
 }
 
 // BehaviorTreeStep represents a step in a behavior tree

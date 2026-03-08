@@ -64,6 +64,7 @@ type BehaviorTreeListResponse struct {
 	EntryPoint       string    `json:"entry_point,omitempty"`
 	StepCount        int       `json:"step_count"`
 	StateCount       int       `json:"state_count"`
+	RequiredActionTypes []string `json:"required_action_types,omitempty"`
 	Version          int       `json:"version"`
 	IsTemplate       bool      `json:"is_template"`
 	DeploymentStatus string    `json:"deployment_status,omitempty"`
@@ -91,6 +92,17 @@ type PlanningStateVarResponse struct {
 	Description  string `json:"description,omitempty"`
 }
 
+type PlanningEffectResponse struct {
+	Variable string `json:"variable"`
+	Value    string `json:"value"`
+}
+
+type PlanningTaskResponse struct {
+	RequiredResources []string                `json:"required_resources,omitempty"`
+	DuringState       []PlanningEffectResponse `json:"during_state,omitempty"`
+	ResultStates      []PlanningEffectResponse `json:"result_states,omitempty"`
+}
+
 type BehaviorTreeResponse struct {
 	ID                string                     `json:"id"`
 	Name              string                     `json:"name"`
@@ -102,7 +114,9 @@ type BehaviorTreeResponse struct {
 	Steps             []map[string]interface{}   `json:"steps"`
 	States            []GraphStateResponse       `json:"states,omitempty"`
 	PlanningStates    []PlanningStateVarResponse `json:"planning_states,omitempty"`
+	PlanningTask      *PlanningTaskResponse      `json:"planning_task,omitempty"`
 	TaskDistributorID string                     `json:"task_distributor_id,omitempty"`
+	RequiredActionTypes []string                 `json:"required_action_types,omitempty"`
 	Version           int                        `json:"version"`
 	IsTemplate        bool                       `json:"is_template"`
 	DeploymentStatus  string                     `json:"deployment_status,omitempty"`
@@ -120,6 +134,7 @@ type BehaviorTreeCreateRequest struct {
 	Steps             []map[string]interface{}   `json:"steps"`
 	States            []GraphStateResponse       `json:"states,omitempty"`
 	PlanningStates    []PlanningStateVarResponse `json:"planning_states,omitempty"`
+	PlanningTask      *PlanningTaskResponse      `json:"planning_task,omitempty"`
 	TaskDistributorID string                     `json:"task_distributor_id,omitempty"`
 }
 
@@ -131,6 +146,7 @@ type BehaviorTreeUpdateRequest struct {
 	Steps             []map[string]interface{}   `json:"steps,omitempty"`
 	States            []GraphStateResponse       `json:"states,omitempty"`
 	PlanningStates    []PlanningStateVarResponse `json:"planning_states,omitempty"`
+	PlanningTask      *PlanningTaskResponse      `json:"planning_task,omitempty"`
 	TaskDistributorID *string                    `json:"task_distributor_id,omitempty"`
 }
 
@@ -654,14 +670,16 @@ type AgentConnectionStatusResponse struct {
 
 // PlanExecutionStepResponse represents a step status in plan execution
 type PlanExecutionStepResponse struct {
-	StepID    string `json:"step_id"`
-	StepName  string `json:"step_name"`
-	AgentID   string `json:"agent_id"`
-	AgentName string `json:"agent_name"`
-	Order     int    `json:"order"`
-	Status    string `json:"status"`
-	TaskID    string `json:"task_id,omitempty"`
-	Error     string `json:"error,omitempty"`
+	TaskID        string `json:"task_id"`
+	TaskName      string `json:"task_name,omitempty"`
+	RuntimeTaskID string `json:"runtime_task_id,omitempty"`
+	StepID        string `json:"step_id"`
+	StepName      string `json:"step_name"`
+	AgentID       string `json:"agent_id"`
+	AgentName     string `json:"agent_name"`
+	Order         int    `json:"order"`
+	Status        string `json:"status"`
+	Error         string `json:"error,omitempty"`
 }
 
 type PlanExecutionResourceResponse struct {
@@ -672,6 +690,7 @@ type PlanExecutionResourceResponse struct {
 	PlanID          string    `json:"plan_id,omitempty"`
 	ProblemID       string    `json:"problem_id,omitempty"`
 	PlanExecutionID string    `json:"plan_execution_id,omitempty"`
+	TaskID          string    `json:"task_id,omitempty"`
 	StepID          string    `json:"step_id,omitempty"`
 	AcquiredAt      time.Time `json:"acquired_at"`
 }

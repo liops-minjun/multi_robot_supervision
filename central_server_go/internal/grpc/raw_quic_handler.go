@@ -67,6 +67,7 @@ type RawQUICHandler struct {
 	// Task completion callback (for agent-driven execution)
 	taskCompleteCallback TaskCompleteCallback
 	taskObserveCallback  TaskObserveCallback
+	resourceChangeCallback func()
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -174,6 +175,10 @@ func (h *RawQUICHandler) SetTaskCompleteCallback(cb TaskCompleteCallback) {
 // SetTaskObserveCallback wires heartbeat-driven task dispatch decisions.
 func (h *RawQUICHandler) SetTaskObserveCallback(cb TaskObserveCallback) {
 	h.taskObserveCallback = cb
+}
+
+func (h *RawQUICHandler) SetResourceChangeCallback(cb func()) {
+	h.resourceChangeCallback = cb
 }
 
 // Start starts listening for raw QUIC connections
@@ -386,6 +391,13 @@ type TaskStateUpdateMsg struct {
 	Variables      map[string]string
 	StepResult     *StepResultInfoMsg
 	TimestampMs    int64
+	ResourceEvents []ResourceEventMsg
+}
+
+type ResourceEventMsg struct {
+	ResourceID string
+	StepID     string
+	Kind       int32
 }
 
 // StepResultInfoMsg represents step completion info
@@ -425,6 +437,7 @@ type AgentHeartbeatMsg struct {
 	NetworkLatencyUs    uint32
 	HasNetworkLatencyUs bool
 	Telemetry           *TelemetryPayloadMsg // Optional telemetry data
+	ResourceEvents      []ResourceEventMsg
 }
 
 // TelemetryPayloadMsg represents telemetry data from agent
@@ -1204,6 +1217,18 @@ func parseTaskStateUpdate(data []byte) (*TaskStateUpdateMsg, error) {
 				update.TimestampMs = int64(v)
 				data = data[n:]
 			}
+		case 9: // resource_events (ResourceEvent message)
+			if wireType == protowire.BytesType {
+				eventData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid resource_events")
+				}
+				event, err := parseResourceEvent(eventData)
+				if err == nil && strings.TrimSpace(event.ResourceID) != "" {
+					update.ResourceEvents = append(update.ResourceEvents, *event)
+				}
+				data = data[n:]
+			}
 		default:
 			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
 			if n < 0 {
@@ -1214,6 +1239,56 @@ func parseTaskStateUpdate(data []byte) (*TaskStateUpdateMsg, error) {
 	}
 
 	return update, nil
+}
+
+func parseResourceEvent(data []byte) (*ResourceEventMsg, error) {
+	event := &ResourceEventMsg{}
+
+	for len(data) > 0 {
+		fieldNum, wireType, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, fmt.Errorf("invalid tag")
+		}
+		data = data[n:]
+
+		switch fieldNum {
+		case 1: // resource_id
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid resource_id")
+				}
+				event.ResourceID = v
+				data = data[n:]
+			}
+		case 2: // step_id
+			if wireType == protowire.BytesType {
+				v, n := protowire.ConsumeString(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid step_id")
+				}
+				event.StepID = v
+				data = data[n:]
+			}
+		case 3: // kind
+			if wireType == protowire.VarintType {
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid kind")
+				}
+				event.Kind = int32(v)
+				data = data[n:]
+			}
+		default:
+			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
+			if n < 0 {
+				return nil, fmt.Errorf("invalid resource event field %d", fieldNum)
+			}
+			data = data[n:]
+		}
+	}
+
+	return event, nil
 }
 
 // parseStepResultInfo parses StepResultInfo protobuf
@@ -2844,6 +2919,18 @@ func parseAgentHeartbeat(data []byte) (*AgentHeartbeatMsg, error) {
 				}
 				data = data[n:]
 			}
+		case 13: // resource_events (ResourceEvent message)
+			if wireType == protowire.BytesType {
+				eventData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid resource_events")
+				}
+				event, err := parseResourceEvent(eventData)
+				if err == nil && strings.TrimSpace(event.ResourceID) != "" {
+					hb.ResourceEvents = append(hb.ResourceEvents, *event)
+				}
+				data = data[n:]
+			}
 		default:
 			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
 			if n < 0 {
@@ -4067,6 +4154,12 @@ func (h *RawQUICHandler) handleHeartbeat(agentConn *agentConnection, hb *AgentHe
 		h.taskObserveCallback(agentConn.agentID, hb.IsExecuting, hb.CurrentTaskID)
 	}
 
+	if len(hb.ResourceEvents) > 0 {
+		if changed := h.applyResourceEvents(agentConn.agentID, hb.CurrentTaskID, hb.CurrentStepID, hb.ResourceEvents); changed && h.resourceChangeCallback != nil {
+			h.resourceChangeCallback()
+		}
+	}
+
 	// Update telemetry if present in heartbeat
 	if hb.Telemetry != nil {
 		robotID := hb.Telemetry.RobotID
@@ -4181,6 +4274,45 @@ func convertTelemetryPayload(tp *TelemetryPayloadMsg) *state.RobotTelemetry {
 	}
 
 	return telemetry
+}
+
+func (h *RawQUICHandler) applyResourceEvents(agentID, runtimeTaskID, fallbackStepID string, events []ResourceEventMsg) bool {
+	runtimeTaskID = strings.TrimSpace(runtimeTaskID)
+	if runtimeTaskID == "" || len(events) == 0 {
+		return false
+	}
+
+	changed := false
+	for _, event := range events {
+		resourceID := strings.TrimSpace(event.ResourceID)
+		if resourceID == "" {
+			continue
+		}
+
+		acquired := false
+		switch event.Kind {
+		case 1:
+			acquired = true
+		case 2:
+			acquired = false
+		default:
+			continue
+		}
+
+		stepID := strings.TrimSpace(event.StepID)
+		if stepID == "" {
+			stepID = fallbackStepID
+		}
+
+		if err := h.stateManager.HandleTaskResourceEvent(runtimeTaskID, agentID, stepID, resourceID, acquired); err != nil {
+			log.Printf("[RawQUIC] Failed to apply resource event task=%s agent=%s resource=%s acquired=%v: %v",
+				runtimeTaskID, agentID, resourceID, acquired, err)
+			continue
+		}
+		changed = true
+	}
+
+	return changed
 }
 
 // handleActionResult processes action result and notifies pending commands
@@ -4326,8 +4458,17 @@ func (h *RawQUICHandler) handleTaskStateUpdate(agentConn *agentConnection, updat
 		h.taskObserveCallback(agentConn.agentID, isExecuting, update.TaskID)
 	}
 
+	resourceChanged := false
+	if len(update.ResourceEvents) > 0 {
+		resourceChanged = h.applyResourceEvents(agentConn.agentID, update.TaskID, update.CurrentStepID, update.ResourceEvents)
+	}
+
 	// If task is terminal (completed/failed/cancelled), call CompleteExecution to fully clear state
 	if taskStatus == "completed" || taskStatus == "failed" || taskStatus == "cancelled" {
+		if released := h.stateManager.ReleaseTaskResources(update.TaskID, agentConn.agentID); len(released) > 0 {
+			resourceChanged = true
+		}
+		h.stateManager.UnregisterTaskRuntime(update.TaskID)
 		h.stateManager.CompleteExecution(agentConn.agentID, nil)
 		log.Printf("[RawQUIC] Task %s terminal state: %s - cleared execution state for agent %s",
 			update.TaskID, taskStatus, agentConn.agentID)
@@ -4340,6 +4481,10 @@ func (h *RawQUICHandler) handleTaskStateUpdate(agentConn *agentConnection, updat
 			}
 			h.taskCompleteCallback(update.TaskID, taskStatus, errorMsg)
 		}
+	}
+
+	if resourceChanged && h.resourceChangeCallback != nil {
+		h.resourceChangeCallback()
 	}
 
 	// If step result is present, log it

@@ -9,51 +9,59 @@ type ResourceInfo struct {
 	ParentResourceID string
 }
 
-// PlanAction represents a single plannable action (maps to a BT step)
-type PlanAction struct {
-	StepID          string
-	StepName        string
-	ActionType      string // Required ROS2 capability (action_type)
-	ResourceAcquire []string
-	ResourceRelease []string
-	Preconditions   []db.PlanningCondition
-	Effects         []db.PlanningEffect
-	During          []db.PlanningEffect
+// PlanTask represents a single plannable task.
+// In the current model a behavior tree is the task execution unit.
+type PlanTask struct {
+	TaskID              string
+	TaskName            string
+	BehaviorTreeID      string
+	RequiredActionTypes []string
+	RequiredResources   []string
+	ResultStates        []db.PlanningEffect
+	DuringState         []db.PlanningEffect
 }
 
-// AgentInfo describes an agent available for task assignment
+// AgentInfo describes an agent available for task assignment.
 type AgentInfo struct {
 	ID           string
 	Name         string
-	Capabilities []string // action_type list this agent supports
+	Capabilities []string
 	IsOnline     bool
 }
 
-// PlanProblem defines the full planning problem
+// PlanProblem defines the full planning problem.
 type PlanProblem struct {
 	StateVars    []db.PlanningStateVar
-	InitialState map[string]string // variable -> value
-	GoalState    map[string]string // variable -> value
-	Actions      []PlanAction      // Available steps
-	Agents       []AgentInfo       // Participating agents
+	InitialState map[string]string
+	GoalState    map[string]string
+	Tasks        []PlanTask
+	Agents       []AgentInfo
 	Resources    []ResourceInfo
 }
 
-// StepAssignment maps a step to an agent with execution order
-type StepAssignment struct {
-	StepID    string `json:"step_id"`
-	StepName  string `json:"step_name"`
-	AgentID   string `json:"agent_id"`
-	AgentName string `json:"agent_name"`
-	Order     int    `json:"order"`  // Same order = parallel execution
-	Reason    string `json:"reason"` // Why this agent was chosen
+// TaskAssignment maps a task to an agent with execution order.
+// step_* fields remain as compatibility aliases for older consumers.
+type TaskAssignment struct {
+	TaskID         string `json:"task_id"`
+	TaskName       string `json:"task_name"`
+	BehaviorTreeID string `json:"behavior_tree_id,omitempty"`
+	StepID         string `json:"step_id,omitempty"`
+	StepName       string `json:"step_name,omitempty"`
+	AgentID        string `json:"agent_id"`
+	AgentName      string `json:"agent_name"`
+	Order          int    `json:"order"`
+	Reason         string `json:"reason"`
 }
 
-// Plan is the result of the planner
+// StepAssignment is kept as an internal compatibility alias during the refactor.
+type StepAssignment = TaskAssignment
+
+// Plan is the result of the planner.
 type Plan struct {
-	Assignments    []StepAssignment `json:"assignments"`
+	Assignments    []TaskAssignment `json:"assignments"`
 	IsValid        bool             `json:"is_valid"`
 	ErrorMessage   string           `json:"error_message,omitempty"`
+	TotalTasks     int              `json:"total_tasks"`
 	TotalSteps     int              `json:"total_steps"`
 	ParallelGroups int              `json:"parallel_groups"`
 }

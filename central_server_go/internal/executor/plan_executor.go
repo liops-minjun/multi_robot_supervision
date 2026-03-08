@@ -27,18 +27,20 @@ const (
 	PlanExecCancelled PlanExecutionStatus = "cancelled"
 )
 
-// StepExecutionStatus tracks execution of a single step within a plan
+// StepExecutionStatus tracks execution of a single task assignment within a plan.
 type StepExecutionStatus struct {
-	StepID    string     `json:"step_id"`
-	StepName  string     `json:"step_name"`
-	AgentID   string     `json:"agent_id"`
-	AgentName string     `json:"agent_name"`
-	Order     int        `json:"order"`
-	Status    TaskStatus `json:"status"`
-	TaskID    string     `json:"task_id,omitempty"`
-	StartedAt time.Time  `json:"started_at,omitempty"`
-	EndedAt   time.Time  `json:"ended_at,omitempty"`
-	Error     string     `json:"error,omitempty"`
+	TaskID        string     `json:"task_id"`
+	TaskName      string     `json:"task_name,omitempty"`
+	RuntimeTaskID string     `json:"runtime_task_id,omitempty"`
+	StepID        string     `json:"step_id"`
+	StepName      string     `json:"step_name"`
+	AgentID       string     `json:"agent_id"`
+	AgentName     string     `json:"agent_name"`
+	Order         int        `json:"order"`
+	Status        TaskStatus `json:"status"`
+	StartedAt     time.Time  `json:"started_at,omitempty"`
+	EndedAt       time.Time  `json:"ended_at,omitempty"`
+	Error         string     `json:"error,omitempty"`
 }
 
 // PlanExecution represents a running plan execution
@@ -55,7 +57,7 @@ type PlanExecution struct {
 	Error          string                          `json:"error,omitempty"`
 
 	// Internal
-	orderGroups [][]pddl.StepAssignment
+	orderGroups [][]pddl.TaskAssignment
 	cancelFunc  context.CancelFunc
 	mu          sync.RWMutex
 }
@@ -92,7 +94,7 @@ func (pe *PlanExecutor) StartPlanExecution(ctx context.Context, problemID, behav
 	}
 
 	// Group assignments by order
-	orderGroups := make(map[int][]pddl.StepAssignment)
+	orderGroups := make(map[int][]pddl.TaskAssignment)
 	for _, a := range plan.Assignments {
 		orderGroups[a.Order] = append(orderGroups[a.Order], a)
 	}
@@ -105,7 +107,7 @@ func (pe *PlanExecutor) StartPlanExecution(ctx context.Context, problemID, behav
 		}
 	}
 
-	groups := make([][]pddl.StepAssignment, maxOrder+1)
+	groups := make([][]pddl.TaskAssignment, maxOrder+1)
 	for order, assignments := range orderGroups {
 		groups[order] = assignments
 	}
@@ -113,7 +115,9 @@ func (pe *PlanExecutor) StartPlanExecution(ctx context.Context, problemID, behav
 	// Build step statuses
 	stepStatuses := make(map[string]*StepExecutionStatus, len(plan.Assignments))
 	for _, a := range plan.Assignments {
-		stepStatuses[a.StepID] = &StepExecutionStatus{
+		stepStatuses[a.TaskID] = &StepExecutionStatus{
+			TaskID:    a.TaskID,
+			TaskName:  a.TaskName,
 			StepID:    a.StepID,
 			StepName:  a.StepName,
 			AgentID:   a.AgentID,
@@ -156,7 +160,6 @@ func (pe *PlanExecutor) runPlanExecution(ctx context.Context, exec *PlanExecutio
 	exec.mu.Unlock()
 	pe.broadcastPlanUpdate(exec)
 
-	// Load BT steps for step lookup
 	bt, err := pe.repo.GetBehaviorTree(exec.BehaviorTreeID)
 	if err != nil {
 		pe.failExecution(exec, fmt.Sprintf("failed to load behavior tree: %v", err))
@@ -177,33 +180,29 @@ func (pe *PlanExecutor) runPlanExecution(ctx context.Context, exec *PlanExecutio
 		return
 	}
 
-	resourceCatalog, err := pe.loadExecutionResourceCatalog(pp, bt)
-	if err != nil {
-		pe.failExecution(exec, fmt.Sprintf("failed to load resource catalog: %v", err))
-		return
-	}
-
 	initialPlanningState, err := pe.buildInitialPlanningState(pp, bt)
 	if err != nil {
 		pe.failExecution(exec, fmt.Sprintf("failed to build planning state: %v", err))
 		return
 	}
 
+	taskSpec, err := pe.loadExecutionTaskSpec(bt)
+	if err != nil {
+		pe.failExecution(exec, fmt.Sprintf("failed to load task planning spec: %v", err))
+		return
+	}
+
+	selectedDistributorID := ""
+	if pp != nil && pp.TaskDistributorID.Valid && pp.TaskDistributorID.String != "" {
+		selectedDistributorID = pp.TaskDistributorID.String
+	} else if bt.TaskDistributorID.Valid && bt.TaskDistributorID.String != "" {
+		selectedDistributorID = bt.TaskDistributorID.String
+	}
+
 	// Initialize planning state
 	pe.stateManager.InitPlanningState(exec.ProblemID, initialPlanningState)
 	defer pe.stateManager.ClearPlanningState(exec.ProblemID)
 	defer pe.stateManager.ReleaseAllPlanResources(exec.ProblemID)
-
-	var btSteps []db.BehaviorTreeStep
-	if err := json.Unmarshal(bt.Steps, &btSteps); err != nil {
-		pe.failExecution(exec, fmt.Sprintf("failed to parse BT steps: %v", err))
-		return
-	}
-
-	stepMap := make(map[string]*db.BehaviorTreeStep, len(btSteps))
-	for i := range btSteps {
-		stepMap[btSteps[i].ID] = &btSteps[i]
-	}
 
 	for order := 0; order < exec.TotalOrders; order++ {
 		select {
@@ -223,52 +222,18 @@ func (pe *PlanExecutor) runPlanExecution(ctx context.Context, exec *PlanExecutio
 		exec.mu.Unlock()
 		pe.broadcastPlanUpdate(exec)
 
-		// 1. Acquire resources for all steps in this group
-		for _, assignment := range group {
-			step := stepMap[assignment.StepID]
-			if step == nil {
-				continue
-			}
-			for _, res := range step.ResourceAcquire {
-				resolvedResource, err := pe.resolveAcquireResourceToken(exec.ProblemID, res, resourceCatalog)
-				if err != nil {
-					pe.failExecution(exec, fmt.Sprintf("failed to resolve resource %q for step %s: %v", res, assignment.StepID, err))
-					return
-				}
-				ok, holder := pe.stateManager.TryAcquirePlanResource(
-					exec.ProblemID,
-					resolvedResource,
-					assignment.AgentID,
-					assignment.StepID,
-				)
-				if !ok {
-					pe.failExecution(exec, fmt.Sprintf("failed to acquire resource %q for step %s: held by %s", resolvedResource, assignment.StepID, holder))
-					return
-				}
-				pe.updateResourceOccupancyState(exec.ProblemID, resolvedResource, true)
-			}
-		}
-
-		// 2. Dispatch all steps in this group in parallel
+		// Dispatch all tasks in this group in parallel. Runtime resources are
+		// now reconciled from agent-reported acquire/release events.
 		var wg sync.WaitGroup
 		results := make(chan stepDispatchResult, len(group))
 
 		for _, assignment := range group {
-			step := stepMap[assignment.StepID]
-			if step == nil {
-				results <- stepDispatchResult{
-					stepID: assignment.StepID,
-					err:    fmt.Errorf("step %s not found in behavior tree", assignment.StepID),
-				}
-				continue
-			}
-
 			wg.Add(1)
-			go func(a pddl.StepAssignment, s *db.BehaviorTreeStep) {
+			go func(a pddl.TaskAssignment) {
 				defer wg.Done()
-				result := pe.dispatchStep(ctx, exec, a, s)
+				result := pe.dispatchStep(ctx, exec, a, taskSpec, selectedDistributorID)
 				results <- result
-			}(assignment, step)
+			}(assignment)
 		}
 
 		// Wait for all dispatches to complete
@@ -281,21 +246,7 @@ func (pe *PlanExecutor) runPlanExecution(ctx context.Context, exec *PlanExecutio
 		var groupError string
 		for result := range results {
 			if result.err != nil {
-				groupError = fmt.Sprintf("step %s failed: %v", result.stepID, result.err)
-			}
-		}
-
-		// 3. Release resources for this group
-		for _, assignment := range group {
-			step := stepMap[assignment.StepID]
-			if step == nil {
-				continue
-			}
-			for _, res := range step.ResourceRelease {
-				resolvedResource := pe.resolveReleaseResourceToken(exec.ProblemID, assignment.AgentID, res, resourceCatalog)
-				if resolvedResource != "" && pe.stateManager.ReleasePlanResource(exec.ProblemID, resolvedResource, assignment.AgentID) {
-					pe.updateResourceOccupancyState(exec.ProblemID, resolvedResource, false)
-				}
+				groupError = fmt.Sprintf("task %s failed: %v", result.taskID, result.err)
 			}
 		}
 
@@ -318,13 +269,13 @@ func (pe *PlanExecutor) runPlanExecution(ctx context.Context, exec *PlanExecutio
 }
 
 type stepDispatchResult struct {
-	stepID string
+	taskID string
 	err    error
 }
 
-// dispatchStep dispatches a single step to an agent and waits for completion
-func (pe *PlanExecutor) dispatchStep(ctx context.Context, exec *PlanExecution, assignment pddl.StepAssignment, step *db.BehaviorTreeStep) stepDispatchResult {
-	stepStatus := exec.StepStatuses[assignment.StepID]
+// dispatchStep dispatches a single task to an agent and waits for completion.
+func (pe *PlanExecutor) dispatchStep(ctx context.Context, exec *PlanExecution, assignment pddl.TaskAssignment, taskSpec db.PlanningTaskSpec, taskDistributorID string) stepDispatchResult {
+	stepStatus := exec.StepStatuses[assignment.TaskID]
 
 	exec.mu.Lock()
 	stepStatus.Status = TaskRunning
@@ -333,7 +284,15 @@ func (pe *PlanExecutor) dispatchStep(ctx context.Context, exec *PlanExecution, a
 	pe.broadcastPlanUpdate(exec)
 
 	// Use the scheduler to execute this step on the assigned agent
-	taskID, err := pe.scheduler.StartTask(ctx, exec.BehaviorTreeID, assignment.AgentID, nil)
+	params := map[string]interface{}{
+		taskParamPlanProblemID:     exec.ProblemID,
+		taskParamPlanExecutionID:   exec.ID,
+		taskParamLogicalTaskID:     assignment.TaskID,
+		taskParamLogicalTaskName:   assignment.TaskName,
+		taskParamTaskDistributorID: taskDistributorID,
+	}
+
+	taskID, err := pe.scheduler.StartTask(ctx, exec.BehaviorTreeID, assignment.AgentID, params)
 	if err != nil {
 		exec.mu.Lock()
 		stepStatus.Status = TaskFailed
@@ -341,11 +300,11 @@ func (pe *PlanExecutor) dispatchStep(ctx context.Context, exec *PlanExecution, a
 		stepStatus.Error = err.Error()
 		exec.mu.Unlock()
 		pe.broadcastPlanUpdate(exec)
-		return stepDispatchResult{stepID: assignment.StepID, err: err}
+		return stepDispatchResult{taskID: assignment.TaskID, err: err}
 	}
 
 	exec.mu.Lock()
-	stepStatus.TaskID = taskID
+	stepStatus.RuntimeTaskID = taskID
 	exec.mu.Unlock()
 
 	// Wait for task completion
@@ -357,16 +316,16 @@ func (pe *PlanExecutor) dispatchStep(ctx context.Context, exec *PlanExecution, a
 		stepStatus.Status = TaskFailed
 		stepStatus.Error = err.Error()
 	} else {
-		pe.applyPlanningEffects(exec.ProblemID, step)
+		pe.applyPlanningEffects(exec.ProblemID, taskSpec)
 		stepStatus.Status = TaskCompleted
 	}
 	exec.mu.Unlock()
 	pe.broadcastPlanUpdate(exec)
 
 	if err != nil {
-		return stepDispatchResult{stepID: assignment.StepID, err: err}
+		return stepDispatchResult{taskID: assignment.TaskID, err: err}
 	}
-	return stepDispatchResult{stepID: assignment.StepID}
+	return stepDispatchResult{taskID: assignment.TaskID}
 }
 
 func (pe *PlanExecutor) buildInitialPlanningState(
@@ -417,13 +376,27 @@ func (pe *PlanExecutor) buildInitialPlanningState(
 	return initial, nil
 }
 
-func (pe *PlanExecutor) applyPlanningEffects(planID string, step *db.BehaviorTreeStep) {
-	if step == nil || len(step.PlanningEffects) == 0 {
+func (pe *PlanExecutor) loadExecutionTaskSpec(bt *db.BehaviorTree) (db.PlanningTaskSpec, error) {
+	if bt == nil {
+		return db.PlanningTaskSpec{}, fmt.Errorf("behavior tree is nil")
+	}
+	spec, err := db.DecodePlanningTaskSpec(bt.PlanningTask)
+	if err != nil {
+		return db.PlanningTaskSpec{}, err
+	}
+	if !spec.HasData() {
+		return db.PlanningTaskSpec{}, fmt.Errorf("behavior tree %q does not define task planning metadata", bt.ID)
+	}
+	return spec, nil
+}
+
+func (pe *PlanExecutor) applyPlanningEffects(planID string, taskSpec db.PlanningTaskSpec) {
+	if len(taskSpec.ResultStates) == 0 {
 		return
 	}
 
-	effects := make(map[string]string, len(step.PlanningEffects))
-	for _, effect := range step.PlanningEffects {
+	effects := make(map[string]string, len(taskSpec.ResultStates))
+	for _, effect := range taskSpec.ResultStates {
 		if strings.TrimSpace(effect.Variable) == "" {
 			continue
 		}
@@ -700,14 +673,16 @@ type PlanExecutionSnapshot struct {
 
 // StepStatusSnapshot is a thread-safe copy of step status
 type StepStatusSnapshot struct {
-	StepID    string
-	StepName  string
-	AgentID   string
-	AgentName string
-	Order     int
-	Status    string
-	TaskID    string
-	Error     string
+	StepID        string
+	StepName      string
+	AgentID       string
+	AgentName     string
+	Order         int
+	Status        string
+	TaskID        string
+	TaskName      string
+	RuntimeTaskID string
+	Error         string
 }
 
 // Snapshot returns a thread-safe copy of the execution state
@@ -734,14 +709,16 @@ func (exec *PlanExecution) Snapshot() PlanExecutionSnapshot {
 	snap.Steps = make([]StepStatusSnapshot, 0, len(exec.StepStatuses))
 	for _, ss := range exec.StepStatuses {
 		snap.Steps = append(snap.Steps, StepStatusSnapshot{
-			StepID:    ss.StepID,
-			StepName:  ss.StepName,
-			AgentID:   ss.AgentID,
-			AgentName: ss.AgentName,
-			Order:     ss.Order,
-			Status:    string(ss.Status),
-			TaskID:    ss.TaskID,
-			Error:     ss.Error,
+			StepID:        ss.StepID,
+			StepName:      ss.StepName,
+			AgentID:       ss.AgentID,
+			AgentName:     ss.AgentName,
+			Order:         ss.Order,
+			Status:        string(ss.Status),
+			TaskID:        ss.TaskID,
+			TaskName:      ss.TaskName,
+			RuntimeTaskID: ss.RuntimeTaskID,
+			Error:         ss.Error,
 		})
 	}
 
@@ -822,6 +799,7 @@ func (pe *PlanExecutor) GetResourceAllocations() []ResourceAllocationInfo {
 				PlanID:          problemID,
 				ProblemID:       problemID,
 				PlanExecutionID: execID,
+				TaskID:          hold.TaskID,
 				StepID:          hold.StepID,
 				AcquiredAt:      hold.AcquiredAt,
 			})
@@ -839,6 +817,7 @@ type ResourceAllocationInfo struct {
 	PlanID          string    `json:"plan_id,omitempty"`
 	ProblemID       string    `json:"problem_id,omitempty"`
 	PlanExecutionID string    `json:"plan_execution_id,omitempty"`
+	TaskID          string    `json:"task_id,omitempty"`
 	StepID          string    `json:"step_id,omitempty"`
 	AcquiredAt      time.Time `json:"acquired_at"`
 }
@@ -865,6 +844,8 @@ func (pe *PlanExecutor) broadcastPlanUpdate(exec *PlanExecution) {
 	stepUpdates := make([]StepStatusWS, 0, len(exec.StepStatuses))
 	for _, ss := range exec.StepStatuses {
 		stepUpdates = append(stepUpdates, StepStatusWS{
+			TaskID:    ss.TaskID,
+			TaskName:  ss.TaskName,
 			StepID:    ss.StepID,
 			StepName:  ss.StepName,
 			AgentID:   ss.AgentID,
@@ -895,6 +876,8 @@ type PlanExecutionUpdateMessage struct {
 
 // StepStatusWS is a WebSocket representation of step status
 type StepStatusWS struct {
+	TaskID    string `json:"task_id,omitempty"`
+	TaskName  string `json:"task_name,omitempty"`
 	StepID    string `json:"step_id"`
 	StepName  string `json:"step_name"`
 	AgentID   string `json:"agent_id"`

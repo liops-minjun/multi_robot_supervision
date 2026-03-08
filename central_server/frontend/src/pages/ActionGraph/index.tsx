@@ -31,6 +31,7 @@ import type {
   ActionGraph, StateDefinition, ActionMapping,
   AssignmentInfo, TemplateListItem,
   EndStateConfig, ActionOutcome, OutcomeTransition, LifecycleState,
+  PlanningEffect, PlanningTaskSpec,
   TaskDistributor, TaskDistributorState, TaskDistributorResource
 } from '../../types'
 
@@ -82,6 +83,86 @@ const DEFAULT_STATE_COLORS: Record<string, StateColorType> = {
   failed: 'error',
   fault: 'error',
   cancelled: 'error',
+}
+
+const emptyPlanningTask = (): PlanningTaskSpec => ({
+  required_resources: [],
+  during_state: [],
+  result_states: [],
+})
+
+function getStateDefaultValue(stateVar?: TaskDistributorState): string {
+  if (!stateVar) return ''
+  if (stateVar.type === 'bool') return 'true'
+  if (stateVar.type === 'int') return '0'
+  return stateVar.initial_value || ''
+}
+
+function formatPlanningResourceToken(token: string, resources: TaskDistributorResource[]): string {
+  if (token.startsWith('type:')) {
+    const resource = resources.find(item => item.id === token.slice(5))
+    return resource ? `TYPE ${resource.name}` : token
+  }
+  if (token.startsWith('instance:')) {
+    const resource = resources.find(item => item.id === token.slice(9))
+    return resource ? resource.name : token
+  }
+  return token
+}
+
+type TaskResourceFlowSummary = {
+  token: string
+  acquireSteps: string[]
+  releaseSteps: string[]
+  holdUntilTaskEnd: boolean
+}
+
+function collectTaskResourceFlow(nodes: Node[]): TaskResourceFlowSummary[] {
+  const summary = new Map<string, { acquireSteps: Set<string>; releaseSteps: Set<string> }>()
+
+  const ensureEntry = (token: string) => {
+    const normalized = token.trim()
+    if (!normalized) return null
+    if (!summary.has(normalized)) {
+      summary.set(normalized, {
+        acquireSteps: new Set<string>(),
+        releaseSteps: new Set<string>(),
+      })
+    }
+    return summary.get(normalized) || null
+  }
+
+  for (const node of nodes) {
+    if (node.type !== 'action') continue
+    const nodeData = node.data as {
+      jobName?: string
+      label?: string
+      resourceAcquire?: string[]
+      resourceRelease?: string[]
+    }
+    const stepName = nodeData.jobName?.trim() || nodeData.label?.trim() || node.id
+
+    for (const token of nodeData.resourceAcquire || []) {
+      const entry = ensureEntry(token)
+      if (!entry) continue
+      entry.acquireSteps.add(stepName)
+    }
+
+    for (const token of nodeData.resourceRelease || []) {
+      const entry = ensureEntry(token)
+      if (!entry) continue
+      entry.releaseSteps.add(stepName)
+    }
+  }
+
+  return Array.from(summary.entries())
+    .map(([token, value]) => ({
+      token,
+      acquireSteps: Array.from(value.acquireSteps).sort(),
+      releaseSteps: Array.from(value.releaseSteps).sort(),
+      holdUntilTaskEnd: value.acquireSteps.size > value.releaseSteps.size,
+    }))
+    .sort((left, right) => left.token.localeCompare(right.token))
 }
 
 const OUTCOME_EDGE_COLORS: Record<ActionOutcome, string> = {
@@ -715,6 +796,23 @@ function ActionGraphEditor() {
   })
   const tdStates: TaskDistributorState[] = taskDistributorFull?.states || []
   const tdResources: TaskDistributorResource[] = taskDistributorFull?.resources || []
+  const [planningResultVariable, setPlanningResultVariable] = useState('')
+  const [planningResultValue, setPlanningResultValue] = useState('')
+
+  const normalizePlanningTask = useCallback((spec?: PlanningTaskSpec): PlanningTaskSpec => {
+    const normalizedDuring = (spec?.during_state || [])
+      .filter(effect => effect.variable)
+      .slice(0, 1)
+      .map(effect => ({ variable: effect.variable, value: effect.value }))
+    const normalizedResults = (spec?.result_states || [])
+      .filter(effect => effect.variable)
+      .map(effect => ({ variable: effect.variable, value: effect.value }))
+    return {
+      required_resources: Array.from(new Set((spec?.required_resources || []).filter(Boolean))),
+      during_state: normalizedDuring,
+      result_states: normalizedResults,
+    }
+  }, [])
 
   // Handle task distributor change
   const handleTaskDistributorChange = useCallback(async (tdId: string) => {
@@ -786,16 +884,21 @@ function ActionGraphEditor() {
       templateId,
       steps,
       entryPoint,
+      planningTask,
       lockSessionId,
     }: {
       templateId: string
       steps: ActionGraph['steps']
       entryPoint?: string
+      planningTask?: PlanningTaskSpec
       lockSessionId?: string
     }) => {
       const payload: Partial<ActionGraph> = { steps }
       if (entryPoint) {
         payload.entry_point = entryPoint
+      }
+      if (planningTask) {
+        payload.planning_task = planningTask
       }
       return templateApi.update(templateId, payload, lockSessionId)
     },
@@ -1247,6 +1350,98 @@ function ActionGraphEditor() {
            currentState.edges !== lastSavedStateRef.current.edges
   }, [nodes, edges])
 
+  const taskResourceFlow = useMemo(
+    () => collectTaskResourceFlow(nodes),
+    [nodes]
+  )
+  const derivedPlanningResourceTokens = useMemo(
+    () => taskResourceFlow
+      .filter(flow => flow.acquireSteps.length > 0)
+      .map(flow => flow.token),
+    [taskResourceFlow]
+  )
+  const syncPlanningTaskWithNodeResources = useCallback((spec?: PlanningTaskSpec): PlanningTaskSpec => (
+    normalizePlanningTask({
+      ...(spec || emptyPlanningTask()),
+      required_resources: derivedPlanningResourceTokens,
+    })
+  ), [derivedPlanningResourceTokens, normalizePlanningTask])
+  const planningTask = useMemo(
+    () => syncPlanningTaskWithNodeResources(selectedTemplate?.planning_task || emptyPlanningTask()),
+    [selectedTemplate?.planning_task, syncPlanningTaskWithNodeResources]
+  )
+  const activePlanningDuring = planningTask.during_state?.[0] || null
+
+  const updatePlanningTask = useCallback(async (updater: (current: PlanningTaskSpec) => PlanningTaskSpec) => {
+    if (!selectedTemplateId) return
+
+    const queryKey = ['template', selectedTemplateId]
+    const previousTemplate = queryClient.getQueryData<ActionGraph>(queryKey)
+    const currentTask = syncPlanningTaskWithNodeResources(previousTemplate?.planning_task || emptyPlanningTask())
+    const nextTask = syncPlanningTaskWithNodeResources(updater(currentTask))
+
+    try {
+      if (previousTemplate) {
+        queryClient.setQueryData<ActionGraph>(queryKey, {
+          ...previousTemplate,
+          planning_task: nextTask,
+        })
+      }
+      await templateApi.update(selectedTemplateId, { planning_task: nextTask } as Partial<ActionGraph>, sessionId)
+      queryClient.invalidateQueries({ queryKey })
+      queryClient.invalidateQueries({ queryKey: ['templates-all'] })
+    } catch (error) {
+      if (previousTemplate) {
+        queryClient.setQueryData<ActionGraph>(queryKey, previousTemplate)
+      }
+      console.error('Failed to update task planning metadata:', error)
+    }
+  }, [queryClient, selectedTemplateId, sessionId, syncPlanningTaskWithNodeResources])
+
+  const handlePlanningDuringChange = useCallback((variable: string, value?: string) => {
+    void updatePlanningTask((current) => {
+      if (!variable) {
+        return { ...current, during_state: [] }
+      }
+      const stateVar = tdStates.find(item => item.name === variable)
+      return {
+        ...current,
+        during_state: [{
+          variable,
+          value: value ?? (current.during_state?.[0]?.variable === variable
+            ? current.during_state?.[0]?.value || getStateDefaultValue(stateVar)
+            : getStateDefaultValue(stateVar)),
+        }],
+      }
+    })
+  }, [tdStates, updatePlanningTask])
+
+  const handleAddPlanningResult = useCallback(() => {
+    if (!planningResultVariable) return
+    const stateVar = tdStates.find(item => item.name === planningResultVariable)
+    const fallbackValue = getStateDefaultValue(stateVar)
+    const nextEffect: PlanningEffect = {
+      variable: planningResultVariable,
+      value: planningResultValue || fallbackValue,
+    }
+    void updatePlanningTask((current) => ({
+      ...current,
+      result_states: [
+        ...(current.result_states || []).filter(effect => effect.variable !== nextEffect.variable),
+        nextEffect,
+      ],
+    }))
+    setPlanningResultVariable('')
+    setPlanningResultValue('')
+  }, [planningResultValue, planningResultVariable, tdStates, updatePlanningTask])
+
+  const handleDeletePlanningResult = useCallback((variable: string) => {
+    void updatePlanningTask((current) => ({
+      ...current,
+      result_states: (current.result_states || []).filter(effect => effect.variable !== variable),
+    }))
+  }, [updatePlanningTask])
+
   // Clear validation errors when template changes
   useEffect(() => {
     setValidationErrors([])
@@ -1392,6 +1587,8 @@ function ActionGraphEditor() {
         end_states: endStates,
         success_states: resolvedSuccessStates,
         failure_states: resolvedFailureStates,
+        resource_acquire: Array.from(new Set((node.data.resourceAcquire || []).filter(Boolean))),
+        resource_release: Array.from(new Set((node.data.resourceRelease || []).filter(Boolean))),
         transition: {
           on_success: fallbackSuccess?.next,
           on_failure: fallbackFailure?.next,
@@ -1401,11 +1598,6 @@ function ActionGraphEditor() {
 
       // Debug: Log transitions being saved
       console.log(`[SAVE] Step ${node.id} (${node.data.label}): on_success=${fallbackSuccess?.next}, on_failure=${fallbackFailure?.next}, outcomeTransitions=`, outcomeTransitions)
-
-      // PDDL Planning fields
-      if (node.data.resourceAcquire?.length) step.resource_acquire = node.data.resourceAcquire
-      if (node.data.resourceRelease?.length) step.resource_release = node.data.resourceRelease
-      if (node.data.planningDuring?.length) step.planning_during = node.data.planningDuring.slice(0, 1)
 
       steps.push(step)
     })
@@ -1521,13 +1713,13 @@ function ActionGraphEditor() {
     }
 
     const { steps, entryPoint } = convertGraphToSteps()
-    saveTemplate.mutate({ templateId: selectedTemplateId, steps, entryPoint, lockSessionId: sessionId }, {
+    saveTemplate.mutate({ templateId: selectedTemplateId, steps, entryPoint, planningTask, lockSessionId: sessionId }, {
       onSuccess: () => {
         // Update lastSavedStateRef only after successful save
         lastSavedStateRef.current = stateToSave
       }
     })
-  }, [selectedTemplateId, convertGraphToSteps, saveTemplate, validateGraph, nodes, edges, sessionId])
+  }, [selectedTemplateId, convertGraphToSteps, saveTemplate, validateGraph, nodes, edges, planningTask, sessionId])
 
   // Lock management functions
   const acquireLock = useCallback(async () => {
@@ -1616,7 +1808,10 @@ function ActionGraphEditor() {
 
       try {
         // Save the current state
-        const payload: Partial<ActionGraph> = { steps }
+        const payload: Partial<ActionGraph> = {
+          steps,
+          planning_task: planningTask,
+        }
         if (entryPoint) {
           payload.entry_point = entryPoint
         }
@@ -1653,7 +1848,7 @@ function ActionGraphEditor() {
 
     setIsEditing(false)
     setLockStatus({ isLocked: false, lockedBy: null, expiresAt: null, isOwnLock: false })
-  }, [selectedTemplateId, sessionId, isEditing, hasUnsavedChanges, convertGraphToSteps, nodes, edges, queryClient])
+  }, [selectedTemplateId, sessionId, isEditing, hasUnsavedChanges, convertGraphToSteps, nodes, edges, planningTask, queryClient])
 
   // Fetch lock status when template changes
   useEffect(() => {
@@ -1946,6 +2141,8 @@ function ActionGraphEditor() {
           // Task Distributor data
           taskDistributorStates: tdStates,
           taskDistributorResources: tdResources,
+          resourceAcquire: [],
+          resourceRelease: [],
           isEditing,
         },
       }
@@ -2193,6 +2390,204 @@ function ActionGraphEditor() {
                 <span>TD를 선택해야 PDDL 설정 가능</span>
               </div>
             ) : null}
+          </div>
+
+          <div className="px-3 py-3 border-b border-primary space-y-3">
+            <div className="flex items-center gap-1.5">
+              <Zap size={12} className="text-amber-400" />
+              <span className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider">Task Planning</span>
+            </div>
+
+            {!taskDistributorId ? (
+              <div className="rounded-lg border border-dashed border-border bg-base/40 px-3 py-3 text-[10px] leading-5 text-muted">
+                Task Distributor를 연결해야 Task 수준의 State / Resource 요구사항을 설정할 수 있습니다.
+              </div>
+            ) : (
+              <>
+                <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 p-2">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-[10px] font-medium text-violet-300">State</span>
+                    {activePlanningDuring && (
+                      <button
+                        onClick={() => handlePlanningDuringChange('')}
+                        className="text-[9px] text-muted hover:text-red-400"
+                      >
+                        clear
+                      </button>
+                    )}
+                  </div>
+
+                  {tdStates.length === 0 ? (
+                    <p className="text-[10px] text-muted italic">사용 가능한 state가 없습니다</p>
+                  ) : (
+                    <div className="space-y-2">
+                      <div>
+                        <div className="mb-1 text-[9px] font-medium text-violet-200">During State</div>
+                        <div className="flex items-center gap-1">
+                          <select
+                            className="flex-1 rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none"
+                            value={activePlanningDuring?.variable || ''}
+                            onChange={(e) => handlePlanningDuringChange(e.target.value)}
+                          >
+                            <option value="">state 선택</option>
+                            {tdStates.map((stateVar) => (
+                              <option key={stateVar.id} value={stateVar.name}>{stateVar.name}</option>
+                            ))}
+                          </select>
+                          <span className="text-[10px] text-secondary">=</span>
+                          {(() => {
+                            const currentVar = tdStates.find(item => item.name === activePlanningDuring?.variable)
+                            if (currentVar?.type === 'bool') {
+                              return (
+                                <select
+                                  className="w-20 rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none"
+                                  value={activePlanningDuring?.value || 'true'}
+                                  onChange={(e) => handlePlanningDuringChange(activePlanningDuring?.variable || '', e.target.value)}
+                                  disabled={!activePlanningDuring?.variable}
+                                >
+                                  <option value="true">true</option>
+                                  <option value="false">false</option>
+                                </select>
+                              )
+                            }
+                            return (
+                              <input
+                                type={currentVar?.type === 'int' ? 'number' : 'text'}
+                                className="w-24 rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none disabled:opacity-40"
+                                value={activePlanningDuring?.value || ''}
+                                onChange={(e) => handlePlanningDuringChange(activePlanningDuring?.variable || '', e.target.value)}
+                                disabled={!activePlanningDuring?.variable}
+                              />
+                            )
+                          })()}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="mb-1 text-[9px] font-medium text-violet-200">Result States</div>
+                        <div className="flex gap-1">
+                          <select
+                            className="flex-1 rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none"
+                            value={planningResultVariable}
+                            onChange={(e) => {
+                              const variable = e.target.value
+                              setPlanningResultVariable(variable)
+                              const stateVar = tdStates.find(item => item.name === variable)
+                              setPlanningResultValue(getStateDefaultValue(stateVar))
+                            }}
+                          >
+                            <option value="">state 선택</option>
+                            {tdStates.map((stateVar) => (
+                              <option key={stateVar.id} value={stateVar.name}>{stateVar.name}</option>
+                            ))}
+                          </select>
+                          {(() => {
+                            const currentVar = tdStates.find(item => item.name === planningResultVariable)
+                            if (currentVar?.type === 'bool') {
+                              return (
+                                <select
+                                  className="w-20 rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none"
+                                  value={planningResultValue || 'true'}
+                                  onChange={(e) => setPlanningResultValue(e.target.value)}
+                                  disabled={!planningResultVariable}
+                                >
+                                  <option value="true">true</option>
+                                  <option value="false">false</option>
+                                </select>
+                              )
+                            }
+                            return (
+                              <input
+                                type={currentVar?.type === 'int' ? 'number' : 'text'}
+                                className="w-24 rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none disabled:opacity-40"
+                                value={planningResultValue}
+                                onChange={(e) => setPlanningResultValue(e.target.value)}
+                                disabled={!planningResultVariable}
+                              />
+                            )
+                          })()}
+                          <button
+                            onClick={handleAddPlanningResult}
+                            disabled={!planningResultVariable}
+                            className="rounded bg-violet-500/20 px-2 text-violet-300 disabled:opacity-40"
+                          >
+                            <Plus size={12} />
+                          </button>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {(planningTask.result_states || []).length === 0 ? (
+                            <span className="text-[9px] text-muted">결과 상태 없음</span>
+                          ) : (planningTask.result_states || []).map((effect) => (
+                            <span
+                              key={effect.variable}
+                              className="inline-flex items-center gap-1 rounded-full bg-violet-500/10 px-2 py-0.5 text-[9px] text-violet-200"
+                            >
+                              {effect.variable} = {effect.value}
+                              <button onClick={() => handleDeletePlanningResult(effect.variable)}>
+                                <X size={9} />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-2">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-[10px] font-medium text-amber-300">Resources</span>
+                    <span className="text-[9px] text-secondary">Action Node Sync</span>
+                  </div>
+
+                  {tdResources.length === 0 ? (
+                    <p className="text-[10px] text-muted italic">사용 가능한 resource가 없습니다</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {taskResourceFlow.length === 0 ? (
+                        <p className="text-[10px] text-muted">
+                          각 Action Node에서 acquire / release resource를 지정하면 여기서 task 요구사항으로 자동 집계됩니다.
+                        </p>
+                      ) : taskResourceFlow.map((flow) => (
+                        <div key={flow.token} className="rounded border border-amber-500/20 bg-base/50 p-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[10px] font-medium text-amber-200">
+                              {formatPlanningResourceToken(flow.token, tdResources)}
+                            </span>
+                            <span className={`rounded-full px-1.5 py-0.5 text-[8px] ${
+                              flow.holdUntilTaskEnd
+                                ? 'bg-rose-500/10 text-rose-300'
+                                : 'bg-emerald-500/10 text-emerald-300'
+                            }`}>
+                              {flow.holdUntilTaskEnd ? 'task end hold' : 'released in-step'}
+                            </span>
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[8px] text-amber-200">
+                              acquire {flow.acquireSteps.length}
+                            </span>
+                            <span className="rounded-full bg-surface px-1.5 py-0.5 text-[8px] text-secondary">
+                              release {flow.releaseSteps.length}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-[9px] text-secondary">
+                            Acquire: {flow.acquireSteps.join(', ')}
+                          </div>
+                          {flow.releaseSteps.length > 0 && (
+                            <div className="mt-1 text-[9px] text-secondary">
+                              Release: {flow.releaseSteps.join(', ')}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      <div className="rounded border border-amber-500/15 bg-amber-500/5 px-2 py-1.5 text-[9px] text-secondary">
+                        planner required_resources는 Action Node acquire 집합에서 자동 동기화됩니다.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
           </div>
 
           {/* States Management */}
@@ -3080,14 +3475,12 @@ function convertActionGraphToGraph(
         fieldSources: step.action?.params?.field_sources,
         waypointId: step.action?.params?.waypoint_id,
         jobName: step.job_name || (isTerminal ? '' : getDefaultJobNameTemplate(normalizedServer || step.action?.server, step.name || step.id)),
+        resourceAcquire: Array.from(new Set(step.resource_acquire || [])),
+        resourceRelease: Array.from(new Set(step.resource_release || [])),
         finalState: isTerminal ? (step.terminal_type === 'success' ? defaultState : errorState) : undefined,
         availableStates,
         availableAgents,
         isEditing: false,
-        // PDDL Planning fields
-        resourceAcquire: step.resource_acquire || [],
-        resourceRelease: step.resource_release || [],
-        planningDuring: (step.planning_during || []).slice(0, 1),
       },
     })
 

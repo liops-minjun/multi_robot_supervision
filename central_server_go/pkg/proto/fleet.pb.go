@@ -73,6 +73,61 @@ func (AgentState) EnumDescriptor() ([]byte, []int) {
 	return file_fleet_proto_rawDescGZIP(), []int{0}
 }
 
+type LifecycleState int32
+
+const (
+	LifecycleState_LIFECYCLE_STATE_UNKNOWN      LifecycleState = 0
+	LifecycleState_LIFECYCLE_STATE_UNCONFIGURED LifecycleState = 1
+	LifecycleState_LIFECYCLE_STATE_INACTIVE     LifecycleState = 2
+	LifecycleState_LIFECYCLE_STATE_ACTIVE       LifecycleState = 3
+	LifecycleState_LIFECYCLE_STATE_FINALIZED    LifecycleState = 4
+)
+
+// Enum value maps for LifecycleState.
+var (
+	LifecycleState_name = map[int32]string{
+		0: "LIFECYCLE_STATE_UNKNOWN",
+		1: "LIFECYCLE_STATE_UNCONFIGURED",
+		2: "LIFECYCLE_STATE_INACTIVE",
+		3: "LIFECYCLE_STATE_ACTIVE",
+		4: "LIFECYCLE_STATE_FINALIZED",
+	}
+	LifecycleState_value = map[string]int32{
+		"LIFECYCLE_STATE_UNKNOWN":      0,
+		"LIFECYCLE_STATE_UNCONFIGURED": 1,
+		"LIFECYCLE_STATE_INACTIVE":     2,
+		"LIFECYCLE_STATE_ACTIVE":       3,
+		"LIFECYCLE_STATE_FINALIZED":    4,
+	}
+)
+
+func (x LifecycleState) Enum() *LifecycleState {
+	p := new(LifecycleState)
+	*p = x
+	return p
+}
+
+func (x LifecycleState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (LifecycleState) Descriptor() protoreflect.EnumDescriptor {
+	return file_fleet_proto_enumTypes[1].Descriptor()
+}
+
+func (LifecycleState) Type() protoreflect.EnumType {
+	return &file_fleet_proto_enumTypes[1]
+}
+
+func (x LifecycleState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use LifecycleState.Descriptor instead.
+func (LifecycleState) EnumDescriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{1}
+}
+
 type ActionStatus int32
 
 const (
@@ -115,11 +170,11 @@ func (x ActionStatus) String() string {
 }
 
 func (ActionStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_fleet_proto_enumTypes[1].Descriptor()
+	return file_fleet_proto_enumTypes[2].Descriptor()
 }
 
 func (ActionStatus) Type() protoreflect.EnumType {
-	return &file_fleet_proto_enumTypes[1]
+	return &file_fleet_proto_enumTypes[2]
 }
 
 func (x ActionStatus) Number() protoreflect.EnumNumber {
@@ -128,7 +183,7 @@ func (x ActionStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ActionStatus.Descriptor instead.
 func (ActionStatus) EnumDescriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{1}
+	return file_fleet_proto_rawDescGZIP(), []int{2}
 }
 
 type TaskLogLevel int32
@@ -167,11 +222,11 @@ func (x TaskLogLevel) String() string {
 }
 
 func (TaskLogLevel) Descriptor() protoreflect.EnumDescriptor {
-	return file_fleet_proto_enumTypes[2].Descriptor()
+	return file_fleet_proto_enumTypes[3].Descriptor()
 }
 
 func (TaskLogLevel) Type() protoreflect.EnumType {
-	return &file_fleet_proto_enumTypes[2]
+	return &file_fleet_proto_enumTypes[3]
 }
 
 func (x TaskLogLevel) Number() protoreflect.EnumNumber {
@@ -180,7 +235,120 @@ func (x TaskLogLevel) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use TaskLogLevel.Descriptor instead.
 func (TaskLogLevel) EnumDescriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{2}
+	return file_fleet_proto_rawDescGZIP(), []int{3}
+}
+
+type TaskState int32
+
+const (
+	TaskState_TASK_STATE_UNKNOWN              TaskState = 0
+	TaskState_TASK_STATE_PENDING              TaskState = 1
+	TaskState_TASK_STATE_RUNNING              TaskState = 2
+	TaskState_TASK_STATE_WAITING_PRECONDITION TaskState = 3
+	TaskState_TASK_STATE_EXECUTING_ACTION     TaskState = 4
+	TaskState_TASK_STATE_COMPLETED            TaskState = 5
+	TaskState_TASK_STATE_FAILED               TaskState = 6
+	TaskState_TASK_STATE_CANCELLED            TaskState = 7
+)
+
+// Enum value maps for TaskState.
+var (
+	TaskState_name = map[int32]string{
+		0: "TASK_STATE_UNKNOWN",
+		1: "TASK_STATE_PENDING",
+		2: "TASK_STATE_RUNNING",
+		3: "TASK_STATE_WAITING_PRECONDITION",
+		4: "TASK_STATE_EXECUTING_ACTION",
+		5: "TASK_STATE_COMPLETED",
+		6: "TASK_STATE_FAILED",
+		7: "TASK_STATE_CANCELLED",
+	}
+	TaskState_value = map[string]int32{
+		"TASK_STATE_UNKNOWN":              0,
+		"TASK_STATE_PENDING":              1,
+		"TASK_STATE_RUNNING":              2,
+		"TASK_STATE_WAITING_PRECONDITION": 3,
+		"TASK_STATE_EXECUTING_ACTION":     4,
+		"TASK_STATE_COMPLETED":            5,
+		"TASK_STATE_FAILED":               6,
+		"TASK_STATE_CANCELLED":            7,
+	}
+)
+
+func (x TaskState) Enum() *TaskState {
+	p := new(TaskState)
+	*p = x
+	return p
+}
+
+func (x TaskState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TaskState) Descriptor() protoreflect.EnumDescriptor {
+	return file_fleet_proto_enumTypes[4].Descriptor()
+}
+
+func (TaskState) Type() protoreflect.EnumType {
+	return &file_fleet_proto_enumTypes[4]
+}
+
+func (x TaskState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TaskState.Descriptor instead.
+func (TaskState) EnumDescriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{4}
+}
+
+type ResourceEventKind int32
+
+const (
+	ResourceEventKind_RESOURCE_EVENT_UNKNOWN  ResourceEventKind = 0
+	ResourceEventKind_RESOURCE_EVENT_ACQUIRED ResourceEventKind = 1
+	ResourceEventKind_RESOURCE_EVENT_RELEASED ResourceEventKind = 2
+)
+
+// Enum value maps for ResourceEventKind.
+var (
+	ResourceEventKind_name = map[int32]string{
+		0: "RESOURCE_EVENT_UNKNOWN",
+		1: "RESOURCE_EVENT_ACQUIRED",
+		2: "RESOURCE_EVENT_RELEASED",
+	}
+	ResourceEventKind_value = map[string]int32{
+		"RESOURCE_EVENT_UNKNOWN":  0,
+		"RESOURCE_EVENT_ACQUIRED": 1,
+		"RESOURCE_EVENT_RELEASED": 2,
+	}
+)
+
+func (x ResourceEventKind) Enum() *ResourceEventKind {
+	p := new(ResourceEventKind)
+	*p = x
+	return p
+}
+
+func (x ResourceEventKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ResourceEventKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_fleet_proto_enumTypes[5].Descriptor()
+}
+
+func (ResourceEventKind) Type() protoreflect.EnumType {
+	return &file_fleet_proto_enumTypes[5]
+}
+
+func (x ResourceEventKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ResourceEventKind.Descriptor instead.
+func (ResourceEventKind) EnumDescriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{5}
 }
 
 type AgentStateUpdate_StatePhase int32
@@ -222,11 +390,11 @@ func (x AgentStateUpdate_StatePhase) String() string {
 }
 
 func (AgentStateUpdate_StatePhase) Descriptor() protoreflect.EnumDescriptor {
-	return file_fleet_proto_enumTypes[3].Descriptor()
+	return file_fleet_proto_enumTypes[6].Descriptor()
 }
 
 func (AgentStateUpdate_StatePhase) Type() protoreflect.EnumType {
-	return &file_fleet_proto_enumTypes[3]
+	return &file_fleet_proto_enumTypes[6]
 }
 
 func (x AgentStateUpdate_StatePhase) Number() protoreflect.EnumNumber {
@@ -236,6 +404,58 @@ func (x AgentStateUpdate_StatePhase) Number() protoreflect.EnumNumber {
 // Deprecated: Use AgentStateUpdate_StatePhase.Descriptor instead.
 func (AgentStateUpdate_StatePhase) EnumDescriptor() ([]byte, []int) {
 	return file_fleet_proto_rawDescGZIP(), []int{1, 0}
+}
+
+type GraphUpdateNotification_GraphUpdateAction int32
+
+const (
+	GraphUpdateNotification_UPDATE_UNKNOWN GraphUpdateNotification_GraphUpdateAction = 0
+	GraphUpdateNotification_MODIFIED       GraphUpdateNotification_GraphUpdateAction = 1 // Graph was modified → auto-redeploy
+	GraphUpdateNotification_DELETED        GraphUpdateNotification_GraphUpdateAction = 2 // Graph was deleted
+	GraphUpdateNotification_UNASSIGNED     GraphUpdateNotification_GraphUpdateAction = 3 // Graph was unassigned from agent → delete local copy
+)
+
+// Enum value maps for GraphUpdateNotification_GraphUpdateAction.
+var (
+	GraphUpdateNotification_GraphUpdateAction_name = map[int32]string{
+		0: "UPDATE_UNKNOWN",
+		1: "MODIFIED",
+		2: "DELETED",
+		3: "UNASSIGNED",
+	}
+	GraphUpdateNotification_GraphUpdateAction_value = map[string]int32{
+		"UPDATE_UNKNOWN": 0,
+		"MODIFIED":       1,
+		"DELETED":        2,
+		"UNASSIGNED":     3,
+	}
+)
+
+func (x GraphUpdateNotification_GraphUpdateAction) Enum() *GraphUpdateNotification_GraphUpdateAction {
+	p := new(GraphUpdateNotification_GraphUpdateAction)
+	*p = x
+	return p
+}
+
+func (x GraphUpdateNotification_GraphUpdateAction) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (GraphUpdateNotification_GraphUpdateAction) Descriptor() protoreflect.EnumDescriptor {
+	return file_fleet_proto_enumTypes[7].Descriptor()
+}
+
+func (GraphUpdateNotification_GraphUpdateAction) Type() protoreflect.EnumType {
+	return &file_fleet_proto_enumTypes[7]
+}
+
+func (x GraphUpdateNotification_GraphUpdateAction) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use GraphUpdateNotification_GraphUpdateAction.Descriptor instead.
+func (GraphUpdateNotification_GraphUpdateAction) EnumDescriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{9, 0}
 }
 
 type EnhancedPrecondition_PreconditionType int32
@@ -277,11 +497,11 @@ func (x EnhancedPrecondition_PreconditionType) String() string {
 }
 
 func (EnhancedPrecondition_PreconditionType) Descriptor() protoreflect.EnumDescriptor {
-	return file_fleet_proto_enumTypes[4].Descriptor()
+	return file_fleet_proto_enumTypes[8].Descriptor()
 }
 
 func (EnhancedPrecondition_PreconditionType) Type() protoreflect.EnumType {
-	return &file_fleet_proto_enumTypes[4]
+	return &file_fleet_proto_enumTypes[8]
 }
 
 func (x EnhancedPrecondition_PreconditionType) Number() protoreflect.EnumNumber {
@@ -290,7 +510,7 @@ func (x EnhancedPrecondition_PreconditionType) Number() protoreflect.EnumNumber 
 
 // Deprecated: Use EnhancedPrecondition_PreconditionType.Descriptor instead.
 func (EnhancedPrecondition_PreconditionType) EnumDescriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{26, 0}
+	return file_fleet_proto_rawDescGZIP(), []int{36, 0}
 }
 
 type EnhancedPrecondition_PreconditionOperator int32
@@ -335,11 +555,11 @@ func (x EnhancedPrecondition_PreconditionOperator) String() string {
 }
 
 func (EnhancedPrecondition_PreconditionOperator) Descriptor() protoreflect.EnumDescriptor {
-	return file_fleet_proto_enumTypes[5].Descriptor()
+	return file_fleet_proto_enumTypes[9].Descriptor()
 }
 
 func (EnhancedPrecondition_PreconditionOperator) Type() protoreflect.EnumType {
-	return &file_fleet_proto_enumTypes[5]
+	return &file_fleet_proto_enumTypes[9]
 }
 
 func (x EnhancedPrecondition_PreconditionOperator) Number() protoreflect.EnumNumber {
@@ -348,7 +568,7 @@ func (x EnhancedPrecondition_PreconditionOperator) Number() protoreflect.EnumNum
 
 // Deprecated: Use EnhancedPrecondition_PreconditionOperator.Descriptor instead.
 func (EnhancedPrecondition_PreconditionOperator) EnumDescriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{26, 1}
+	return file_fleet_proto_rawDescGZIP(), []int{36, 1}
 }
 
 type AgentMessage struct {
@@ -362,6 +582,7 @@ type AgentMessage struct {
 	//	*AgentMessage_StatusUpdate
 	//	*AgentMessage_StateUpdate
 	//	*AgentMessage_TaskLog
+	//	*AgentMessage_TaskState
 	Payload       isAgentMessage_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -463,6 +684,15 @@ func (x *AgentMessage) GetTaskLog() *TaskLog {
 	return nil
 }
 
+func (x *AgentMessage) GetTaskState() *TaskStateUpdate {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentMessage_TaskState); ok {
+			return x.TaskState
+		}
+	}
+	return nil
+}
+
 type isAgentMessage_Payload interface {
 	isAgentMessage_Payload()
 }
@@ -487,6 +717,10 @@ type AgentMessage_TaskLog struct {
 	TaskLog *TaskLog `protobuf:"bytes,14,opt,name=task_log,json=taskLog,proto3,oneof"` // Task execution logs
 }
 
+type AgentMessage_TaskState struct {
+	TaskState *TaskStateUpdate `protobuf:"bytes,15,opt,name=task_state,json=taskState,proto3,oneof"` // Agent-driven task state update
+}
+
 func (*AgentMessage_Heartbeat) isAgentMessage_Payload() {}
 
 func (*AgentMessage_ActionResult) isAgentMessage_Payload() {}
@@ -496,6 +730,8 @@ func (*AgentMessage_StatusUpdate) isAgentMessage_Payload() {}
 func (*AgentMessage_StateUpdate) isAgentMessage_Payload() {}
 
 func (*AgentMessage_TaskLog) isAgentMessage_Payload() {}
+
+func (*AgentMessage_TaskState) isAgentMessage_Payload() {}
 
 // Enhanced state update message for cross-agent state tracking
 type AgentStateUpdate struct {
@@ -596,6 +832,10 @@ type AgentHeartbeat struct {
 	CurrentGraphId string   `protobuf:"bytes,9,opt,name=current_graph_id,json=currentGraphId,proto3" json:"current_graph_id,omitempty"` // Currently executing action graph ID
 	CurrentTaskId  string   `protobuf:"bytes,10,opt,name=current_task_id,json=currentTaskId,proto3" json:"current_task_id,omitempty"`
 	CurrentStepId  string   `protobuf:"bytes,11,opt,name=current_step_id,json=currentStepId,proto3" json:"current_step_id,omitempty"`
+	// Telemetry payload for parameter loading
+	Telemetry *TelemetryPayload `protobuf:"bytes,12,opt,name=telemetry,proto3" json:"telemetry,omitempty"`
+	// Runtime resource occupancy changes reported by the agent.
+	ResourceEvents []*ResourceEvent `protobuf:"bytes,13,rep,name=resource_events,json=resourceEvents,proto3" json:"resource_events,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -707,6 +947,20 @@ func (x *AgentHeartbeat) GetCurrentStepId() string {
 	return ""
 }
 
+func (x *AgentHeartbeat) GetTelemetry() *TelemetryPayload {
+	if x != nil {
+		return x.Telemetry
+	}
+	return nil
+}
+
+func (x *AgentHeartbeat) GetResourceEvents() []*ResourceEvent {
+	if x != nil {
+		return x.ResourceEvents
+	}
+	return nil
+}
+
 type AgentStatusUpdate struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	State         AgentState             `protobuf:"varint,1,opt,name=state,proto3,enum=fleet.AgentState" json:"state,omitempty"`
@@ -780,6 +1034,9 @@ type ServerMessage struct {
 	//	*ServerMessage_ConfigUpdate
 	//	*ServerMessage_FleetStateUpdate
 	//	*ServerMessage_DeployGraph
+	//	*ServerMessage_StartTask
+	//	*ServerMessage_DeleteGraph
+	//	*ServerMessage_GraphUpdate
 	Payload       isServerMessage_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -897,6 +1154,33 @@ func (x *ServerMessage) GetDeployGraph() *DeployGraphCommand {
 	return nil
 }
 
+func (x *ServerMessage) GetStartTask() *StartTaskCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*ServerMessage_StartTask); ok {
+			return x.StartTask
+		}
+	}
+	return nil
+}
+
+func (x *ServerMessage) GetDeleteGraph() *DeleteGraphCommand {
+	if x != nil {
+		if x, ok := x.Payload.(*ServerMessage_DeleteGraph); ok {
+			return x.DeleteGraph
+		}
+	}
+	return nil
+}
+
+func (x *ServerMessage) GetGraphUpdate() *GraphUpdateNotification {
+	if x != nil {
+		if x, ok := x.Payload.(*ServerMessage_GraphUpdate); ok {
+			return x.GraphUpdate
+		}
+	}
+	return nil
+}
+
 type isServerMessage_Payload interface {
 	isServerMessage_Payload()
 }
@@ -925,6 +1209,18 @@ type ServerMessage_DeployGraph struct {
 	DeployGraph *DeployGraphCommand `protobuf:"bytes,15,opt,name=deploy_graph,json=deployGraph,proto3,oneof"` // Deploy action graph with states
 }
 
+type ServerMessage_StartTask struct {
+	StartTask *StartTaskCommand `protobuf:"bytes,16,opt,name=start_task,json=startTask,proto3,oneof"` // Agent-driven task execution
+}
+
+type ServerMessage_DeleteGraph struct {
+	DeleteGraph *DeleteGraphCommand `protobuf:"bytes,17,opt,name=delete_graph,json=deleteGraph,proto3,oneof"` // Delete graph from agent storage
+}
+
+type ServerMessage_GraphUpdate struct {
+	GraphUpdate *GraphUpdateNotification `protobuf:"bytes,18,opt,name=graph_update,json=graphUpdate,proto3,oneof"` // Real-time graph sync notification
+}
+
 func (*ServerMessage_Execute) isServerMessage_Payload() {}
 
 func (*ServerMessage_Cancel) isServerMessage_Payload() {}
@@ -936,6 +1232,12 @@ func (*ServerMessage_ConfigUpdate) isServerMessage_Payload() {}
 func (*ServerMessage_FleetStateUpdate) isServerMessage_Payload() {}
 
 func (*ServerMessage_DeployGraph) isServerMessage_Payload() {}
+
+func (*ServerMessage_StartTask) isServerMessage_Payload() {}
+
+func (*ServerMessage_DeleteGraph) isServerMessage_Payload() {}
+
+func (*ServerMessage_GraphUpdate) isServerMessage_Payload() {}
 
 // Fleet state update broadcast to agents for cross-agent precondition evaluation
 type FleetStateUpdate struct {
@@ -1183,6 +1485,160 @@ func (x *DeployGraphCommand) GetChecksum() string {
 	return ""
 }
 
+// Delete graph command (unassign from agent)
+type DeleteGraphCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CommandId     string                 `protobuf:"bytes,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	AgentId       string                 `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	ActionGraphId string                 `protobuf:"bytes,3,opt,name=action_graph_id,json=actionGraphId,proto3" json:"action_graph_id,omitempty"`
+	Reason        string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"` // "unassigned", "deleted", "modified" (for auto-redeploy)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteGraphCommand) Reset() {
+	*x = DeleteGraphCommand{}
+	mi := &file_fleet_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteGraphCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteGraphCommand) ProtoMessage() {}
+
+func (x *DeleteGraphCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_fleet_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteGraphCommand.ProtoReflect.Descriptor instead.
+func (*DeleteGraphCommand) Descriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *DeleteGraphCommand) GetCommandId() string {
+	if x != nil {
+		return x.CommandId
+	}
+	return ""
+}
+
+func (x *DeleteGraphCommand) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *DeleteGraphCommand) GetActionGraphId() string {
+	if x != nil {
+		return x.ActionGraphId
+	}
+	return ""
+}
+
+func (x *DeleteGraphCommand) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+// Graph update notification (for real-time sync)
+type GraphUpdateNotification struct {
+	state         protoimpl.MessageState                    `protogen:"open.v1"`
+	CommandId     string                                    `protobuf:"bytes,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	AgentId       string                                    `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	ActionGraphId string                                    `protobuf:"bytes,3,opt,name=action_graph_id,json=actionGraphId,proto3" json:"action_graph_id,omitempty"`
+	Action        GraphUpdateNotification_GraphUpdateAction `protobuf:"varint,4,opt,name=action,proto3,enum=fleet.GraphUpdateNotification_GraphUpdateAction" json:"action,omitempty"`
+	NewVersion    int32                                     `protobuf:"varint,5,opt,name=new_version,json=newVersion,proto3" json:"new_version,omitempty"`
+	GraphJson     []byte                                    `protobuf:"bytes,6,opt,name=graph_json,json=graphJson,proto3" json:"graph_json,omitempty"` // For MODIFIED action: new canonical graph JSON
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GraphUpdateNotification) Reset() {
+	*x = GraphUpdateNotification{}
+	mi := &file_fleet_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GraphUpdateNotification) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GraphUpdateNotification) ProtoMessage() {}
+
+func (x *GraphUpdateNotification) ProtoReflect() protoreflect.Message {
+	mi := &file_fleet_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GraphUpdateNotification.ProtoReflect.Descriptor instead.
+func (*GraphUpdateNotification) Descriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *GraphUpdateNotification) GetCommandId() string {
+	if x != nil {
+		return x.CommandId
+	}
+	return ""
+}
+
+func (x *GraphUpdateNotification) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *GraphUpdateNotification) GetActionGraphId() string {
+	if x != nil {
+		return x.ActionGraphId
+	}
+	return ""
+}
+
+func (x *GraphUpdateNotification) GetAction() GraphUpdateNotification_GraphUpdateAction {
+	if x != nil {
+		return x.Action
+	}
+	return GraphUpdateNotification_UPDATE_UNKNOWN
+}
+
+func (x *GraphUpdateNotification) GetNewVersion() int32 {
+	if x != nil {
+		return x.NewVersion
+	}
+	return 0
+}
+
+func (x *GraphUpdateNotification) GetGraphJson() []byte {
+	if x != nil {
+		return x.GraphJson
+	}
+	return nil
+}
+
 // Graph state definition
 type GraphState struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1200,7 +1656,7 @@ type GraphState struct {
 
 func (x *GraphState) Reset() {
 	*x = GraphState{}
-	mi := &file_fleet_proto_msgTypes[8]
+	mi := &file_fleet_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1212,7 +1668,7 @@ func (x *GraphState) String() string {
 func (*GraphState) ProtoMessage() {}
 
 func (x *GraphState) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[8]
+	mi := &file_fleet_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1225,7 +1681,7 @@ func (x *GraphState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GraphState.ProtoReflect.Descriptor instead.
 func (*GraphState) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{8}
+	return file_fleet_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *GraphState) GetCode() string {
@@ -1301,7 +1757,7 @@ type ExecuteCommand struct {
 
 func (x *ExecuteCommand) Reset() {
 	*x = ExecuteCommand{}
-	mi := &file_fleet_proto_msgTypes[9]
+	mi := &file_fleet_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1313,7 +1769,7 @@ func (x *ExecuteCommand) String() string {
 func (*ExecuteCommand) ProtoMessage() {}
 
 func (x *ExecuteCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[9]
+	mi := &file_fleet_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1326,7 +1782,7 @@ func (x *ExecuteCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecuteCommand.ProtoReflect.Descriptor instead.
 func (*ExecuteCommand) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{9}
+	return file_fleet_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ExecuteCommand) GetCommandId() string {
@@ -1404,7 +1860,7 @@ type CancelCommand struct {
 
 func (x *CancelCommand) Reset() {
 	*x = CancelCommand{}
-	mi := &file_fleet_proto_msgTypes[10]
+	mi := &file_fleet_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1416,7 +1872,7 @@ func (x *CancelCommand) String() string {
 func (*CancelCommand) ProtoMessage() {}
 
 func (x *CancelCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[10]
+	mi := &file_fleet_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1429,7 +1885,7 @@ func (x *CancelCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelCommand.ProtoReflect.Descriptor instead.
 func (*CancelCommand) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{10}
+	return file_fleet_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *CancelCommand) GetCommandId() string {
@@ -1471,7 +1927,7 @@ type ServerAck struct {
 
 func (x *ServerAck) Reset() {
 	*x = ServerAck{}
-	mi := &file_fleet_proto_msgTypes[11]
+	mi := &file_fleet_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1483,7 +1939,7 @@ func (x *ServerAck) String() string {
 func (*ServerAck) ProtoMessage() {}
 
 func (x *ServerAck) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[11]
+	mi := &file_fleet_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1496,7 +1952,7 @@ func (x *ServerAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerAck.ProtoReflect.Descriptor instead.
 func (*ServerAck) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{11}
+	return file_fleet_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ServerAck) GetAckedMessageId() string {
@@ -1531,7 +1987,7 @@ type ConfigUpdate struct {
 
 func (x *ConfigUpdate) Reset() {
 	*x = ConfigUpdate{}
-	mi := &file_fleet_proto_msgTypes[12]
+	mi := &file_fleet_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1543,7 +1999,7 @@ func (x *ConfigUpdate) String() string {
 func (*ConfigUpdate) ProtoMessage() {}
 
 func (x *ConfigUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[12]
+	mi := &file_fleet_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1556,7 +2012,7 @@ func (x *ConfigUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigUpdate.ProtoReflect.Descriptor instead.
 func (*ConfigUpdate) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{12}
+	return file_fleet_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ConfigUpdate) GetAgentId() string {
@@ -1597,7 +2053,7 @@ type ActionResult struct {
 
 func (x *ActionResult) Reset() {
 	*x = ActionResult{}
-	mi := &file_fleet_proto_msgTypes[13]
+	mi := &file_fleet_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1609,7 +2065,7 @@ func (x *ActionResult) String() string {
 func (*ActionResult) ProtoMessage() {}
 
 func (x *ActionResult) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[13]
+	mi := &file_fleet_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1622,7 +2078,7 @@ func (x *ActionResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActionResult.ProtoReflect.Descriptor instead.
 func (*ActionResult) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{13}
+	return file_fleet_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ActionResult) GetCommandId() string {
@@ -1701,7 +2157,7 @@ type RegisterAgentRequest struct {
 
 func (x *RegisterAgentRequest) Reset() {
 	*x = RegisterAgentRequest{}
-	mi := &file_fleet_proto_msgTypes[14]
+	mi := &file_fleet_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1713,7 +2169,7 @@ func (x *RegisterAgentRequest) String() string {
 func (*RegisterAgentRequest) ProtoMessage() {}
 
 func (x *RegisterAgentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[14]
+	mi := &file_fleet_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1726,7 +2182,7 @@ func (x *RegisterAgentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterAgentRequest.ProtoReflect.Descriptor instead.
 func (*RegisterAgentRequest) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{14}
+	return file_fleet_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *RegisterAgentRequest) GetAgentId() string {
@@ -1778,7 +2234,7 @@ type RegisterAgentResponse struct {
 
 func (x *RegisterAgentResponse) Reset() {
 	*x = RegisterAgentResponse{}
-	mi := &file_fleet_proto_msgTypes[15]
+	mi := &file_fleet_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1790,7 +2246,7 @@ func (x *RegisterAgentResponse) String() string {
 func (*RegisterAgentResponse) ProtoMessage() {}
 
 func (x *RegisterAgentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[15]
+	mi := &file_fleet_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1803,7 +2259,7 @@ func (x *RegisterAgentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterAgentResponse.ProtoReflect.Descriptor instead.
 func (*RegisterAgentResponse) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{15}
+	return file_fleet_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *RegisterAgentResponse) GetSuccess() bool {
@@ -1859,7 +2315,7 @@ type AgentConfig struct {
 
 func (x *AgentConfig) Reset() {
 	*x = AgentConfig{}
-	mi := &file_fleet_proto_msgTypes[16]
+	mi := &file_fleet_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1871,7 +2327,7 @@ func (x *AgentConfig) String() string {
 func (*AgentConfig) ProtoMessage() {}
 
 func (x *AgentConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[16]
+	mi := &file_fleet_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1884,7 +2340,7 @@ func (x *AgentConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentConfig.ProtoReflect.Descriptor instead.
 func (*AgentConfig) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{16}
+	return file_fleet_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *AgentConfig) GetAgentId() string {
@@ -1920,7 +2376,7 @@ type ExecuteTaskRequest struct {
 
 func (x *ExecuteTaskRequest) Reset() {
 	*x = ExecuteTaskRequest{}
-	mi := &file_fleet_proto_msgTypes[17]
+	mi := &file_fleet_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1932,7 +2388,7 @@ func (x *ExecuteTaskRequest) String() string {
 func (*ExecuteTaskRequest) ProtoMessage() {}
 
 func (x *ExecuteTaskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[17]
+	mi := &file_fleet_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1945,7 +2401,7 @@ func (x *ExecuteTaskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecuteTaskRequest.ProtoReflect.Descriptor instead.
 func (*ExecuteTaskRequest) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{17}
+	return file_fleet_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ExecuteTaskRequest) GetActionGraphId() string {
@@ -1987,7 +2443,7 @@ type ExecuteTaskResponse struct {
 
 func (x *ExecuteTaskResponse) Reset() {
 	*x = ExecuteTaskResponse{}
-	mi := &file_fleet_proto_msgTypes[18]
+	mi := &file_fleet_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1999,7 +2455,7 @@ func (x *ExecuteTaskResponse) String() string {
 func (*ExecuteTaskResponse) ProtoMessage() {}
 
 func (x *ExecuteTaskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[18]
+	mi := &file_fleet_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2012,7 +2468,7 @@ func (x *ExecuteTaskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecuteTaskResponse.ProtoReflect.Descriptor instead.
 func (*ExecuteTaskResponse) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{18}
+	return file_fleet_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ExecuteTaskResponse) GetSuccess() bool {
@@ -2046,7 +2502,7 @@ type CancelTaskRequest struct {
 
 func (x *CancelTaskRequest) Reset() {
 	*x = CancelTaskRequest{}
-	mi := &file_fleet_proto_msgTypes[19]
+	mi := &file_fleet_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2058,7 +2514,7 @@ func (x *CancelTaskRequest) String() string {
 func (*CancelTaskRequest) ProtoMessage() {}
 
 func (x *CancelTaskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[19]
+	mi := &file_fleet_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2071,7 +2527,7 @@ func (x *CancelTaskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelTaskRequest.ProtoReflect.Descriptor instead.
 func (*CancelTaskRequest) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{19}
+	return file_fleet_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *CancelTaskRequest) GetTaskId() string {
@@ -2098,7 +2554,7 @@ type CancelTaskResponse struct {
 
 func (x *CancelTaskResponse) Reset() {
 	*x = CancelTaskResponse{}
-	mi := &file_fleet_proto_msgTypes[20]
+	mi := &file_fleet_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2110,7 +2566,7 @@ func (x *CancelTaskResponse) String() string {
 func (*CancelTaskResponse) ProtoMessage() {}
 
 func (x *CancelTaskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[20]
+	mi := &file_fleet_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2123,7 +2579,7 @@ func (x *CancelTaskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelTaskResponse.ProtoReflect.Descriptor instead.
 func (*CancelTaskResponse) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{20}
+	return file_fleet_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *CancelTaskResponse) GetSuccess() bool {
@@ -2150,7 +2606,7 @@ type FleetStateRequest struct {
 
 func (x *FleetStateRequest) Reset() {
 	*x = FleetStateRequest{}
-	mi := &file_fleet_proto_msgTypes[21]
+	mi := &file_fleet_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2162,7 +2618,7 @@ func (x *FleetStateRequest) String() string {
 func (*FleetStateRequest) ProtoMessage() {}
 
 func (x *FleetStateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[21]
+	mi := &file_fleet_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2175,7 +2631,7 @@ func (x *FleetStateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FleetStateRequest.ProtoReflect.Descriptor instead.
 func (*FleetStateRequest) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{21}
+	return file_fleet_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *FleetStateRequest) GetAgentIds() []string {
@@ -2203,7 +2659,7 @@ type FleetStateResponse struct {
 
 func (x *FleetStateResponse) Reset() {
 	*x = FleetStateResponse{}
-	mi := &file_fleet_proto_msgTypes[22]
+	mi := &file_fleet_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2215,7 +2671,7 @@ func (x *FleetStateResponse) String() string {
 func (*FleetStateResponse) ProtoMessage() {}
 
 func (x *FleetStateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[22]
+	mi := &file_fleet_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2228,7 +2684,7 @@ func (x *FleetStateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FleetStateResponse.ProtoReflect.Descriptor instead.
 func (*FleetStateResponse) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{22}
+	return file_fleet_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *FleetStateResponse) GetTimestampMs() int64 {
@@ -2273,7 +2729,7 @@ type AgentStateSnapshot struct {
 
 func (x *AgentStateSnapshot) Reset() {
 	*x = AgentStateSnapshot{}
-	mi := &file_fleet_proto_msgTypes[23]
+	mi := &file_fleet_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2285,7 +2741,7 @@ func (x *AgentStateSnapshot) String() string {
 func (*AgentStateSnapshot) ProtoMessage() {}
 
 func (x *AgentStateSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[23]
+	mi := &file_fleet_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2298,7 +2754,7 @@ func (x *AgentStateSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentStateSnapshot.ProtoReflect.Descriptor instead.
 func (*AgentStateSnapshot) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{23}
+	return file_fleet_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *AgentStateSnapshot) GetAgentId() string {
@@ -2397,7 +2853,7 @@ type ZoneReservation struct {
 
 func (x *ZoneReservation) Reset() {
 	*x = ZoneReservation{}
-	mi := &file_fleet_proto_msgTypes[24]
+	mi := &file_fleet_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2409,7 +2865,7 @@ func (x *ZoneReservation) String() string {
 func (*ZoneReservation) ProtoMessage() {}
 
 func (x *ZoneReservation) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[24]
+	mi := &file_fleet_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2422,7 +2878,7 @@ func (x *ZoneReservation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ZoneReservation.ProtoReflect.Descriptor instead.
 func (*ZoneReservation) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{24}
+	return file_fleet_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ZoneReservation) GetZoneId() string {
@@ -2464,7 +2920,7 @@ type Ack struct {
 
 func (x *Ack) Reset() {
 	*x = Ack{}
-	mi := &file_fleet_proto_msgTypes[25]
+	mi := &file_fleet_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2476,7 +2932,7 @@ func (x *Ack) String() string {
 func (*Ack) ProtoMessage() {}
 
 func (x *Ack) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[25]
+	mi := &file_fleet_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2489,7 +2945,7 @@ func (x *Ack) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ack.ProtoReflect.Descriptor instead.
 func (*Ack) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{25}
+	return file_fleet_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *Ack) GetSuccess() bool {
@@ -2513,6 +2969,566 @@ func (x *Ack) GetError() string {
 	return ""
 }
 
+// 3D Vector
+type Vector3 struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	X             float64                `protobuf:"fixed64,1,opt,name=x,proto3" json:"x,omitempty"`
+	Y             float64                `protobuf:"fixed64,2,opt,name=y,proto3" json:"y,omitempty"`
+	Z             float64                `protobuf:"fixed64,3,opt,name=z,proto3" json:"z,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Vector3) Reset() {
+	*x = Vector3{}
+	mi := &file_fleet_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Vector3) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Vector3) ProtoMessage() {}
+
+func (x *Vector3) ProtoReflect() protoreflect.Message {
+	mi := &file_fleet_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Vector3.ProtoReflect.Descriptor instead.
+func (*Vector3) Descriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *Vector3) GetX() float64 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *Vector3) GetY() float64 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
+func (x *Vector3) GetZ() float64 {
+	if x != nil {
+		return x.Z
+	}
+	return 0
+}
+
+// Quaternion orientation
+type Quaternion struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	X             float64                `protobuf:"fixed64,1,opt,name=x,proto3" json:"x,omitempty"`
+	Y             float64                `protobuf:"fixed64,2,opt,name=y,proto3" json:"y,omitempty"`
+	Z             float64                `protobuf:"fixed64,3,opt,name=z,proto3" json:"z,omitempty"`
+	W             float64                `protobuf:"fixed64,4,opt,name=w,proto3" json:"w,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Quaternion) Reset() {
+	*x = Quaternion{}
+	mi := &file_fleet_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Quaternion) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Quaternion) ProtoMessage() {}
+
+func (x *Quaternion) ProtoReflect() protoreflect.Message {
+	mi := &file_fleet_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Quaternion.ProtoReflect.Descriptor instead.
+func (*Quaternion) Descriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *Quaternion) GetX() float64 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *Quaternion) GetY() float64 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
+func (x *Quaternion) GetZ() float64 {
+	if x != nil {
+		return x.Z
+	}
+	return 0
+}
+
+func (x *Quaternion) GetW() float64 {
+	if x != nil {
+		return x.W
+	}
+	return 0
+}
+
+// Pose (position + orientation)
+type Pose struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Position      *Vector3               `protobuf:"bytes,1,opt,name=position,proto3" json:"position,omitempty"`
+	Orientation   *Quaternion            `protobuf:"bytes,2,opt,name=orientation,proto3" json:"orientation,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Pose) Reset() {
+	*x = Pose{}
+	mi := &file_fleet_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Pose) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Pose) ProtoMessage() {}
+
+func (x *Pose) ProtoReflect() protoreflect.Message {
+	mi := &file_fleet_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Pose.ProtoReflect.Descriptor instead.
+func (*Pose) Descriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *Pose) GetPosition() *Vector3 {
+	if x != nil {
+		return x.Position
+	}
+	return nil
+}
+
+func (x *Pose) GetOrientation() *Quaternion {
+	if x != nil {
+		return x.Orientation
+	}
+	return nil
+}
+
+// Twist (linear + angular velocity)
+type Twist struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Linear        *Vector3               `protobuf:"bytes,1,opt,name=linear,proto3" json:"linear,omitempty"`
+	Angular       *Vector3               `protobuf:"bytes,2,opt,name=angular,proto3" json:"angular,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Twist) Reset() {
+	*x = Twist{}
+	mi := &file_fleet_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Twist) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Twist) ProtoMessage() {}
+
+func (x *Twist) ProtoReflect() protoreflect.Message {
+	mi := &file_fleet_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Twist.ProtoReflect.Descriptor instead.
+func (*Twist) Descriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *Twist) GetLinear() *Vector3 {
+	if x != nil {
+		return x.Linear
+	}
+	return nil
+}
+
+func (x *Twist) GetAngular() *Vector3 {
+	if x != nil {
+		return x.Angular
+	}
+	return nil
+}
+
+// JointState telemetry
+type JointStateData struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          []string               `protobuf:"bytes,1,rep,name=name,proto3" json:"name,omitempty"`
+	Position      []float64              `protobuf:"fixed64,2,rep,packed,name=position,proto3" json:"position,omitempty"`
+	Velocity      []float64              `protobuf:"fixed64,3,rep,packed,name=velocity,proto3" json:"velocity,omitempty"`
+	Effort        []float64              `protobuf:"fixed64,4,rep,packed,name=effort,proto3" json:"effort,omitempty"`
+	TimestampNs   int64                  `protobuf:"varint,5,opt,name=timestamp_ns,json=timestampNs,proto3" json:"timestamp_ns,omitempty"`
+	TopicName     string                 `protobuf:"bytes,6,opt,name=topic_name,json=topicName,proto3" json:"topic_name,omitempty"` // ROS2 topic name (e.g., "/robot_001/joint_states")
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *JointStateData) Reset() {
+	*x = JointStateData{}
+	mi := &file_fleet_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *JointStateData) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*JointStateData) ProtoMessage() {}
+
+func (x *JointStateData) ProtoReflect() protoreflect.Message {
+	mi := &file_fleet_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use JointStateData.ProtoReflect.Descriptor instead.
+func (*JointStateData) Descriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *JointStateData) GetName() []string {
+	if x != nil {
+		return x.Name
+	}
+	return nil
+}
+
+func (x *JointStateData) GetPosition() []float64 {
+	if x != nil {
+		return x.Position
+	}
+	return nil
+}
+
+func (x *JointStateData) GetVelocity() []float64 {
+	if x != nil {
+		return x.Velocity
+	}
+	return nil
+}
+
+func (x *JointStateData) GetEffort() []float64 {
+	if x != nil {
+		return x.Effort
+	}
+	return nil
+}
+
+func (x *JointStateData) GetTimestampNs() int64 {
+	if x != nil {
+		return x.TimestampNs
+	}
+	return 0
+}
+
+func (x *JointStateData) GetTopicName() string {
+	if x != nil {
+		return x.TopicName
+	}
+	return ""
+}
+
+// Transform telemetry
+type TransformData struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	FrameId       string                 `protobuf:"bytes,1,opt,name=frame_id,json=frameId,proto3" json:"frame_id,omitempty"`
+	ChildFrameId  string                 `protobuf:"bytes,2,opt,name=child_frame_id,json=childFrameId,proto3" json:"child_frame_id,omitempty"`
+	Translation   *Vector3               `protobuf:"bytes,3,opt,name=translation,proto3" json:"translation,omitempty"`
+	Rotation      *Quaternion            `protobuf:"bytes,4,opt,name=rotation,proto3" json:"rotation,omitempty"`
+	TimestampNs   int64                  `protobuf:"varint,5,opt,name=timestamp_ns,json=timestampNs,proto3" json:"timestamp_ns,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TransformData) Reset() {
+	*x = TransformData{}
+	mi := &file_fleet_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TransformData) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TransformData) ProtoMessage() {}
+
+func (x *TransformData) ProtoReflect() protoreflect.Message {
+	mi := &file_fleet_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TransformData.ProtoReflect.Descriptor instead.
+func (*TransformData) Descriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *TransformData) GetFrameId() string {
+	if x != nil {
+		return x.FrameId
+	}
+	return ""
+}
+
+func (x *TransformData) GetChildFrameId() string {
+	if x != nil {
+		return x.ChildFrameId
+	}
+	return ""
+}
+
+func (x *TransformData) GetTranslation() *Vector3 {
+	if x != nil {
+		return x.Translation
+	}
+	return nil
+}
+
+func (x *TransformData) GetRotation() *Quaternion {
+	if x != nil {
+		return x.Rotation
+	}
+	return nil
+}
+
+func (x *TransformData) GetTimestampNs() int64 {
+	if x != nil {
+		return x.TimestampNs
+	}
+	return 0
+}
+
+// Odometry telemetry
+type OdometryData struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	FrameId       string                 `protobuf:"bytes,1,opt,name=frame_id,json=frameId,proto3" json:"frame_id,omitempty"`
+	ChildFrameId  string                 `protobuf:"bytes,2,opt,name=child_frame_id,json=childFrameId,proto3" json:"child_frame_id,omitempty"`
+	Pose          *Pose                  `protobuf:"bytes,3,opt,name=pose,proto3" json:"pose,omitempty"`
+	Twist         *Twist                 `protobuf:"bytes,4,opt,name=twist,proto3" json:"twist,omitempty"`
+	TimestampNs   int64                  `protobuf:"varint,5,opt,name=timestamp_ns,json=timestampNs,proto3" json:"timestamp_ns,omitempty"`
+	TopicName     string                 `protobuf:"bytes,6,opt,name=topic_name,json=topicName,proto3" json:"topic_name,omitempty"` // ROS2 topic name (e.g., "/robot_001/odom")
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OdometryData) Reset() {
+	*x = OdometryData{}
+	mi := &file_fleet_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OdometryData) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OdometryData) ProtoMessage() {}
+
+func (x *OdometryData) ProtoReflect() protoreflect.Message {
+	mi := &file_fleet_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OdometryData.ProtoReflect.Descriptor instead.
+func (*OdometryData) Descriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *OdometryData) GetFrameId() string {
+	if x != nil {
+		return x.FrameId
+	}
+	return ""
+}
+
+func (x *OdometryData) GetChildFrameId() string {
+	if x != nil {
+		return x.ChildFrameId
+	}
+	return ""
+}
+
+func (x *OdometryData) GetPose() *Pose {
+	if x != nil {
+		return x.Pose
+	}
+	return nil
+}
+
+func (x *OdometryData) GetTwist() *Twist {
+	if x != nil {
+		return x.Twist
+	}
+	return nil
+}
+
+func (x *OdometryData) GetTimestampNs() int64 {
+	if x != nil {
+		return x.TimestampNs
+	}
+	return 0
+}
+
+func (x *OdometryData) GetTopicName() string {
+	if x != nil {
+		return x.TopicName
+	}
+	return ""
+}
+
+// Combined telemetry payload per robot
+type TelemetryPayload struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RobotId       string                 `protobuf:"bytes,1,opt,name=robot_id,json=robotId,proto3" json:"robot_id,omitempty"`
+	JointState    *JointStateData        `protobuf:"bytes,2,opt,name=joint_state,json=jointState,proto3" json:"joint_state,omitempty"`
+	Transforms    []*TransformData       `protobuf:"bytes,3,rep,name=transforms,proto3" json:"transforms,omitempty"`
+	Odometry      *OdometryData          `protobuf:"bytes,4,opt,name=odometry,proto3" json:"odometry,omitempty"`
+	CollectedAtNs int64                  `protobuf:"varint,5,opt,name=collected_at_ns,json=collectedAtNs,proto3" json:"collected_at_ns,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TelemetryPayload) Reset() {
+	*x = TelemetryPayload{}
+	mi := &file_fleet_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TelemetryPayload) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TelemetryPayload) ProtoMessage() {}
+
+func (x *TelemetryPayload) ProtoReflect() protoreflect.Message {
+	mi := &file_fleet_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TelemetryPayload.ProtoReflect.Descriptor instead.
+func (*TelemetryPayload) Descriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *TelemetryPayload) GetRobotId() string {
+	if x != nil {
+		return x.RobotId
+	}
+	return ""
+}
+
+func (x *TelemetryPayload) GetJointState() *JointStateData {
+	if x != nil {
+		return x.JointState
+	}
+	return nil
+}
+
+func (x *TelemetryPayload) GetTransforms() []*TransformData {
+	if x != nil {
+		return x.Transforms
+	}
+	return nil
+}
+
+func (x *TelemetryPayload) GetOdometry() *OdometryData {
+	if x != nil {
+		return x.Odometry
+	}
+	return nil
+}
+
+func (x *TelemetryPayload) GetCollectedAtNs() int64 {
+	if x != nil {
+		return x.CollectedAtNs
+	}
+	return 0
+}
+
 type EnhancedPrecondition struct {
 	state         protoimpl.MessageState                    `protogen:"open.v1"`
 	Type          EnhancedPrecondition_PreconditionType     `protobuf:"varint,1,opt,name=type,proto3,enum=fleet.EnhancedPrecondition_PreconditionType" json:"type,omitempty"`
@@ -2526,7 +3542,7 @@ type EnhancedPrecondition struct {
 
 func (x *EnhancedPrecondition) Reset() {
 	*x = EnhancedPrecondition{}
-	mi := &file_fleet_proto_msgTypes[26]
+	mi := &file_fleet_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2538,7 +3554,7 @@ func (x *EnhancedPrecondition) String() string {
 func (*EnhancedPrecondition) ProtoMessage() {}
 
 func (x *EnhancedPrecondition) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[26]
+	mi := &file_fleet_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2551,7 +3567,7 @@ func (x *EnhancedPrecondition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnhancedPrecondition.ProtoReflect.Descriptor instead.
 func (*EnhancedPrecondition) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{26}
+	return file_fleet_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *EnhancedPrecondition) GetType() EnhancedPrecondition_PreconditionType {
@@ -2603,7 +3619,7 @@ type PreconditionFilter struct {
 
 func (x *PreconditionFilter) Reset() {
 	*x = PreconditionFilter{}
-	mi := &file_fleet_proto_msgTypes[27]
+	mi := &file_fleet_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2615,7 +3631,7 @@ func (x *PreconditionFilter) String() string {
 func (*PreconditionFilter) ProtoMessage() {}
 
 func (x *PreconditionFilter) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[27]
+	mi := &file_fleet_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2628,7 +3644,7 @@ func (x *PreconditionFilter) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PreconditionFilter.ProtoReflect.Descriptor instead.
 func (*PreconditionFilter) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{27}
+	return file_fleet_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *PreconditionFilter) GetGraphId() string {
@@ -2684,7 +3700,7 @@ type PreconditionResult struct {
 
 func (x *PreconditionResult) Reset() {
 	*x = PreconditionResult{}
-	mi := &file_fleet_proto_msgTypes[28]
+	mi := &file_fleet_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2696,7 +3712,7 @@ func (x *PreconditionResult) String() string {
 func (*PreconditionResult) ProtoMessage() {}
 
 func (x *PreconditionResult) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[28]
+	mi := &file_fleet_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2709,7 +3725,7 @@ func (x *PreconditionResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PreconditionResult.ProtoReflect.Descriptor instead.
 func (*PreconditionResult) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{28}
+	return file_fleet_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *PreconditionResult) GetSatisfied() bool {
@@ -2750,7 +3766,7 @@ type TaskLog struct {
 
 func (x *TaskLog) Reset() {
 	*x = TaskLog{}
-	mi := &file_fleet_proto_msgTypes[29]
+	mi := &file_fleet_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2762,7 +3778,7 @@ func (x *TaskLog) String() string {
 func (*TaskLog) ProtoMessage() {}
 
 func (x *TaskLog) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_proto_msgTypes[29]
+	mi := &file_fleet_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2775,7 +3791,7 @@ func (x *TaskLog) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskLog.ProtoReflect.Descriptor instead.
 func (*TaskLog) Descriptor() ([]byte, []int) {
-	return file_fleet_proto_rawDescGZIP(), []int{29}
+	return file_fleet_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *TaskLog) GetAgentId() string {
@@ -2841,11 +3857,328 @@ func (x *TaskLog) GetMetadata() map[string]string {
 	return nil
 }
 
+// Server → Agent: Start task command (agent-driven execution)
+type StartTaskCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	GraphId       string                 `protobuf:"bytes,2,opt,name=graph_id,json=graphId,proto3" json:"graph_id,omitempty"`
+	RobotId       string                 `protobuf:"bytes,3,opt,name=robot_id,json=robotId,proto3" json:"robot_id,omitempty"`
+	Params        map[string]string      `protobuf:"bytes,4,rep,name=params,proto3" json:"params,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StartTaskCommand) Reset() {
+	*x = StartTaskCommand{}
+	mi := &file_fleet_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StartTaskCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StartTaskCommand) ProtoMessage() {}
+
+func (x *StartTaskCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_fleet_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StartTaskCommand.ProtoReflect.Descriptor instead.
+func (*StartTaskCommand) Descriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *StartTaskCommand) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *StartTaskCommand) GetGraphId() string {
+	if x != nil {
+		return x.GraphId
+	}
+	return ""
+}
+
+func (x *StartTaskCommand) GetRobotId() string {
+	if x != nil {
+		return x.RobotId
+	}
+	return ""
+}
+
+func (x *StartTaskCommand) GetParams() map[string]string {
+	if x != nil {
+		return x.Params
+	}
+	return nil
+}
+
+type ResourceEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ResourceId    string                 `protobuf:"bytes,1,opt,name=resource_id,json=resourceId,proto3" json:"resource_id,omitempty"`
+	StepId        string                 `protobuf:"bytes,2,opt,name=step_id,json=stepId,proto3" json:"step_id,omitempty"`
+	Kind          ResourceEventKind      `protobuf:"varint,3,opt,name=kind,proto3,enum=fleet.ResourceEventKind" json:"kind,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResourceEvent) Reset() {
+	*x = ResourceEvent{}
+	mi := &file_fleet_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResourceEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResourceEvent) ProtoMessage() {}
+
+func (x *ResourceEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_fleet_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResourceEvent.ProtoReflect.Descriptor instead.
+func (*ResourceEvent) Descriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *ResourceEvent) GetResourceId() string {
+	if x != nil {
+		return x.ResourceId
+	}
+	return ""
+}
+
+func (x *ResourceEvent) GetStepId() string {
+	if x != nil {
+		return x.StepId
+	}
+	return ""
+}
+
+func (x *ResourceEvent) GetKind() ResourceEventKind {
+	if x != nil {
+		return x.Kind
+	}
+	return ResourceEventKind_RESOURCE_EVENT_UNKNOWN
+}
+
+// Agent → Server: Task state update (agent-driven execution)
+type TaskStateUpdate struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	TaskId         string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	CurrentStepId  string                 `protobuf:"bytes,2,opt,name=current_step_id,json=currentStepId,proto3" json:"current_step_id,omitempty"`
+	State          TaskState              `protobuf:"varint,3,opt,name=state,proto3,enum=fleet.TaskState" json:"state,omitempty"`
+	Progress       float32                `protobuf:"fixed32,4,opt,name=progress,proto3" json:"progress,omitempty"`                                                                           // 0.0 - 1.0
+	BlockingReason string                 `protobuf:"bytes,5,opt,name=blocking_reason,json=blockingReason,proto3" json:"blocking_reason,omitempty"`                                           // Why task is waiting
+	Variables      map[string]string      `protobuf:"bytes,6,rep,name=variables,proto3" json:"variables,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // Step result variables
+	// Step completion info (when a step finishes)
+	StepResult  *StepResultInfo `protobuf:"bytes,7,opt,name=step_result,json=stepResult,proto3" json:"step_result,omitempty"`
+	TimestampMs int64           `protobuf:"varint,8,opt,name=timestamp_ms,json=timestampMs,proto3" json:"timestamp_ms,omitempty"`
+	// Runtime resource occupancy changes reported by the agent.
+	ResourceEvents []*ResourceEvent `protobuf:"bytes,9,rep,name=resource_events,json=resourceEvents,proto3" json:"resource_events,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *TaskStateUpdate) Reset() {
+	*x = TaskStateUpdate{}
+	mi := &file_fleet_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskStateUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskStateUpdate) ProtoMessage() {}
+
+func (x *TaskStateUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_fleet_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskStateUpdate.ProtoReflect.Descriptor instead.
+func (*TaskStateUpdate) Descriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *TaskStateUpdate) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *TaskStateUpdate) GetCurrentStepId() string {
+	if x != nil {
+		return x.CurrentStepId
+	}
+	return ""
+}
+
+func (x *TaskStateUpdate) GetState() TaskState {
+	if x != nil {
+		return x.State
+	}
+	return TaskState_TASK_STATE_UNKNOWN
+}
+
+func (x *TaskStateUpdate) GetProgress() float32 {
+	if x != nil {
+		return x.Progress
+	}
+	return 0
+}
+
+func (x *TaskStateUpdate) GetBlockingReason() string {
+	if x != nil {
+		return x.BlockingReason
+	}
+	return ""
+}
+
+func (x *TaskStateUpdate) GetVariables() map[string]string {
+	if x != nil {
+		return x.Variables
+	}
+	return nil
+}
+
+func (x *TaskStateUpdate) GetStepResult() *StepResultInfo {
+	if x != nil {
+		return x.StepResult
+	}
+	return nil
+}
+
+func (x *TaskStateUpdate) GetTimestampMs() int64 {
+	if x != nil {
+		return x.TimestampMs
+	}
+	return 0
+}
+
+func (x *TaskStateUpdate) GetResourceEvents() []*ResourceEvent {
+	if x != nil {
+		return x.ResourceEvents
+	}
+	return nil
+}
+
+// Step result info (included in TaskStateUpdate)
+type StepResultInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	StepId        string                 `protobuf:"bytes,1,opt,name=step_id,json=stepId,proto3" json:"step_id,omitempty"`
+	Status        ActionStatus           `protobuf:"varint,2,opt,name=status,proto3,enum=fleet.ActionStatus" json:"status,omitempty"`
+	ResultJson    []byte                 `protobuf:"bytes,3,opt,name=result_json,json=resultJson,proto3" json:"result_json,omitempty"` // JSON-encoded result data
+	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	DurationMs    int64                  `protobuf:"varint,5,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StepResultInfo) Reset() {
+	*x = StepResultInfo{}
+	mi := &file_fleet_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StepResultInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StepResultInfo) ProtoMessage() {}
+
+func (x *StepResultInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_fleet_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StepResultInfo.ProtoReflect.Descriptor instead.
+func (*StepResultInfo) Descriptor() ([]byte, []int) {
+	return file_fleet_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *StepResultInfo) GetStepId() string {
+	if x != nil {
+		return x.StepId
+	}
+	return ""
+}
+
+func (x *StepResultInfo) GetStatus() ActionStatus {
+	if x != nil {
+		return x.Status
+	}
+	return ActionStatus_ACTION_UNKNOWN
+}
+
+func (x *StepResultInfo) GetResultJson() []byte {
+	if x != nil {
+		return x.ResultJson
+	}
+	return nil
+}
+
+func (x *StepResultInfo) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *StepResultInfo) GetDurationMs() int64 {
+	if x != nil {
+		return x.DurationMs
+	}
+	return 0
+}
+
 var File_fleet_proto protoreflect.FileDescriptor
 
 const file_fleet_proto_rawDesc = "" +
 	"\n" +
-	"\vfleet.proto\x12\x05fleet\"\xf6\x02\n" +
+	"\vfleet.proto\x12\x05fleet\"\xaf\x03\n" +
 	"\fAgentMessage\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12!\n" +
 	"\ftimestamp_ms\x18\x02 \x01(\x03R\vtimestampMs\x125\n" +
@@ -2854,7 +4187,9 @@ const file_fleet_proto_rawDesc = "" +
 	"\raction_result\x18\v \x01(\v2\x13.fleet.ActionResultH\x00R\factionResult\x12?\n" +
 	"\rstatus_update\x18\f \x01(\v2\x18.fleet.AgentStatusUpdateH\x00R\fstatusUpdate\x12<\n" +
 	"\fstate_update\x18\r \x01(\v2\x17.fleet.AgentStateUpdateH\x00R\vstateUpdate\x12+\n" +
-	"\btask_log\x18\x0e \x01(\v2\x0e.fleet.TaskLogH\x00R\ataskLogB\t\n" +
+	"\btask_log\x18\x0e \x01(\v2\x0e.fleet.TaskLogH\x00R\ataskLog\x127\n" +
+	"\n" +
+	"task_state\x18\x0f \x01(\v2\x16.fleet.TaskStateUpdateH\x00R\ttaskStateB\t\n" +
 	"\apayload\"\xe8\x02\n" +
 	"\x10AgentStateUpdate\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1d\n" +
@@ -2871,7 +4206,7 @@ const file_fleet_proto_rawDesc = "" +
 	"PHASE_IDLE\x10\x01\x12\x13\n" +
 	"\x0fPHASE_EXECUTING\x10\x02\x12\x11\n" +
 	"\rPHASE_SUCCESS\x10\x03\x12\x10\n" +
-	"\fPHASE_FAILED\x10\x04\"\xa5\x03\n" +
+	"\fPHASE_FAILED\x10\x04\"\x9b\x04\n" +
 	"\x0eAgentHeartbeat\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\tR\x05state\x12!\n" +
@@ -2885,11 +4220,13 @@ const file_fleet_proto_rawDesc = "" +
 	"\x10current_graph_id\x18\t \x01(\tR\x0ecurrentGraphId\x12&\n" +
 	"\x0fcurrent_task_id\x18\n" +
 	" \x01(\tR\rcurrentTaskId\x12&\n" +
-	"\x0fcurrent_step_id\x18\v \x01(\tR\rcurrentStepId\"s\n" +
+	"\x0fcurrent_step_id\x18\v \x01(\tR\rcurrentStepId\x125\n" +
+	"\ttelemetry\x18\f \x01(\v2\x17.fleet.TelemetryPayloadR\ttelemetry\x12=\n" +
+	"\x0fresource_events\x18\r \x03(\v2\x14.fleet.ResourceEventR\x0eresourceEvents\"s\n" +
 	"\x11AgentStatusUpdate\x12'\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x11.fleet.AgentStateR\x05state\x12\x1b\n" +
 	"\tis_online\x18\x02 \x01(\bR\bisOnline\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\"\xc6\x03\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\"\x85\x05\n" +
 	"\rServerMessage\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +
@@ -2901,7 +4238,11 @@ const file_fleet_proto_rawDesc = "" +
 	"\x03ack\x18\f \x01(\v2\x10.fleet.ServerAckH\x00R\x03ack\x12:\n" +
 	"\rconfig_update\x18\r \x01(\v2\x13.fleet.ConfigUpdateH\x00R\fconfigUpdate\x12G\n" +
 	"\x12fleet_state_update\x18\x0e \x01(\v2\x17.fleet.FleetStateUpdateH\x00R\x10fleetStateUpdate\x12>\n" +
-	"\fdeploy_graph\x18\x0f \x01(\v2\x19.fleet.DeployGraphCommandH\x00R\vdeployGraphB\t\n" +
+	"\fdeploy_graph\x18\x0f \x01(\v2\x19.fleet.DeployGraphCommandH\x00R\vdeployGraph\x128\n" +
+	"\n" +
+	"start_task\x18\x10 \x01(\v2\x17.fleet.StartTaskCommandH\x00R\tstartTask\x12>\n" +
+	"\fdelete_graph\x18\x11 \x01(\v2\x19.fleet.DeleteGraphCommandH\x00R\vdeleteGraph\x12C\n" +
+	"\fgraph_update\x18\x12 \x01(\v2\x1e.fleet.GraphUpdateNotificationH\x00R\vgraphUpdateB\t\n" +
 	"\apayload\"e\n" +
 	"\x10FleetStateUpdate\x12!\n" +
 	"\ftimestamp_ms\x18\x01 \x01(\x03R\vtimestampMs\x12.\n" +
@@ -2925,7 +4266,29 @@ const file_fleet_proto_rawDesc = "" +
 	"\n" +
 	"graph_json\x18\x05 \x01(\fR\tgraphJson\x12)\n" +
 	"\x06states\x18\x06 \x03(\v2\x11.fleet.GraphStateR\x06states\x12\x1a\n" +
-	"\bchecksum\x18\a \x01(\tR\bchecksum\"\xd4\x01\n" +
+	"\bchecksum\x18\a \x01(\tR\bchecksum\"\x8e\x01\n" +
+	"\x12DeleteGraphCommand\x12\x1d\n" +
+	"\n" +
+	"command_id\x18\x01 \x01(\tR\tcommandId\x12\x19\n" +
+	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12&\n" +
+	"\x0faction_graph_id\x18\x03 \x01(\tR\ractionGraphId\x12\x16\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\"\xd9\x02\n" +
+	"\x17GraphUpdateNotification\x12\x1d\n" +
+	"\n" +
+	"command_id\x18\x01 \x01(\tR\tcommandId\x12\x19\n" +
+	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12&\n" +
+	"\x0faction_graph_id\x18\x03 \x01(\tR\ractionGraphId\x12H\n" +
+	"\x06action\x18\x04 \x01(\x0e20.fleet.GraphUpdateNotification.GraphUpdateActionR\x06action\x12\x1f\n" +
+	"\vnew_version\x18\x05 \x01(\x05R\n" +
+	"newVersion\x12\x1d\n" +
+	"\n" +
+	"graph_json\x18\x06 \x01(\fR\tgraphJson\"R\n" +
+	"\x11GraphUpdateAction\x12\x12\n" +
+	"\x0eUPDATE_UNKNOWN\x10\x00\x12\f\n" +
+	"\bMODIFIED\x10\x01\x12\v\n" +
+	"\aDELETED\x10\x02\x12\x0e\n" +
+	"\n" +
+	"UNASSIGNED\x10\x03\"\xd4\x01\n" +
 	"\n" +
 	"GraphState\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x12\n" +
@@ -3045,7 +4408,54 @@ const file_fleet_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x02 \x01(\tR\tmessageId\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error\"\x96\x04\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"3\n" +
+	"\aVector3\x12\f\n" +
+	"\x01x\x18\x01 \x01(\x01R\x01x\x12\f\n" +
+	"\x01y\x18\x02 \x01(\x01R\x01y\x12\f\n" +
+	"\x01z\x18\x03 \x01(\x01R\x01z\"D\n" +
+	"\n" +
+	"Quaternion\x12\f\n" +
+	"\x01x\x18\x01 \x01(\x01R\x01x\x12\f\n" +
+	"\x01y\x18\x02 \x01(\x01R\x01y\x12\f\n" +
+	"\x01z\x18\x03 \x01(\x01R\x01z\x12\f\n" +
+	"\x01w\x18\x04 \x01(\x01R\x01w\"g\n" +
+	"\x04Pose\x12*\n" +
+	"\bposition\x18\x01 \x01(\v2\x0e.fleet.Vector3R\bposition\x123\n" +
+	"\vorientation\x18\x02 \x01(\v2\x11.fleet.QuaternionR\vorientation\"Y\n" +
+	"\x05Twist\x12&\n" +
+	"\x06linear\x18\x01 \x01(\v2\x0e.fleet.Vector3R\x06linear\x12(\n" +
+	"\aangular\x18\x02 \x01(\v2\x0e.fleet.Vector3R\aangular\"\xb6\x01\n" +
+	"\x0eJointStateData\x12\x12\n" +
+	"\x04name\x18\x01 \x03(\tR\x04name\x12\x1a\n" +
+	"\bposition\x18\x02 \x03(\x01R\bposition\x12\x1a\n" +
+	"\bvelocity\x18\x03 \x03(\x01R\bvelocity\x12\x16\n" +
+	"\x06effort\x18\x04 \x03(\x01R\x06effort\x12!\n" +
+	"\ftimestamp_ns\x18\x05 \x01(\x03R\vtimestampNs\x12\x1d\n" +
+	"\n" +
+	"topic_name\x18\x06 \x01(\tR\ttopicName\"\xd4\x01\n" +
+	"\rTransformData\x12\x19\n" +
+	"\bframe_id\x18\x01 \x01(\tR\aframeId\x12$\n" +
+	"\x0echild_frame_id\x18\x02 \x01(\tR\fchildFrameId\x120\n" +
+	"\vtranslation\x18\x03 \x01(\v2\x0e.fleet.Vector3R\vtranslation\x12-\n" +
+	"\brotation\x18\x04 \x01(\v2\x11.fleet.QuaternionR\brotation\x12!\n" +
+	"\ftimestamp_ns\x18\x05 \x01(\x03R\vtimestampNs\"\xd6\x01\n" +
+	"\fOdometryData\x12\x19\n" +
+	"\bframe_id\x18\x01 \x01(\tR\aframeId\x12$\n" +
+	"\x0echild_frame_id\x18\x02 \x01(\tR\fchildFrameId\x12\x1f\n" +
+	"\x04pose\x18\x03 \x01(\v2\v.fleet.PoseR\x04pose\x12\"\n" +
+	"\x05twist\x18\x04 \x01(\v2\f.fleet.TwistR\x05twist\x12!\n" +
+	"\ftimestamp_ns\x18\x05 \x01(\x03R\vtimestampNs\x12\x1d\n" +
+	"\n" +
+	"topic_name\x18\x06 \x01(\tR\ttopicName\"\xf4\x01\n" +
+	"\x10TelemetryPayload\x12\x19\n" +
+	"\brobot_id\x18\x01 \x01(\tR\arobotId\x126\n" +
+	"\vjoint_state\x18\x02 \x01(\v2\x15.fleet.JointStateDataR\n" +
+	"jointState\x124\n" +
+	"\n" +
+	"transforms\x18\x03 \x03(\v2\x14.fleet.TransformDataR\n" +
+	"transforms\x12/\n" +
+	"\bodometry\x18\x04 \x01(\v2\x13.fleet.OdometryDataR\bodometry\x12&\n" +
+	"\x0fcollected_at_ns\x18\x05 \x01(\x03R\rcollectedAtNs\"\x96\x04\n" +
 	"\x14EnhancedPrecondition\x12@\n" +
 	"\x04type\x18\x01 \x01(\x0e2,.fleet.EnhancedPrecondition.PreconditionTypeR\x04type\x12&\n" +
 	"\x0ftarget_agent_id\x18\x02 \x01(\tR\rtargetAgentId\x12%\n" +
@@ -3094,13 +4504,54 @@ const file_fleet_proto_rawDesc = "" +
 	"\bmetadata\x18\t \x03(\v2\x1c.fleet.TaskLog.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*\\\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xd9\x01\n" +
+	"\x10StartTaskCommand\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x19\n" +
+	"\bgraph_id\x18\x02 \x01(\tR\agraphId\x12\x19\n" +
+	"\brobot_id\x18\x03 \x01(\tR\arobotId\x12;\n" +
+	"\x06params\x18\x04 \x03(\v2#.fleet.StartTaskCommand.ParamsEntryR\x06params\x1a9\n" +
+	"\vParamsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"w\n" +
+	"\rResourceEvent\x12\x1f\n" +
+	"\vresource_id\x18\x01 \x01(\tR\n" +
+	"resourceId\x12\x17\n" +
+	"\astep_id\x18\x02 \x01(\tR\x06stepId\x12,\n" +
+	"\x04kind\x18\x03 \x01(\x0e2\x18.fleet.ResourceEventKindR\x04kind\"\xdc\x03\n" +
+	"\x0fTaskStateUpdate\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12&\n" +
+	"\x0fcurrent_step_id\x18\x02 \x01(\tR\rcurrentStepId\x12&\n" +
+	"\x05state\x18\x03 \x01(\x0e2\x10.fleet.TaskStateR\x05state\x12\x1a\n" +
+	"\bprogress\x18\x04 \x01(\x02R\bprogress\x12'\n" +
+	"\x0fblocking_reason\x18\x05 \x01(\tR\x0eblockingReason\x12C\n" +
+	"\tvariables\x18\x06 \x03(\v2%.fleet.TaskStateUpdate.VariablesEntryR\tvariables\x126\n" +
+	"\vstep_result\x18\a \x01(\v2\x15.fleet.StepResultInfoR\n" +
+	"stepResult\x12!\n" +
+	"\ftimestamp_ms\x18\b \x01(\x03R\vtimestampMs\x12=\n" +
+	"\x0fresource_events\x18\t \x03(\v2\x14.fleet.ResourceEventR\x0eresourceEvents\x1a<\n" +
+	"\x0eVariablesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xae\x01\n" +
+	"\x0eStepResultInfo\x12\x17\n" +
+	"\astep_id\x18\x01 \x01(\tR\x06stepId\x12+\n" +
+	"\x06status\x18\x02 \x01(\x0e2\x13.fleet.ActionStatusR\x06status\x12\x1f\n" +
+	"\vresult_json\x18\x03 \x01(\fR\n" +
+	"resultJson\x12\x14\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\x12\x1f\n" +
+	"\vduration_ms\x18\x05 \x01(\x03R\n" +
+	"durationMs*\\\n" +
 	"\n" +
 	"AgentState\x12\x11\n" +
 	"\rAGENT_UNKNOWN\x10\x00\x12\x10\n" +
 	"\fAGENT_ONLINE\x10\x01\x12\x11\n" +
 	"\rAGENT_OFFLINE\x10\x02\x12\x16\n" +
-	"\x12AGENT_RECONNECTING\x10\x03*\x8a\x01\n" +
+	"\x12AGENT_RECONNECTING\x10\x03*\xa8\x01\n" +
+	"\x0eLifecycleState\x12\x1b\n" +
+	"\x17LIFECYCLE_STATE_UNKNOWN\x10\x00\x12 \n" +
+	"\x1cLIFECYCLE_STATE_UNCONFIGURED\x10\x01\x12\x1c\n" +
+	"\x18LIFECYCLE_STATE_INACTIVE\x10\x02\x12\x1a\n" +
+	"\x16LIFECYCLE_STATE_ACTIVE\x10\x03\x12\x1d\n" +
+	"\x19LIFECYCLE_STATE_FINALIZED\x10\x04*\x8a\x01\n" +
 	"\fActionStatus\x12\x12\n" +
 	"\x0eACTION_UNKNOWN\x10\x00\x12\x14\n" +
 	"\x10ACTION_SUCCEEDED\x10\x01\x12\x11\n" +
@@ -3112,7 +4563,20 @@ const file_fleet_proto_rawDesc = "" +
 	"\x0eTASK_LOG_DEBUG\x10\x00\x12\x11\n" +
 	"\rTASK_LOG_INFO\x10\x01\x12\x11\n" +
 	"\rTASK_LOG_WARN\x10\x02\x12\x12\n" +
-	"\x0eTASK_LOG_ERROR\x10\x032\x9a\x03\n" +
+	"\x0eTASK_LOG_ERROR\x10\x03*\xe4\x01\n" +
+	"\tTaskState\x12\x16\n" +
+	"\x12TASK_STATE_UNKNOWN\x10\x00\x12\x16\n" +
+	"\x12TASK_STATE_PENDING\x10\x01\x12\x16\n" +
+	"\x12TASK_STATE_RUNNING\x10\x02\x12#\n" +
+	"\x1fTASK_STATE_WAITING_PRECONDITION\x10\x03\x12\x1f\n" +
+	"\x1bTASK_STATE_EXECUTING_ACTION\x10\x04\x12\x18\n" +
+	"\x14TASK_STATE_COMPLETED\x10\x05\x12\x15\n" +
+	"\x11TASK_STATE_FAILED\x10\x06\x12\x18\n" +
+	"\x14TASK_STATE_CANCELLED\x10\a*i\n" +
+	"\x11ResourceEventKind\x12\x1a\n" +
+	"\x16RESOURCE_EVENT_UNKNOWN\x10\x00\x12\x1b\n" +
+	"\x17RESOURCE_EVENT_ACQUIRED\x10\x01\x12\x1b\n" +
+	"\x17RESOURCE_EVENT_RELEASED\x10\x022\x9a\x03\n" +
 	"\fFleetControl\x12>\n" +
 	"\rCommandStream\x12\x13.fleet.AgentMessage\x1a\x14.fleet.ServerMessage(\x010\x01\x12J\n" +
 	"\rRegisterAgent\x12\x1b.fleet.RegisterAgentRequest\x1a\x1c.fleet.RegisterAgentResponse\x12/\n" +
@@ -3135,91 +4599,136 @@ func file_fleet_proto_rawDescGZIP() []byte {
 	return file_fleet_proto_rawDescData
 }
 
-var file_fleet_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_fleet_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
+var file_fleet_proto_enumTypes = make([]protoimpl.EnumInfo, 10)
+var file_fleet_proto_msgTypes = make([]protoimpl.MessageInfo, 48)
 var file_fleet_proto_goTypes = []any{
 	(AgentState)(0),                                // 0: fleet.AgentState
-	(ActionStatus)(0),                              // 1: fleet.ActionStatus
-	(TaskLogLevel)(0),                              // 2: fleet.TaskLogLevel
-	(AgentStateUpdate_StatePhase)(0),               // 3: fleet.AgentStateUpdate.StatePhase
-	(EnhancedPrecondition_PreconditionType)(0),     // 4: fleet.EnhancedPrecondition.PreconditionType
-	(EnhancedPrecondition_PreconditionOperator)(0), // 5: fleet.EnhancedPrecondition.PreconditionOperator
-	(*AgentMessage)(nil),                           // 6: fleet.AgentMessage
-	(*AgentStateUpdate)(nil),                       // 7: fleet.AgentStateUpdate
-	(*AgentHeartbeat)(nil),                         // 8: fleet.AgentHeartbeat
-	(*AgentStatusUpdate)(nil),                      // 9: fleet.AgentStatusUpdate
-	(*ServerMessage)(nil),                          // 10: fleet.ServerMessage
-	(*FleetStateUpdate)(nil),                       // 11: fleet.FleetStateUpdate
-	(*AgentStateEntry)(nil),                        // 12: fleet.AgentStateEntry
-	(*DeployGraphCommand)(nil),                     // 13: fleet.DeployGraphCommand
-	(*GraphState)(nil),                             // 14: fleet.GraphState
-	(*ExecuteCommand)(nil),                         // 15: fleet.ExecuteCommand
-	(*CancelCommand)(nil),                          // 16: fleet.CancelCommand
-	(*ServerAck)(nil),                              // 17: fleet.ServerAck
-	(*ConfigUpdate)(nil),                           // 18: fleet.ConfigUpdate
-	(*ActionResult)(nil),                           // 19: fleet.ActionResult
-	(*RegisterAgentRequest)(nil),                   // 20: fleet.RegisterAgentRequest
-	(*RegisterAgentResponse)(nil),                  // 21: fleet.RegisterAgentResponse
-	(*AgentConfig)(nil),                            // 22: fleet.AgentConfig
-	(*ExecuteTaskRequest)(nil),                     // 23: fleet.ExecuteTaskRequest
-	(*ExecuteTaskResponse)(nil),                    // 24: fleet.ExecuteTaskResponse
-	(*CancelTaskRequest)(nil),                      // 25: fleet.CancelTaskRequest
-	(*CancelTaskResponse)(nil),                     // 26: fleet.CancelTaskResponse
-	(*FleetStateRequest)(nil),                      // 27: fleet.FleetStateRequest
-	(*FleetStateResponse)(nil),                     // 28: fleet.FleetStateResponse
-	(*AgentStateSnapshot)(nil),                     // 29: fleet.AgentStateSnapshot
-	(*ZoneReservation)(nil),                        // 30: fleet.ZoneReservation
-	(*Ack)(nil),                                    // 31: fleet.Ack
-	(*EnhancedPrecondition)(nil),                   // 32: fleet.EnhancedPrecondition
-	(*PreconditionFilter)(nil),                     // 33: fleet.PreconditionFilter
-	(*PreconditionResult)(nil),                     // 34: fleet.PreconditionResult
-	(*TaskLog)(nil),                                // 35: fleet.TaskLog
-	nil,                                            // 36: fleet.FleetStateResponse.AgentsEntry
-	nil,                                            // 37: fleet.TaskLog.MetadataEntry
+	(LifecycleState)(0),                            // 1: fleet.LifecycleState
+	(ActionStatus)(0),                              // 2: fleet.ActionStatus
+	(TaskLogLevel)(0),                              // 3: fleet.TaskLogLevel
+	(TaskState)(0),                                 // 4: fleet.TaskState
+	(ResourceEventKind)(0),                         // 5: fleet.ResourceEventKind
+	(AgentStateUpdate_StatePhase)(0),               // 6: fleet.AgentStateUpdate.StatePhase
+	(GraphUpdateNotification_GraphUpdateAction)(0), // 7: fleet.GraphUpdateNotification.GraphUpdateAction
+	(EnhancedPrecondition_PreconditionType)(0),     // 8: fleet.EnhancedPrecondition.PreconditionType
+	(EnhancedPrecondition_PreconditionOperator)(0), // 9: fleet.EnhancedPrecondition.PreconditionOperator
+	(*AgentMessage)(nil),                           // 10: fleet.AgentMessage
+	(*AgentStateUpdate)(nil),                       // 11: fleet.AgentStateUpdate
+	(*AgentHeartbeat)(nil),                         // 12: fleet.AgentHeartbeat
+	(*AgentStatusUpdate)(nil),                      // 13: fleet.AgentStatusUpdate
+	(*ServerMessage)(nil),                          // 14: fleet.ServerMessage
+	(*FleetStateUpdate)(nil),                       // 15: fleet.FleetStateUpdate
+	(*AgentStateEntry)(nil),                        // 16: fleet.AgentStateEntry
+	(*DeployGraphCommand)(nil),                     // 17: fleet.DeployGraphCommand
+	(*DeleteGraphCommand)(nil),                     // 18: fleet.DeleteGraphCommand
+	(*GraphUpdateNotification)(nil),                // 19: fleet.GraphUpdateNotification
+	(*GraphState)(nil),                             // 20: fleet.GraphState
+	(*ExecuteCommand)(nil),                         // 21: fleet.ExecuteCommand
+	(*CancelCommand)(nil),                          // 22: fleet.CancelCommand
+	(*ServerAck)(nil),                              // 23: fleet.ServerAck
+	(*ConfigUpdate)(nil),                           // 24: fleet.ConfigUpdate
+	(*ActionResult)(nil),                           // 25: fleet.ActionResult
+	(*RegisterAgentRequest)(nil),                   // 26: fleet.RegisterAgentRequest
+	(*RegisterAgentResponse)(nil),                  // 27: fleet.RegisterAgentResponse
+	(*AgentConfig)(nil),                            // 28: fleet.AgentConfig
+	(*ExecuteTaskRequest)(nil),                     // 29: fleet.ExecuteTaskRequest
+	(*ExecuteTaskResponse)(nil),                    // 30: fleet.ExecuteTaskResponse
+	(*CancelTaskRequest)(nil),                      // 31: fleet.CancelTaskRequest
+	(*CancelTaskResponse)(nil),                     // 32: fleet.CancelTaskResponse
+	(*FleetStateRequest)(nil),                      // 33: fleet.FleetStateRequest
+	(*FleetStateResponse)(nil),                     // 34: fleet.FleetStateResponse
+	(*AgentStateSnapshot)(nil),                     // 35: fleet.AgentStateSnapshot
+	(*ZoneReservation)(nil),                        // 36: fleet.ZoneReservation
+	(*Ack)(nil),                                    // 37: fleet.Ack
+	(*Vector3)(nil),                                // 38: fleet.Vector3
+	(*Quaternion)(nil),                             // 39: fleet.Quaternion
+	(*Pose)(nil),                                   // 40: fleet.Pose
+	(*Twist)(nil),                                  // 41: fleet.Twist
+	(*JointStateData)(nil),                         // 42: fleet.JointStateData
+	(*TransformData)(nil),                          // 43: fleet.TransformData
+	(*OdometryData)(nil),                           // 44: fleet.OdometryData
+	(*TelemetryPayload)(nil),                       // 45: fleet.TelemetryPayload
+	(*EnhancedPrecondition)(nil),                   // 46: fleet.EnhancedPrecondition
+	(*PreconditionFilter)(nil),                     // 47: fleet.PreconditionFilter
+	(*PreconditionResult)(nil),                     // 48: fleet.PreconditionResult
+	(*TaskLog)(nil),                                // 49: fleet.TaskLog
+	(*StartTaskCommand)(nil),                       // 50: fleet.StartTaskCommand
+	(*ResourceEvent)(nil),                          // 51: fleet.ResourceEvent
+	(*TaskStateUpdate)(nil),                        // 52: fleet.TaskStateUpdate
+	(*StepResultInfo)(nil),                         // 53: fleet.StepResultInfo
+	nil,                                            // 54: fleet.FleetStateResponse.AgentsEntry
+	nil,                                            // 55: fleet.TaskLog.MetadataEntry
+	nil,                                            // 56: fleet.StartTaskCommand.ParamsEntry
+	nil,                                            // 57: fleet.TaskStateUpdate.VariablesEntry
 }
 var file_fleet_proto_depIdxs = []int32{
-	8,  // 0: fleet.AgentMessage.heartbeat:type_name -> fleet.AgentHeartbeat
-	19, // 1: fleet.AgentMessage.action_result:type_name -> fleet.ActionResult
-	9,  // 2: fleet.AgentMessage.status_update:type_name -> fleet.AgentStatusUpdate
-	7,  // 3: fleet.AgentMessage.state_update:type_name -> fleet.AgentStateUpdate
-	35, // 4: fleet.AgentMessage.task_log:type_name -> fleet.TaskLog
-	3,  // 5: fleet.AgentStateUpdate.phase:type_name -> fleet.AgentStateUpdate.StatePhase
-	0,  // 6: fleet.AgentStatusUpdate.state:type_name -> fleet.AgentState
-	15, // 7: fleet.ServerMessage.execute:type_name -> fleet.ExecuteCommand
-	16, // 8: fleet.ServerMessage.cancel:type_name -> fleet.CancelCommand
-	17, // 9: fleet.ServerMessage.ack:type_name -> fleet.ServerAck
-	18, // 10: fleet.ServerMessage.config_update:type_name -> fleet.ConfigUpdate
-	11, // 11: fleet.ServerMessage.fleet_state_update:type_name -> fleet.FleetStateUpdate
-	13, // 12: fleet.ServerMessage.deploy_graph:type_name -> fleet.DeployGraphCommand
-	12, // 13: fleet.FleetStateUpdate.agents:type_name -> fleet.AgentStateEntry
-	14, // 14: fleet.DeployGraphCommand.states:type_name -> fleet.GraphState
-	1,  // 15: fleet.ActionResult.status:type_name -> fleet.ActionStatus
-	22, // 16: fleet.RegisterAgentResponse.config:type_name -> fleet.AgentConfig
-	36, // 17: fleet.FleetStateResponse.agents:type_name -> fleet.FleetStateResponse.AgentsEntry
-	30, // 18: fleet.FleetStateResponse.zones:type_name -> fleet.ZoneReservation
-	4,  // 19: fleet.EnhancedPrecondition.type:type_name -> fleet.EnhancedPrecondition.PreconditionType
-	33, // 20: fleet.EnhancedPrecondition.filter:type_name -> fleet.PreconditionFilter
-	5,  // 21: fleet.EnhancedPrecondition.operator:type_name -> fleet.EnhancedPrecondition.PreconditionOperator
-	2,  // 22: fleet.TaskLog.level:type_name -> fleet.TaskLogLevel
-	37, // 23: fleet.TaskLog.metadata:type_name -> fleet.TaskLog.MetadataEntry
-	29, // 24: fleet.FleetStateResponse.AgentsEntry.value:type_name -> fleet.AgentStateSnapshot
-	6,  // 25: fleet.FleetControl.CommandStream:input_type -> fleet.AgentMessage
-	20, // 26: fleet.FleetControl.RegisterAgent:input_type -> fleet.RegisterAgentRequest
-	19, // 27: fleet.FleetControl.ReportResult:input_type -> fleet.ActionResult
-	23, // 28: fleet.FleetControl.ExecuteTask:input_type -> fleet.ExecuteTaskRequest
-	25, // 29: fleet.FleetControl.CancelTask:input_type -> fleet.CancelTaskRequest
-	27, // 30: fleet.FleetControl.GetFleetState:input_type -> fleet.FleetStateRequest
-	10, // 31: fleet.FleetControl.CommandStream:output_type -> fleet.ServerMessage
-	21, // 32: fleet.FleetControl.RegisterAgent:output_type -> fleet.RegisterAgentResponse
-	31, // 33: fleet.FleetControl.ReportResult:output_type -> fleet.Ack
-	24, // 34: fleet.FleetControl.ExecuteTask:output_type -> fleet.ExecuteTaskResponse
-	26, // 35: fleet.FleetControl.CancelTask:output_type -> fleet.CancelTaskResponse
-	28, // 36: fleet.FleetControl.GetFleetState:output_type -> fleet.FleetStateResponse
-	31, // [31:37] is the sub-list for method output_type
-	25, // [25:31] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	12, // 0: fleet.AgentMessage.heartbeat:type_name -> fleet.AgentHeartbeat
+	25, // 1: fleet.AgentMessage.action_result:type_name -> fleet.ActionResult
+	13, // 2: fleet.AgentMessage.status_update:type_name -> fleet.AgentStatusUpdate
+	11, // 3: fleet.AgentMessage.state_update:type_name -> fleet.AgentStateUpdate
+	49, // 4: fleet.AgentMessage.task_log:type_name -> fleet.TaskLog
+	52, // 5: fleet.AgentMessage.task_state:type_name -> fleet.TaskStateUpdate
+	6,  // 6: fleet.AgentStateUpdate.phase:type_name -> fleet.AgentStateUpdate.StatePhase
+	45, // 7: fleet.AgentHeartbeat.telemetry:type_name -> fleet.TelemetryPayload
+	51, // 8: fleet.AgentHeartbeat.resource_events:type_name -> fleet.ResourceEvent
+	0,  // 9: fleet.AgentStatusUpdate.state:type_name -> fleet.AgentState
+	21, // 10: fleet.ServerMessage.execute:type_name -> fleet.ExecuteCommand
+	22, // 11: fleet.ServerMessage.cancel:type_name -> fleet.CancelCommand
+	23, // 12: fleet.ServerMessage.ack:type_name -> fleet.ServerAck
+	24, // 13: fleet.ServerMessage.config_update:type_name -> fleet.ConfigUpdate
+	15, // 14: fleet.ServerMessage.fleet_state_update:type_name -> fleet.FleetStateUpdate
+	17, // 15: fleet.ServerMessage.deploy_graph:type_name -> fleet.DeployGraphCommand
+	50, // 16: fleet.ServerMessage.start_task:type_name -> fleet.StartTaskCommand
+	18, // 17: fleet.ServerMessage.delete_graph:type_name -> fleet.DeleteGraphCommand
+	19, // 18: fleet.ServerMessage.graph_update:type_name -> fleet.GraphUpdateNotification
+	16, // 19: fleet.FleetStateUpdate.agents:type_name -> fleet.AgentStateEntry
+	20, // 20: fleet.DeployGraphCommand.states:type_name -> fleet.GraphState
+	7,  // 21: fleet.GraphUpdateNotification.action:type_name -> fleet.GraphUpdateNotification.GraphUpdateAction
+	2,  // 22: fleet.ActionResult.status:type_name -> fleet.ActionStatus
+	28, // 23: fleet.RegisterAgentResponse.config:type_name -> fleet.AgentConfig
+	54, // 24: fleet.FleetStateResponse.agents:type_name -> fleet.FleetStateResponse.AgentsEntry
+	36, // 25: fleet.FleetStateResponse.zones:type_name -> fleet.ZoneReservation
+	38, // 26: fleet.Pose.position:type_name -> fleet.Vector3
+	39, // 27: fleet.Pose.orientation:type_name -> fleet.Quaternion
+	38, // 28: fleet.Twist.linear:type_name -> fleet.Vector3
+	38, // 29: fleet.Twist.angular:type_name -> fleet.Vector3
+	38, // 30: fleet.TransformData.translation:type_name -> fleet.Vector3
+	39, // 31: fleet.TransformData.rotation:type_name -> fleet.Quaternion
+	40, // 32: fleet.OdometryData.pose:type_name -> fleet.Pose
+	41, // 33: fleet.OdometryData.twist:type_name -> fleet.Twist
+	42, // 34: fleet.TelemetryPayload.joint_state:type_name -> fleet.JointStateData
+	43, // 35: fleet.TelemetryPayload.transforms:type_name -> fleet.TransformData
+	44, // 36: fleet.TelemetryPayload.odometry:type_name -> fleet.OdometryData
+	8,  // 37: fleet.EnhancedPrecondition.type:type_name -> fleet.EnhancedPrecondition.PreconditionType
+	47, // 38: fleet.EnhancedPrecondition.filter:type_name -> fleet.PreconditionFilter
+	9,  // 39: fleet.EnhancedPrecondition.operator:type_name -> fleet.EnhancedPrecondition.PreconditionOperator
+	3,  // 40: fleet.TaskLog.level:type_name -> fleet.TaskLogLevel
+	55, // 41: fleet.TaskLog.metadata:type_name -> fleet.TaskLog.MetadataEntry
+	56, // 42: fleet.StartTaskCommand.params:type_name -> fleet.StartTaskCommand.ParamsEntry
+	5,  // 43: fleet.ResourceEvent.kind:type_name -> fleet.ResourceEventKind
+	4,  // 44: fleet.TaskStateUpdate.state:type_name -> fleet.TaskState
+	57, // 45: fleet.TaskStateUpdate.variables:type_name -> fleet.TaskStateUpdate.VariablesEntry
+	53, // 46: fleet.TaskStateUpdate.step_result:type_name -> fleet.StepResultInfo
+	51, // 47: fleet.TaskStateUpdate.resource_events:type_name -> fleet.ResourceEvent
+	2,  // 48: fleet.StepResultInfo.status:type_name -> fleet.ActionStatus
+	35, // 49: fleet.FleetStateResponse.AgentsEntry.value:type_name -> fleet.AgentStateSnapshot
+	10, // 50: fleet.FleetControl.CommandStream:input_type -> fleet.AgentMessage
+	26, // 51: fleet.FleetControl.RegisterAgent:input_type -> fleet.RegisterAgentRequest
+	25, // 52: fleet.FleetControl.ReportResult:input_type -> fleet.ActionResult
+	29, // 53: fleet.FleetControl.ExecuteTask:input_type -> fleet.ExecuteTaskRequest
+	31, // 54: fleet.FleetControl.CancelTask:input_type -> fleet.CancelTaskRequest
+	33, // 55: fleet.FleetControl.GetFleetState:input_type -> fleet.FleetStateRequest
+	14, // 56: fleet.FleetControl.CommandStream:output_type -> fleet.ServerMessage
+	27, // 57: fleet.FleetControl.RegisterAgent:output_type -> fleet.RegisterAgentResponse
+	37, // 58: fleet.FleetControl.ReportResult:output_type -> fleet.Ack
+	30, // 59: fleet.FleetControl.ExecuteTask:output_type -> fleet.ExecuteTaskResponse
+	32, // 60: fleet.FleetControl.CancelTask:output_type -> fleet.CancelTaskResponse
+	34, // 61: fleet.FleetControl.GetFleetState:output_type -> fleet.FleetStateResponse
+	56, // [56:62] is the sub-list for method output_type
+	50, // [50:56] is the sub-list for method input_type
+	50, // [50:50] is the sub-list for extension type_name
+	50, // [50:50] is the sub-list for extension extendee
+	0,  // [0:50] is the sub-list for field type_name
 }
 
 func init() { file_fleet_proto_init() }
@@ -3233,6 +4742,7 @@ func file_fleet_proto_init() {
 		(*AgentMessage_StatusUpdate)(nil),
 		(*AgentMessage_StateUpdate)(nil),
 		(*AgentMessage_TaskLog)(nil),
+		(*AgentMessage_TaskState)(nil),
 	}
 	file_fleet_proto_msgTypes[4].OneofWrappers = []any{
 		(*ServerMessage_Execute)(nil),
@@ -3241,15 +4751,18 @@ func file_fleet_proto_init() {
 		(*ServerMessage_ConfigUpdate)(nil),
 		(*ServerMessage_FleetStateUpdate)(nil),
 		(*ServerMessage_DeployGraph)(nil),
+		(*ServerMessage_StartTask)(nil),
+		(*ServerMessage_DeleteGraph)(nil),
+		(*ServerMessage_GraphUpdate)(nil),
 	}
-	file_fleet_proto_msgTypes[23].OneofWrappers = []any{}
+	file_fleet_proto_msgTypes[25].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_fleet_proto_rawDesc), len(file_fleet_proto_rawDesc)),
-			NumEnums:      6,
-			NumMessages:   32,
+			NumEnums:      10,
+			NumMessages:   48,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

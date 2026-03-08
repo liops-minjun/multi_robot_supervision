@@ -203,6 +203,45 @@ func parseBehaviorTreeSteps(graph *BehaviorTree) ([]BehaviorTreeStep, error) {
 	return steps, nil
 }
 
+func derivePlanningTaskSpecFromSteps(steps []BehaviorTreeStep) PlanningTaskSpec {
+	spec := PlanningTaskSpec{}
+	resourceSet := make(map[string]bool)
+	resultSet := make(map[string]bool)
+
+	for _, step := range steps {
+		for _, resource := range step.ResourceAcquire {
+			resource = strings.TrimSpace(resource)
+			if resource == "" || resourceSet[resource] {
+				continue
+			}
+			resourceSet[resource] = true
+			spec.RequiredResources = append(spec.RequiredResources, resource)
+		}
+		if len(spec.DuringState) == 0 && len(step.PlanningDuring) > 0 {
+			spec.DuringState = append([]PlanningEffect{}, step.PlanningDuring...)
+		}
+		for _, effect := range step.PlanningEffects {
+			key := effect.Variable + "\x00" + effect.Value
+			if resultSet[key] {
+				continue
+			}
+			resultSet[key] = true
+			spec.ResultStates = append(spec.ResultStates, effect)
+		}
+	}
+
+	return spec
+}
+
+type BehaviorTreePlanningMigrationStats struct {
+	Scanned                       int
+	PlanningTasksMigrated         int
+	RequiredActionTypesBackfilled int
+	AlreadyConfigured             int
+	SkippedMissingLegacyData      int
+	SkippedInvalidSteps           int
+}
+
 func isSelfOnlyCondition(cond StartCondition) bool {
 	if cond.Quantifier != "" && strings.ToLower(cond.Quantifier) != "self" {
 		return false
@@ -893,6 +932,12 @@ func (r *Repository) GetBehaviorTree(id string) (*BehaviorTree, error) {
 				if planningStatesJSON := getString(props, "planning_states_json"); planningStatesJSON != "" {
 					bt.PlanningStates = datatypes.JSON([]byte(planningStatesJSON))
 				}
+				if planningTaskJSON := getString(props, "planning_task_json"); planningTaskJSON != "" {
+					bt.PlanningTask = datatypes.JSON([]byte(planningTaskJSON))
+				}
+				if requiredActionTypesJSON, err := json.Marshal(getStringSlice(props, "required_action_types")); err == nil && string(requiredActionTypesJSON) != "null" {
+					bt.RequiredActionTypes = datatypes.JSON(requiredActionTypesJSON)
+				}
 				// Parse lock timestamps
 				if lockedAtMs := getInt64(props, "locked_at_ms"); lockedAtMs > 0 {
 					bt.LockedAt = sql.NullTime{Time: time.UnixMilli(lockedAtMs).UTC(), Valid: true}
@@ -1022,6 +1067,12 @@ func (r *Repository) GetBehaviorTrees(agentID string, includeTemplates bool) ([]
 				if planningStatesJSON := getString(props, "planning_states_json"); planningStatesJSON != "" {
 					bt.PlanningStates = datatypes.JSON([]byte(planningStatesJSON))
 				}
+				if planningTaskJSON := getString(props, "planning_task_json"); planningTaskJSON != "" {
+					bt.PlanningTask = datatypes.JSON([]byte(planningTaskJSON))
+				}
+				if requiredActionTypesJSON, err := json.Marshal(getStringSlice(props, "required_action_types")); err == nil && string(requiredActionTypesJSON) != "null" {
+					bt.RequiredActionTypes = datatypes.JSON(requiredActionTypesJSON)
+				}
 				graphs = append(graphs, bt)
 			}
 		}
@@ -1031,6 +1082,125 @@ func (r *Repository) GetBehaviorTrees(agentID string, includeTemplates bool) ([]
 		return nil, err
 	}
 	return result.([]BehaviorTree), nil
+}
+
+// MigrateBehaviorTreePlanningTasks lifts legacy step-level planning metadata to
+// the behavior tree root so the planner can operate without step fallbacks.
+func (r *Repository) MigrateBehaviorTreePlanningTasks() (BehaviorTreePlanningMigrationStats, error) {
+	ctx := context.Background()
+	result, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		res, err := tx.Run(ctx, `
+			MATCH (g:ActionGraph)
+			RETURN g
+		`, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		stats := BehaviorTreePlanningMigrationStats{}
+		nowMs := time.Now().UTC().UnixMilli()
+		type graphRecord struct {
+			ID                  string
+			StepsJSON           string
+			PlanningTaskJSON    string
+			RequiredActionTypes []string
+		}
+		graphs := make([]graphRecord, 0)
+
+		for res.Next(ctx) {
+			node, _ := res.Record().Get("g")
+			gNode, ok := node.(neo4j.Node)
+			if !ok {
+				continue
+			}
+
+			props := gNode.Props
+			graphs = append(graphs, graphRecord{
+				ID:                  getString(props, "id"),
+				StepsJSON:           getString(props, "steps_json"),
+				PlanningTaskJSON:    strings.TrimSpace(getString(props, "planning_task_json")),
+				RequiredActionTypes: getStringSlice(props, "required_action_types"),
+			})
+		}
+		if err := res.Err(); err != nil {
+			return nil, err
+		}
+
+		for _, graph := range graphs {
+			stats.Scanned++
+			needsPlanningTask := true
+			if graph.PlanningTaskJSON != "" {
+				if spec, err := DecodePlanningTaskSpec([]byte(graph.PlanningTaskJSON)); err == nil && spec.HasData() {
+					needsPlanningTask = false
+				}
+			}
+			needsRequiredActionTypes := len(graph.RequiredActionTypes) == 0
+
+			if !needsPlanningTask && !needsRequiredActionTypes {
+				stats.AlreadyConfigured++
+				continue
+			}
+			if strings.TrimSpace(graph.StepsJSON) == "" {
+				if needsPlanningTask {
+					stats.SkippedMissingLegacyData++
+				}
+				continue
+			}
+
+			steps, err := parseBehaviorTreeSteps(&BehaviorTree{Steps: datatypes.JSON([]byte(graph.StepsJSON))})
+			if err != nil {
+				stats.SkippedInvalidSteps++
+				continue
+			}
+
+			assignments := make([]string, 0, 3)
+			params := map[string]any{
+				"id":            graph.ID,
+				"updated_at_ms": nowMs,
+			}
+
+			if needsPlanningTask {
+				spec := derivePlanningTaskSpecFromSteps(steps)
+				if spec.HasData() {
+					encoded, err := json.Marshal(spec)
+					if err != nil {
+						return nil, err
+					}
+					assignments = append(assignments, "g.planning_task_json = $planning_task_json")
+					params["planning_task_json"] = string(encoded)
+					stats.PlanningTasksMigrated++
+				} else {
+					stats.SkippedMissingLegacyData++
+				}
+			}
+
+			if needsRequiredActionTypes {
+				actionTypes := ExtractActionTypesFromSteps(steps)
+				if len(actionTypes) > 0 {
+					assignments = append(assignments, "g.required_action_types = $required_action_types")
+					params["required_action_types"] = actionTypes
+					stats.RequiredActionTypesBackfilled++
+				}
+			}
+
+			if len(assignments) == 0 {
+				continue
+			}
+
+			assignments = append(assignments, "g.updated_at_ms = $updated_at_ms")
+			query := `
+				MATCH (g:ActionGraph {id: $id})
+				SET ` + strings.Join(assignments, ", ")
+			if _, err := tx.Run(ctx, query, params); err != nil {
+				return nil, err
+			}
+		}
+		return stats, nil
+	})
+	if err != nil {
+		return BehaviorTreePlanningMigrationStats{}, err
+	}
+	return result.(BehaviorTreePlanningMigrationStats), nil
 }
 
 func (r *Repository) CreateBehaviorTree(graph *BehaviorTree) error {
@@ -1054,6 +1224,7 @@ func (r *Repository) CreateBehaviorTree(graph *BehaviorTree) error {
 
 	ctx := context.Background()
 	planningStatesJSON := string(graph.PlanningStates)
+	planningTaskJSON := string(graph.PlanningTask)
 	props := map[string]any{
 		"id":                    graph.ID,
 		"name":                  graph.Name,
@@ -1071,6 +1242,7 @@ func (r *Repository) CreateBehaviorTree(graph *BehaviorTree) error {
 		"schema_version":        "1.0.0",
 		"states_json":           statesJSON,
 		"planning_states_json":  planningStatesJSON,
+		"planning_task_json":    planningTaskJSON,
 		"task_distributor_id":   graph.TaskDistributorID.String,
 		"created_at_ms":         timeToMillis(graph.CreatedAt),
 		"updated_at_ms":         timeToMillis(graph.UpdatedAt),
@@ -1094,6 +1266,7 @@ func (r *Repository) CreateBehaviorTree(graph *BehaviorTree) error {
 				schema_version: $schema_version,
 				states_json: $states_json,
 				planning_states_json: $planning_states_json,
+				planning_task_json: $planning_task_json,
 				task_distributor_id: $task_distributor_id,
 				created_at_ms: $created_at_ms,
 				updated_at_ms: $updated_at_ms
@@ -1141,6 +1314,7 @@ func (r *Repository) UpdateBehaviorTree(graph *BehaviorTree) error {
 	}
 
 	planningStatesJSON := string(graph.PlanningStates)
+	planningTaskJSON := string(graph.PlanningTask)
 	props := map[string]any{
 		"id":                    graph.ID,
 		"name":                  graph.Name,
@@ -1158,6 +1332,7 @@ func (r *Repository) UpdateBehaviorTree(graph *BehaviorTree) error {
 		"schema_version":        "1.0.0",
 		"states_json":           statesJSON,
 		"planning_states_json":  planningStatesJSON,
+		"planning_task_json":    planningTaskJSON,
 		"task_distributor_id":   graph.TaskDistributorID.String,
 		"updated_at_ms":         time.Now().UTC().UnixMilli(),
 		// Lock fields
@@ -1184,6 +1359,7 @@ func (r *Repository) UpdateBehaviorTree(graph *BehaviorTree) error {
 			    g.schema_version = $schema_version,
 			    g.states_json = $states_json,
 			    g.planning_states_json = $planning_states_json,
+			    g.planning_task_json = $planning_task_json,
 			    g.task_distributor_id = $task_distributor_id,
 			    g.updated_at_ms = $updated_at_ms,
 			    g.locked_by = $locked_by,
@@ -3390,6 +3566,12 @@ func (r *Repository) GetBehaviorTreesByIDs(ids []string) (map[string]*BehaviorTr
 				}
 				if planningStatesJSON := getString(props, "planning_states_json"); planningStatesJSON != "" {
 					bt.PlanningStates = datatypes.JSON([]byte(planningStatesJSON))
+				}
+				if planningTaskJSON := getString(props, "planning_task_json"); planningTaskJSON != "" {
+					bt.PlanningTask = datatypes.JSON([]byte(planningTaskJSON))
+				}
+				if requiredActionTypesJSON, err := json.Marshal(getStringSlice(props, "required_action_types")); err == nil && string(requiredActionTypesJSON) != "null" {
+					bt.RequiredActionTypes = datatypes.JSON(requiredActionTypesJSON)
 				}
 				graphs[bt.ID] = &bt
 			}
