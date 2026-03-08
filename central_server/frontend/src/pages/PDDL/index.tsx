@@ -1242,7 +1242,7 @@ export default function PDDL() {
                   />
                   {generatedResourceNames.length > 0 && (
                     <div className="flex flex-wrap gap-1">
-                      {generatedResourceNames.map((name, index) => (
+                      {generatedResourceNames.map((name) => (
                         <span key={name} className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[9px] text-amber-300">
                           {name}
                         </span>
