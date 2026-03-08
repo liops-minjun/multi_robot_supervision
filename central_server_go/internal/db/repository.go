@@ -333,20 +333,20 @@ func relTypeForEdge(edgeType string) string {
 func decodeAgent(node neo4j.Node) Agent {
 	props := node.Props
 	return Agent{
-		ID:                  getString(props, "id"),
-		Name:                getString(props, "name"),
-		Namespace:           getString(props, "namespace"),
-		IPAddress:           toNullString(getString(props, "ip_address")),
-		Tags:                datatypes.JSON([]byte(getString(props, "tags_json"))),
-		LastSeen:            toNullTimeMillis(getInt64(props, "last_seen_ms")),
-		CurrentState:        getString(props, "current_state"),
-		Status:              getString(props, "status"),
-		HardwareFingerprint: toNullString(getString(props, "hardware_fingerprint")),
-		AssignedByServer:    getBool(props, "assigned_by_server"),
-		CapabilityTemplateSavedAt: toNullTimeMillis(getInt64(props, "capability_template_saved_at_ms")),
+		ID:                                getString(props, "id"),
+		Name:                              getString(props, "name"),
+		Namespace:                         getString(props, "namespace"),
+		IPAddress:                         toNullString(getString(props, "ip_address")),
+		Tags:                              datatypes.JSON([]byte(getString(props, "tags_json"))),
+		LastSeen:                          toNullTimeMillis(getInt64(props, "last_seen_ms")),
+		CurrentState:                      getString(props, "current_state"),
+		Status:                            getString(props, "status"),
+		HardwareFingerprint:               toNullString(getString(props, "hardware_fingerprint")),
+		AssignedByServer:                  getBool(props, "assigned_by_server"),
+		CapabilityTemplateSavedAt:         toNullTimeMillis(getInt64(props, "capability_template_saved_at_ms")),
 		CapabilityTemplateCapabilityCount: int(getInt64(props, "capability_template_capability_count")),
-		CreatedAt:           time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
-		UpdatedAt:           time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
+		CreatedAt:                         time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
+		UpdatedAt:                         time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
 	}
 }
 
@@ -532,10 +532,10 @@ func (r *Repository) SaveAgentCapabilityTemplate(agentID string) (int, error) {
 	ctx := context.Background()
 	nowMs := time.Now().UTC().UnixMilli()
 	props := map[string]any{
-		"id":                agentID,
-		"saved_at_ms":       nowMs,
-		"capability_count":  len(caps),
-		"updated_at_ms":     nowMs,
+		"id":               agentID,
+		"saved_at_ms":      nowMs,
+		"capability_count": len(caps),
+		"updated_at_ms":    nowMs,
 	}
 
 	_, err = r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
@@ -864,16 +864,16 @@ func (r *Repository) GetBehaviorTree(id string) (*BehaviorTree, error) {
 				statesJSON := getString(props, "states_json")
 				entryPoint := getString(props, "entry_point")
 				bt := BehaviorTree{
-					ID:                 getString(props, "id"),
-					Name:               getString(props, "name"),
-					Description:        toNullString(getString(props, "description")),
-					AgentID:            toNullString(getString(props, "agent_id")),
-					Version:            int(getInt64(props, "version")),
-					IsTemplate:         isTemplateFromProps(props),
-					TemplateCategory:   toNullString(getString(props, "template_category")),
-					AutoGenerateStates: getBool(props, "auto_generate_states"),
-					CreatedAt:          time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
-					UpdatedAt:          time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
+					ID:                getString(props, "id"),
+					Name:              getString(props, "name"),
+					Description:       toNullString(getString(props, "description")),
+					AgentID:           toNullString(getString(props, "agent_id")),
+					Version:           int(getInt64(props, "version")),
+					IsTemplate:        isTemplateFromProps(props),
+					TemplateCategory:  toNullString(getString(props, "template_category")),
+					TaskDistributorID: toNullString(getString(props, "task_distributor_id")),
+					CreatedAt:         time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
+					UpdatedAt:         time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
 					// Lock fields
 					LockedBy:      toNullString(getString(props, "locked_by")),
 					LockSessionID: toNullString(getString(props, "lock_session_id")),
@@ -889,6 +889,9 @@ func (r *Repository) GetBehaviorTree(id string) (*BehaviorTree, error) {
 				}
 				if statesJSON != "" {
 					bt.States = datatypes.JSON([]byte(statesJSON))
+				}
+				if planningStatesJSON := getString(props, "planning_states_json"); planningStatesJSON != "" {
+					bt.PlanningStates = datatypes.JSON([]byte(planningStatesJSON))
 				}
 				// Parse lock timestamps
 				if lockedAtMs := getInt64(props, "locked_at_ms"); lockedAtMs > 0 {
@@ -995,17 +998,17 @@ func (r *Repository) GetBehaviorTrees(agentID string, includeTemplates bool) ([]
 				preconditionsJSON := getString(props, "preconditions_json")
 				statesJSON := getString(props, "states_json")
 				bt := BehaviorTree{
-					ID:                 getString(props, "id"),
-					Name:               getString(props, "name"),
-					Description:        toNullString(getString(props, "description")),
-					AgentID:            toNullString(getString(props, "agent_id")),
-					EntryPoint:         entryPointValue,
-					Version:            int(getInt64(props, "version")),
-					IsTemplate:         isTemplateFromProps(props),
-					TemplateCategory:   toNullString(getString(props, "template_category")),
-					AutoGenerateStates: getBool(props, "auto_generate_states"),
-					CreatedAt:          time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
-					UpdatedAt:          time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
+					ID:                getString(props, "id"),
+					Name:              getString(props, "name"),
+					Description:       toNullString(getString(props, "description")),
+					AgentID:           toNullString(getString(props, "agent_id")),
+					EntryPoint:        entryPointValue,
+					Version:           int(getInt64(props, "version")),
+					IsTemplate:        isTemplateFromProps(props),
+					TemplateCategory:  toNullString(getString(props, "template_category")),
+					TaskDistributorID: toNullString(getString(props, "task_distributor_id")),
+					CreatedAt:         time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
+					UpdatedAt:         time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
 				}
 				if stepsJSON != "" {
 					bt.Steps = datatypes.JSON([]byte(stepsJSON))
@@ -1015,6 +1018,9 @@ func (r *Repository) GetBehaviorTrees(agentID string, includeTemplates bool) ([]
 				}
 				if statesJSON != "" {
 					bt.States = datatypes.JSON([]byte(statesJSON))
+				}
+				if planningStatesJSON := getString(props, "planning_states_json"); planningStatesJSON != "" {
+					bt.PlanningStates = datatypes.JSON([]byte(planningStatesJSON))
 				}
 				graphs = append(graphs, bt)
 			}
@@ -1044,21 +1050,10 @@ func (r *Repository) CreateBehaviorTree(graph *BehaviorTree) error {
 		graph.EntryPoint = toNullString(entryPoint)
 	}
 
-	// Auto-generate states if enabled (default: true)
 	statesJSON := string(graph.States)
-	if graph.AutoGenerateStates || len(graph.States) == 0 {
-		var existingStates []GraphState
-		if len(graph.States) > 0 {
-			json.Unmarshal(graph.States, &existingStates)
-		}
-		generatedStates := GenerateStatesFromSteps(steps, existingStates)
-		if b, err := json.Marshal(generatedStates); err == nil {
-			statesJSON = string(b)
-			graph.States = datatypes.JSON(b)
-		}
-	}
 
 	ctx := context.Background()
+	planningStatesJSON := string(graph.PlanningStates)
 	props := map[string]any{
 		"id":                    graph.ID,
 		"name":                  graph.Name,
@@ -1075,7 +1070,8 @@ func (r *Repository) CreateBehaviorTree(graph *BehaviorTree) error {
 		"checksum":              checksumForJSON(stepsJSON),
 		"schema_version":        "1.0.0",
 		"states_json":           statesJSON,
-		"auto_generate_states":  graph.AutoGenerateStates,
+		"planning_states_json":  planningStatesJSON,
+		"task_distributor_id":   graph.TaskDistributorID.String,
 		"created_at_ms":         timeToMillis(graph.CreatedAt),
 		"updated_at_ms":         timeToMillis(graph.UpdatedAt),
 	}
@@ -1097,7 +1093,8 @@ func (r *Repository) CreateBehaviorTree(graph *BehaviorTree) error {
 				checksum: $checksum,
 				schema_version: $schema_version,
 				states_json: $states_json,
-				auto_generate_states: $auto_generate_states,
+				planning_states_json: $planning_states_json,
+				task_distributor_id: $task_distributor_id,
 				created_at_ms: $created_at_ms,
 				updated_at_ms: $updated_at_ms
 			})
@@ -1130,19 +1127,7 @@ func (r *Repository) UpdateBehaviorTree(graph *BehaviorTree) error {
 		graph.EntryPoint = toNullString(entryPoint)
 	}
 
-	// Auto-generate states if enabled
 	statesJSON := string(graph.States)
-	if graph.AutoGenerateStates {
-		var existingStates []GraphState
-		if len(graph.States) > 0 {
-			json.Unmarshal(graph.States, &existingStates)
-		}
-		generatedStates := GenerateStatesFromSteps(steps, existingStates)
-		if b, err := json.Marshal(generatedStates); err == nil {
-			statesJSON = string(b)
-			graph.States = datatypes.JSON(b)
-		}
-	}
 
 	ctx := context.Background()
 
@@ -1155,6 +1140,7 @@ func (r *Repository) UpdateBehaviorTree(graph *BehaviorTree) error {
 		lockExpiresAtMs = graph.LockExpiresAt.Time.UTC().UnixMilli()
 	}
 
+	planningStatesJSON := string(graph.PlanningStates)
 	props := map[string]any{
 		"id":                    graph.ID,
 		"name":                  graph.Name,
@@ -1171,7 +1157,8 @@ func (r *Repository) UpdateBehaviorTree(graph *BehaviorTree) error {
 		"checksum":              checksumForJSON(stepsJSON),
 		"schema_version":        "1.0.0",
 		"states_json":           statesJSON,
-		"auto_generate_states":  graph.AutoGenerateStates,
+		"planning_states_json":  planningStatesJSON,
+		"task_distributor_id":   graph.TaskDistributorID.String,
 		"updated_at_ms":         time.Now().UTC().UnixMilli(),
 		// Lock fields
 		"locked_by":          graph.LockedBy.String,
@@ -1196,7 +1183,8 @@ func (r *Repository) UpdateBehaviorTree(graph *BehaviorTree) error {
 			    g.checksum = $checksum,
 			    g.schema_version = $schema_version,
 			    g.states_json = $states_json,
-			    g.auto_generate_states = $auto_generate_states,
+			    g.planning_states_json = $planning_states_json,
+			    g.task_distributor_id = $task_distributor_id,
 			    g.updated_at_ms = $updated_at_ms,
 			    g.locked_by = $locked_by,
 			    g.locked_at_ms = $locked_at_ms,
@@ -3377,16 +3365,16 @@ func (r *Repository) GetBehaviorTreesByIDs(ids []string) (map[string]*BehaviorTr
 				statesJSON := getString(props, "states_json")
 				entryPoint := getString(props, "entry_point")
 				bt := BehaviorTree{
-					ID:                 getString(props, "id"),
-					Name:               getString(props, "name"),
-					Description:        toNullString(getString(props, "description")),
-					AgentID:            toNullString(getString(props, "agent_id")),
-					Version:            int(getInt64(props, "version")),
-					IsTemplate:         isTemplateFromProps(props),
-					TemplateCategory:   toNullString(getString(props, "template_category")),
-					AutoGenerateStates: getBool(props, "auto_generate_states"),
-					CreatedAt:          time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
-					UpdatedAt:          time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
+					ID:                getString(props, "id"),
+					Name:              getString(props, "name"),
+					Description:       toNullString(getString(props, "description")),
+					AgentID:           toNullString(getString(props, "agent_id")),
+					Version:           int(getInt64(props, "version")),
+					IsTemplate:        isTemplateFromProps(props),
+					TemplateCategory:  toNullString(getString(props, "template_category")),
+					TaskDistributorID: toNullString(getString(props, "task_distributor_id")),
+					CreatedAt:         time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
+					UpdatedAt:         time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
 				}
 				if entryPoint != "" {
 					bt.EntryPoint = toNullString(entryPoint)
@@ -3400,6 +3388,9 @@ func (r *Repository) GetBehaviorTreesByIDs(ids []string) (map[string]*BehaviorTr
 				if statesJSON != "" {
 					bt.States = datatypes.JSON([]byte(statesJSON))
 				}
+				if planningStatesJSON := getString(props, "planning_states_json"); planningStatesJSON != "" {
+					bt.PlanningStates = datatypes.JSON([]byte(planningStatesJSON))
+				}
 				graphs[bt.ID] = &bt
 			}
 		}
@@ -3409,6 +3400,506 @@ func (r *Repository) GetBehaviorTreesByIDs(ids []string) (map[string]*BehaviorTr
 		return nil, err
 	}
 	return result.(map[string]*BehaviorTree), nil
+}
+
+// =============================================================================
+// PDDL Planning Problems
+// =============================================================================
+
+// CreatePlanningProblem creates a new planning problem node in Neo4j
+func (r *Repository) CreatePlanningProblem(pp *PlanningProblem) error {
+	if pp == nil {
+		return fmt.Errorf("planning problem is nil")
+	}
+	ctx := context.Background()
+	props := map[string]any{
+		"id":                  pp.ID,
+		"name":                pp.Name,
+		"behavior_tree_id":    pp.BehaviorTreeID,
+		"task_distributor_id": pp.TaskDistributorID.String,
+		"initial_state":       string(pp.InitialState),
+		"goal_state":          string(pp.GoalState),
+		"agent_ids":           string(pp.AgentIDs),
+		"status":              pp.Status,
+		"plan_result":         string(pp.PlanResult),
+		"error_message":       pp.ErrorMessage.String,
+		"created_at_ms":       timeToMillis(pp.CreatedAt),
+		"updated_at_ms":       timeToMillis(pp.UpdatedAt),
+	}
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		_, err := tx.Run(ctx, `
+			CREATE (p:PlanningProblem {
+				id: $id,
+				name: $name,
+				behavior_tree_id: $behavior_tree_id,
+				task_distributor_id: $task_distributor_id,
+				initial_state: $initial_state,
+				goal_state: $goal_state,
+				agent_ids: $agent_ids,
+				status: $status,
+				plan_result: $plan_result,
+				error_message: $error_message,
+				created_at_ms: $created_at_ms,
+				updated_at_ms: $updated_at_ms
+			})
+		`, props)
+		return nil, err
+	})
+	return err
+}
+
+// GetPlanningProblem retrieves a planning problem by ID
+func (r *Repository) GetPlanningProblem(id string) (*PlanningProblem, error) {
+	ctx := context.Background()
+	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
+		res, err := tx.Run(ctx, `
+			MATCH (p:PlanningProblem {id: $id})
+			RETURN p
+		`, map[string]any{"id": id})
+		if err != nil {
+			return nil, err
+		}
+		if res.Next(ctx) {
+			node, _ := res.Record().Get("p")
+			if pNode, ok := node.(neo4j.Node); ok {
+				return parsePlanningProblemNode(pNode.Props), nil
+			}
+		}
+		return nil, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, nil
+	}
+	return result.(*PlanningProblem), nil
+}
+
+// ListPlanningProblems lists planning problems, optionally filtered by BT ID
+func (r *Repository) ListPlanningProblems(behaviorTreeID string) ([]PlanningProblem, error) {
+	ctx := context.Background()
+	query := "MATCH (p:PlanningProblem) "
+	params := map[string]any{}
+	if behaviorTreeID != "" {
+		query += "WHERE p.behavior_tree_id = $bt_id "
+		params["bt_id"] = behaviorTreeID
+	}
+	query += "RETURN p ORDER BY p.created_at_ms DESC"
+
+	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
+		res, err := tx.Run(ctx, query, params)
+		if err != nil {
+			return nil, err
+		}
+		var problems []PlanningProblem
+		for res.Next(ctx) {
+			node, _ := res.Record().Get("p")
+			if pNode, ok := node.(neo4j.Node); ok {
+				problems = append(problems, *parsePlanningProblemNode(pNode.Props))
+			}
+		}
+		return problems, res.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return []PlanningProblem{}, nil
+	}
+	return result.([]PlanningProblem), nil
+}
+
+// UpdatePlanningProblemStatus updates the status and optionally the plan result
+func (r *Repository) UpdatePlanningProblemStatus(id, status string, planResult []byte, errMsg string) error {
+	ctx := context.Background()
+	props := map[string]any{
+		"id":            id,
+		"status":        status,
+		"plan_result":   string(planResult),
+		"error_message": errMsg,
+		"updated_at_ms": time.Now().UTC().UnixMilli(),
+	}
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		_, err := tx.Run(ctx, `
+			MATCH (p:PlanningProblem {id: $id})
+			SET p.status = $status,
+			    p.plan_result = $plan_result,
+			    p.error_message = $error_message,
+			    p.updated_at_ms = $updated_at_ms
+		`, props)
+		return nil, err
+	})
+	return err
+}
+
+// DeletePlanningProblem deletes a planning problem
+func (r *Repository) DeletePlanningProblem(id string) error {
+	ctx := context.Background()
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		_, err := tx.Run(ctx, `
+			MATCH (p:PlanningProblem {id: $id})
+			DETACH DELETE p
+		`, map[string]any{"id": id})
+		return nil, err
+	})
+	return err
+}
+
+func parsePlanningProblemNode(props map[string]any) *PlanningProblem {
+	pp := &PlanningProblem{
+		ID:                getString(props, "id"),
+		Name:              getString(props, "name"),
+		BehaviorTreeID:    getString(props, "behavior_tree_id"),
+		TaskDistributorID: toNullString(getString(props, "task_distributor_id")),
+		Status:            getString(props, "status"),
+		ErrorMessage:      toNullString(getString(props, "error_message")),
+		CreatedAt:         time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
+		UpdatedAt:         time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
+	}
+	if is := getString(props, "initial_state"); is != "" {
+		pp.InitialState = datatypes.JSON([]byte(is))
+	}
+	if gs := getString(props, "goal_state"); gs != "" {
+		pp.GoalState = datatypes.JSON([]byte(gs))
+	}
+	if ai := getString(props, "agent_ids"); ai != "" {
+		pp.AgentIDs = datatypes.JSON([]byte(ai))
+	}
+	if pr := getString(props, "plan_result"); pr != "" {
+		pp.PlanResult = datatypes.JSON([]byte(pr))
+	}
+	return pp
+}
+
+// =============================================================================
+// Task Distributor CRUD
+// =============================================================================
+
+func (r *Repository) CreateTaskDistributor(td *TaskDistributor) error {
+	if td == nil {
+		return fmt.Errorf("task distributor is nil")
+	}
+	ctx := context.Background()
+	props := map[string]any{
+		"id":            td.ID,
+		"name":          td.Name,
+		"description":   td.Description,
+		"created_at_ms": timeToMillis(td.CreatedAt),
+		"updated_at_ms": timeToMillis(td.UpdatedAt),
+	}
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		_, err := tx.Run(ctx, `
+			CREATE (td:TaskDistributor {
+				id: $id, name: $name, description: $description,
+				created_at_ms: $created_at_ms, updated_at_ms: $updated_at_ms
+			})
+		`, props)
+		return nil, err
+	})
+	return err
+}
+
+func (r *Repository) GetTaskDistributor(id string) (*TaskDistributor, error) {
+	ctx := context.Background()
+	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
+		res, err := tx.Run(ctx, `MATCH (td:TaskDistributor {id: $id}) RETURN td`, map[string]any{"id": id})
+		if err != nil {
+			return nil, err
+		}
+		if res.Next(ctx) {
+			node, _ := res.Record().Get("td")
+			if n, ok := node.(neo4j.Node); ok {
+				return parseTaskDistributorNode(n.Props), nil
+			}
+		}
+		return nil, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, nil
+	}
+	return result.(*TaskDistributor), nil
+}
+
+func (r *Repository) ListTaskDistributors() ([]TaskDistributor, error) {
+	ctx := context.Background()
+	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
+		res, err := tx.Run(ctx, `MATCH (td:TaskDistributor) RETURN td ORDER BY td.created_at_ms DESC`, nil)
+		if err != nil {
+			return nil, err
+		}
+		var items []TaskDistributor
+		for res.Next(ctx) {
+			node, _ := res.Record().Get("td")
+			if n, ok := node.(neo4j.Node); ok {
+				items = append(items, *parseTaskDistributorNode(n.Props))
+			}
+		}
+		return items, res.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return []TaskDistributor{}, nil
+	}
+	return result.([]TaskDistributor), nil
+}
+
+func (r *Repository) UpdateTaskDistributor(id string, name, description string) error {
+	ctx := context.Background()
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		_, err := tx.Run(ctx, `
+			MATCH (td:TaskDistributor {id: $id})
+			SET td.name = $name, td.description = $description, td.updated_at_ms = $updated_at_ms
+		`, map[string]any{
+			"id": id, "name": name, "description": description,
+			"updated_at_ms": time.Now().UTC().UnixMilli(),
+		})
+		return nil, err
+	})
+	return err
+}
+
+func (r *Repository) DeleteTaskDistributor(id string) error {
+	ctx := context.Background()
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		// Delete states and resources that belong to this distributor, then the distributor itself
+		_, err := tx.Run(ctx, `
+			MATCH (td:TaskDistributor {id: $id})
+			OPTIONAL MATCH (s:TaskDistributorState {task_distributor_id: $id})
+			OPTIONAL MATCH (r:TaskDistributorResource {task_distributor_id: $id})
+			DETACH DELETE s, r, td
+		`, map[string]any{"id": id})
+		return nil, err
+	})
+	return err
+}
+
+func parseTaskDistributorNode(props map[string]any) *TaskDistributor {
+	return &TaskDistributor{
+		ID:          getString(props, "id"),
+		Name:        getString(props, "name"),
+		Description: getString(props, "description"),
+		CreatedAt:   time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
+		UpdatedAt:   time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
+	}
+}
+
+// =============================================================================
+// Task Distributor State CRUD
+// =============================================================================
+
+func (r *Repository) CreateTaskDistributorState(s *TaskDistributorState) error {
+	if s == nil {
+		return fmt.Errorf("state is nil")
+	}
+	ctx := context.Background()
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		_, err := tx.Run(ctx, `
+			CREATE (s:TaskDistributorState {
+				id: $id, task_distributor_id: $td_id,
+				name: $name, type: $type, initial_value: $initial_value, description: $description
+			})
+		`, map[string]any{
+			"id": s.ID, "td_id": s.TaskDistributorID,
+			"name": s.Name, "type": s.Type,
+			"initial_value": s.InitialValue, "description": s.Description,
+		})
+		return nil, err
+	})
+	return err
+}
+
+func (r *Repository) ListTaskDistributorStates(distributorID string) ([]TaskDistributorState, error) {
+	ctx := context.Background()
+	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
+		res, err := tx.Run(ctx, `
+			MATCH (s:TaskDistributorState {task_distributor_id: $td_id})
+			RETURN s ORDER BY s.name
+		`, map[string]any{"td_id": distributorID})
+		if err != nil {
+			return nil, err
+		}
+		var items []TaskDistributorState
+		for res.Next(ctx) {
+			node, _ := res.Record().Get("s")
+			if n, ok := node.(neo4j.Node); ok {
+				items = append(items, *parseTaskDistributorStateNode(n.Props))
+			}
+		}
+		return items, res.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return []TaskDistributorState{}, nil
+	}
+	return result.([]TaskDistributorState), nil
+}
+
+func (r *Repository) UpdateTaskDistributorState(id string, name, typ, initialValue, description string) error {
+	ctx := context.Background()
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		_, err := tx.Run(ctx, `
+			MATCH (s:TaskDistributorState {id: $id})
+			SET s.name = $name, s.type = $type, s.initial_value = $initial_value, s.description = $description
+		`, map[string]any{
+			"id": id, "name": name, "type": typ,
+			"initial_value": initialValue, "description": description,
+		})
+		return nil, err
+	})
+	return err
+}
+
+func (r *Repository) DeleteTaskDistributorState(id string) error {
+	ctx := context.Background()
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		_, err := tx.Run(ctx, `MATCH (s:TaskDistributorState {id: $id}) DETACH DELETE s`, map[string]any{"id": id})
+		return nil, err
+	})
+	return err
+}
+
+func parseTaskDistributorStateNode(props map[string]any) *TaskDistributorState {
+	return &TaskDistributorState{
+		ID:                getString(props, "id"),
+		TaskDistributorID: getString(props, "task_distributor_id"),
+		Name:              getString(props, "name"),
+		Type:              getString(props, "type"),
+		InitialValue:      getString(props, "initial_value"),
+		Description:       getString(props, "description"),
+	}
+}
+
+// =============================================================================
+// Task Distributor Resource CRUD
+// =============================================================================
+
+func (r *Repository) CreateTaskDistributorResource(res *TaskDistributorResource) error {
+	if res == nil {
+		return fmt.Errorf("resource is nil")
+	}
+	if strings.TrimSpace(res.Kind) == "" {
+		res.Kind = "instance"
+	}
+	ctx := context.Background()
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		_, err := tx.Run(ctx, `
+			CREATE (r:TaskDistributorResource {
+				id: $id, task_distributor_id: $td_id, name: $name,
+				kind: $kind, parent_resource_id: $parent_resource_id, description: $description
+			})
+		`, map[string]any{
+			"id": res.ID, "td_id": res.TaskDistributorID,
+			"name": res.Name, "kind": res.Kind,
+			"parent_resource_id": res.ParentResourceID, "description": res.Description,
+		})
+		return nil, err
+	})
+	return err
+}
+
+func (r *Repository) ListTaskDistributorResources(distributorID string) ([]TaskDistributorResource, error) {
+	ctx := context.Background()
+	result, err := r.withSession(ctx, neo4j.AccessModeRead, func(tx neo4j.ManagedTransaction) (any, error) {
+		res, err := tx.Run(ctx, `
+			MATCH (r:TaskDistributorResource {task_distributor_id: $td_id})
+			RETURN r ORDER BY r.name
+		`, map[string]any{"td_id": distributorID})
+		if err != nil {
+			return nil, err
+		}
+		var items []TaskDistributorResource
+		for res.Next(ctx) {
+			node, _ := res.Record().Get("r")
+			if n, ok := node.(neo4j.Node); ok {
+				items = append(items, *parseTaskDistributorResourceNode(n.Props))
+			}
+		}
+		return items, res.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return []TaskDistributorResource{}, nil
+	}
+	return result.([]TaskDistributorResource), nil
+}
+
+func (r *Repository) UpdateTaskDistributorResource(id, name, kind, parentResourceID, description string) error {
+	if strings.TrimSpace(kind) == "" {
+		kind = "instance"
+	}
+	ctx := context.Background()
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		_, err := tx.Run(ctx, `
+			MATCH (r:TaskDistributorResource {id: $id})
+			SET r.name = $name,
+			    r.kind = $kind,
+			    r.parent_resource_id = $parent_resource_id,
+			    r.description = $description
+		`, map[string]any{
+			"id": id, "name": name, "kind": kind,
+			"parent_resource_id": parentResourceID, "description": description,
+		})
+		return nil, err
+	})
+	return err
+}
+
+func (r *Repository) DeleteTaskDistributorResource(id string) error {
+	ctx := context.Background()
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		_, err := tx.Run(ctx, `
+			MATCH (r:TaskDistributorResource {id: $id})
+			OPTIONAL MATCH (child:TaskDistributorResource {parent_resource_id: $id})
+			DETACH DELETE child, r
+		`, map[string]any{"id": id})
+		return nil, err
+	})
+	return err
+}
+
+func parseTaskDistributorResourceNode(props map[string]any) *TaskDistributorResource {
+	kind := getString(props, "kind")
+	if kind == "" {
+		kind = "instance"
+	}
+	return &TaskDistributorResource{
+		ID:                getString(props, "id"),
+		TaskDistributorID: getString(props, "task_distributor_id"),
+		Name:              getString(props, "name"),
+		Kind:              kind,
+		ParentResourceID:  getString(props, "parent_resource_id"),
+		Description:       getString(props, "description"),
+	}
+}
+
+// GetTaskDistributorFull returns a distributor with its states and resources
+func (r *Repository) GetTaskDistributorFull(id string) (*TaskDistributor, []TaskDistributorState, []TaskDistributorResource, error) {
+	td, err := r.GetTaskDistributor(id)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if td == nil {
+		return nil, nil, nil, nil
+	}
+	states, err := r.ListTaskDistributorStates(id)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	resources, err := r.ListTaskDistributorResources(id)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return td, states, resources, nil
 }
 
 // =============================================================================

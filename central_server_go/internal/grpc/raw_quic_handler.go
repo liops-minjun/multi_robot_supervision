@@ -66,6 +66,7 @@ type RawQUICHandler struct {
 
 	// Task completion callback (for agent-driven execution)
 	taskCompleteCallback TaskCompleteCallback
+	taskObserveCallback  TaskObserveCallback
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -73,6 +74,10 @@ type RawQUICHandler struct {
 
 // TaskCompleteCallback is called when agent reports task completion
 type TaskCompleteCallback func(taskID string, status string, errorMsg string)
+
+// TaskObserveCallback is called whenever the server receives the agent's
+// current execution view via heartbeat or task-state update.
+type TaskObserveCallback func(agentID string, isExecuting bool, currentTaskID string)
 
 // Note: PendingCommand is defined in handlers.go
 
@@ -164,6 +169,11 @@ func NewRawQUICHandler(
 // SetTaskCompleteCallback sets the callback for agent-driven task completion
 func (h *RawQUICHandler) SetTaskCompleteCallback(cb TaskCompleteCallback) {
 	h.taskCompleteCallback = cb
+}
+
+// SetTaskObserveCallback wires heartbeat-driven task dispatch decisions.
+func (h *RawQUICHandler) SetTaskObserveCallback(cb TaskObserveCallback) {
+	h.taskObserveCallback = cb
 }
 
 // Start starts listening for raw QUIC connections
@@ -4053,6 +4063,10 @@ func (h *RawQUICHandler) handleHeartbeat(agentConn *agentConnection, hb *AgentHe
 	// Update last seen
 	agentConn.lastSeen = time.Now()
 
+	if h.taskObserveCallback != nil {
+		h.taskObserveCallback(agentConn.agentID, hb.IsExecuting, hb.CurrentTaskID)
+	}
+
 	// Update telemetry if present in heartbeat
 	if hb.Telemetry != nil {
 		robotID := hb.Telemetry.RobotID
@@ -4308,6 +4322,9 @@ func (h *RawQUICHandler) handleTaskStateUpdate(agentConn *agentConnection, updat
 	if err := h.stateManager.UpdateRobotExecution(agentConn.agentID, isExecuting, update.TaskID, update.CurrentStepID); err != nil {
 		log.Printf("[RawQUIC] Failed to update state manager: %v", err)
 	}
+	if h.taskObserveCallback != nil {
+		h.taskObserveCallback(agentConn.agentID, isExecuting, update.TaskID)
+	}
 
 	// If task is terminal (completed/failed/cancelled), call CompleteExecution to fully clear state
 	if taskStatus == "completed" || taskStatus == "failed" || taskStatus == "cancelled" {
@@ -4359,19 +4376,19 @@ func (h *RawQUICHandler) handleTaskStateUpdate(agentConn *agentConnection, updat
 // taskStateToString converts TaskState enum to status string
 func taskStateToString(state int32) string {
 	switch state {
-	case 0: // TASK_STATE_PENDING
+	case 1: // TASK_STATE_PENDING
 		return "pending"
-	case 1: // TASK_STATE_RUNNING
+	case 2: // TASK_STATE_RUNNING
 		return "running"
-	case 2: // TASK_STATE_WAITING_PRECONDITION
+	case 3: // TASK_STATE_WAITING_PRECONDITION
 		return "waiting"
-	case 3: // TASK_STATE_EXECUTING_ACTION
+	case 4: // TASK_STATE_EXECUTING_ACTION
 		return "executing"
-	case 4: // TASK_STATE_COMPLETED
+	case 5: // TASK_STATE_COMPLETED
 		return "completed"
-	case 5: // TASK_STATE_FAILED
+	case 6: // TASK_STATE_FAILED
 		return "failed"
-	case 6: // TASK_STATE_CANCELLED
+	case 7: // TASK_STATE_CANCELLED
 		return "cancelled"
 	default:
 		return "unknown"

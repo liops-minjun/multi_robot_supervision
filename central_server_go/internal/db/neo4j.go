@@ -116,6 +116,13 @@ func (d *Database) EnsureIndexes() error {
 
 		// Waypoint indexes
 		"CREATE INDEX waypoint_id IF NOT EXISTS FOR (w:Waypoint) ON (w.id)",
+
+		// TaskDistributor indexes
+		"CREATE INDEX task_distributor_id IF NOT EXISTS FOR (td:TaskDistributor) ON (td.id)",
+		"CREATE INDEX task_distributor_state_id IF NOT EXISTS FOR (tds:TaskDistributorState) ON (tds.id)",
+		"CREATE INDEX task_distributor_state_td_id IF NOT EXISTS FOR (tds:TaskDistributorState) ON (tds.task_distributor_id)",
+		"CREATE INDEX task_distributor_resource_id IF NOT EXISTS FOR (tdr:TaskDistributorResource) ON (tdr.id)",
+		"CREATE INDEX task_distributor_resource_td_id IF NOT EXISTS FOR (tdr:TaskDistributorResource) ON (tdr.task_distributor_id)",
 	}
 
 	for _, indexQuery := range indexes {

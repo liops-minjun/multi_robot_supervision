@@ -1,15 +1,5 @@
 import type { ActionOutcome, DuringStateTarget } from '../../../types'
 
-// Auto-generated state suffixes
-export const AUTO_STATE_SUFFIXES = {
-  during: '_during',
-  succeed: '_succeed',
-  failed: '_failed',
-  aborted: '_aborted',
-  cancelled: '_cancelled',
-  timeout: '_timeout',
-} as const
-
 // Color palette for end states
 export const OUTCOME_COLORS: Record<ActionOutcome, string> = {
   success: '#22c55e',

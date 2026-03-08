@@ -48,9 +48,9 @@ type Scheduler struct {
 
 // TaskCompletionResult represents the result of a completed task
 type TaskCompletionResult struct {
-	TaskID  string
-	Status  TaskStatus
-	Error   string
+	TaskID string
+	Status TaskStatus
+	Error  string
 }
 
 // CapabilityValidationResult contains the result of capability validation
@@ -65,31 +65,37 @@ const (
 	startConditionPollInterval = 250 * time.Millisecond
 	logRetentionInterval       = 24 * time.Hour
 	logRetentionWindow         = 30 * 24 * time.Hour
+	taskDispatchLease          = 5 * time.Second
 )
 
 // RunningTask represents an actively executing task
 type RunningTask struct {
-	ID             string
-	BehaviorTreeID string
-	AgentID        string
-	Steps         []db.BehaviorTreeStep
-	StepIndex     map[string]int // Step ID -> index for O(1) lookup
-	CurrentStep   int
-	Status        TaskStatus
-	RetryCount    map[string]int
-	ReservedZones []string
-	StartedAt     time.Time
-	ResultChan    chan *StepResult
-	CancelFunc    context.CancelFunc
+	ID                 string
+	BehaviorTreeID     string
+	AgentID            string
+	Steps              []db.BehaviorTreeStep
+	StepIndex          map[string]int // Step ID -> index for O(1) lookup
+	CurrentStep        int
+	EntryStepID        string
+	Status             TaskStatus
+	RetryCount         map[string]int
+	ReservedZones      []string
+	Preconditions      []state.Precondition
+	StartedAt          time.Time
+	ResultChan         chan *StepResult
+	CancelFunc         context.CancelFunc
+	DispatchSent       bool
+	DispatchLeaseUntil time.Time
+	DispatchAttempts   int
 
 	// Step results storage for field_sources resolution
 	// Maps step_id -> result data (e.g., {"success": true, "distance": 5.2})
 	StepResults map[string]map[string]interface{}
 
 	// Pause/Resume support
-	pauseMu    sync.Mutex
-	pauseCond  *sync.Cond
-	isPaused   bool
+	pauseMu   sync.Mutex
+	pauseCond *sync.Cond
+	isPaused  bool
 }
 
 // TaskStatus represents the status of a task
@@ -106,10 +112,10 @@ const (
 
 // StepResult represents the result of a step execution
 type StepResult struct {
-	StepID  string
-	Status  fleetgrpc.ActionStatus
-	Result  map[string]interface{}
-	Error   string
+	StepID string
+	Status fleetgrpc.ActionStatus
+	Result map[string]interface{}
+	Error  string
 }
 
 // NewScheduler creates a new scheduler
@@ -178,6 +184,153 @@ func (s *Scheduler) NotifyTaskComplete(taskID string, status TaskStatus, errorMs
 	}
 }
 
+// ObserveAgentExecution is called from QUIC heartbeat/task-state updates.
+// It acknowledges dispatched tasks when the agent reports them and only
+// hands out the next queued task when the agent is confirmed idle.
+func (s *Scheduler) ObserveAgentExecution(agentID string, isExecuting bool, currentTaskID string) {
+	s.acknowledgeQueuedTask(agentID, currentTaskID)
+
+	if isExecuting || strings.TrimSpace(currentTaskID) != "" {
+		return
+	}
+	if robot, exists := s.stateManager.GetRobotState(agentID); exists && robot.IsExecuting && robot.CurrentTaskID != "" {
+		return
+	}
+
+	if err := s.dispatchNextQueuedTask(agentID); err != nil {
+		log.Printf("[Scheduler] Failed to dispatch queued task for %s: %v", agentID, err)
+	}
+}
+
+func (s *Scheduler) acknowledgeQueuedTask(agentID, taskID string) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return
+	}
+
+	s.tasksMu.Lock()
+	defer s.tasksMu.Unlock()
+
+	if s.removeQueuedTaskLocked(agentID, taskID) {
+		if task, exists := s.tasks[taskID]; exists {
+			task.DispatchLeaseUntil = time.Time{}
+		}
+		log.Printf("[Scheduler] Agent %s acknowledged queued task %s", agentID, taskID)
+	}
+}
+
+func (s *Scheduler) removeQueuedTask(agentID, taskID string) {
+	s.tasksMu.Lock()
+	defer s.tasksMu.Unlock()
+	s.removeQueuedTaskLocked(agentID, taskID)
+}
+
+func (s *Scheduler) removeQueuedTaskLocked(agentID, taskID string) bool {
+	queue := s.taskQueues[agentID]
+	for i, queuedID := range queue {
+		if queuedID != taskID {
+			continue
+		}
+		s.taskQueues[agentID] = append(queue[:i], queue[i+1:]...)
+		if len(s.taskQueues[agentID]) == 0 {
+			delete(s.taskQueues, agentID)
+		}
+		return true
+	}
+	return false
+}
+
+func (s *Scheduler) dispatchNextQueuedTask(agentID string) error {
+	s.tasksMu.Lock()
+	defer s.tasksMu.Unlock()
+
+	queue := s.taskQueues[agentID]
+	now := time.Now()
+
+	for len(queue) > 0 {
+		taskID := queue[0]
+		task, exists := s.tasks[taskID]
+		if !exists {
+			queue = queue[1:]
+			continue
+		}
+
+		if task.Status == TaskCompleted || task.Status == TaskFailed || task.Status == TaskCancelled {
+			queue = queue[1:]
+			continue
+		}
+
+		if !task.DispatchLeaseUntil.IsZero() && now.Before(task.DispatchLeaseUntil) {
+			s.taskQueues[agentID] = queue
+			return nil
+		}
+
+		if !task.DispatchLeaseUntil.IsZero() && !now.Before(task.DispatchLeaseUntil) {
+			log.Printf("[Scheduler] Dispatch lease expired for task %s on agent %s, retrying", task.ID, agentID)
+			s.stateManager.CompleteExecution(task.AgentID, task.ReservedZones)
+			task.DispatchLeaseUntil = time.Time{}
+			task.Status = TaskPending
+		}
+
+		if err := s.dispatchQueuedTaskLocked(task, now); err != nil {
+			return err
+		}
+
+		s.taskQueues[agentID] = queue
+		return nil
+	}
+
+	delete(s.taskQueues, agentID)
+	return nil
+}
+
+func (s *Scheduler) dispatchQueuedTaskLocked(task *RunningTask, now time.Time) error {
+	if s.quicHandler == nil {
+		return fmt.Errorf("raw QUIC handler is not configured")
+	}
+
+	success, errMsg := s.stateManager.TryStartExecution(
+		task.AgentID,
+		task.ID,
+		task.EntryStepID,
+		task.BehaviorTreeID,
+		task.ReservedZones,
+		task.Preconditions,
+	)
+	if !success {
+		log.Printf("[Scheduler] Task %s is still waiting to start on %s: %s", task.ID, task.AgentID, errMsg)
+		return nil
+	}
+
+	task.DispatchLeaseUntil = now.Add(taskDispatchLease)
+	task.DispatchAttempts++
+	task.StartedAt = now
+
+	dbTask := &db.Task{
+		ID:               task.ID,
+		BehaviorTreeID:   sql.NullString{String: task.BehaviorTreeID, Valid: true},
+		AgentID:          sql.NullString{String: task.AgentID, Valid: true},
+		Status:           string(TaskPending),
+		CurrentStepID:    sql.NullString{String: task.EntryStepID, Valid: true},
+		CurrentStepIndex: task.CurrentStep,
+		StartedAt:        sql.NullTime{Time: now, Valid: true},
+	}
+	if err := s.repo.UpdateTask(dbTask); err != nil {
+		log.Printf("[Scheduler] Failed to update task %s before dispatch: %v", task.ID, err)
+	}
+
+	if err := s.quicHandler.SendStartTask(task.AgentID, task.ID, task.BehaviorTreeID, task.AgentID, nil); err != nil {
+		s.stateManager.CompleteExecution(task.AgentID, task.ReservedZones)
+		task.DispatchLeaseUntil = time.Time{}
+		task.DispatchSent = false
+		return fmt.Errorf("send start_task failed for %s: %w", task.ID, err)
+	}
+
+	task.DispatchSent = true
+	log.Printf("[Scheduler] Dispatched queued task %s to agent %s (attempt=%d)", task.ID, task.AgentID, task.DispatchAttempts)
+	return nil
+}
+
 // ============================================================
 // Capability Validation (Safety Check)
 // ============================================================
@@ -223,8 +376,8 @@ func (s *Scheduler) ValidateCapabilities(behaviorTreeID, agentID string) (*Capab
 	}
 
 	// Build capability map for quick lookup
-	capMap := make(map[string]*db.AgentCapability)       // action_type -> capability
-	serverMap := make(map[string]*db.AgentCapability)    // action_server -> capability
+	capMap := make(map[string]*db.AgentCapability)    // action_type -> capability
+	serverMap := make(map[string]*db.AgentCapability) // action_server -> capability
 	for i := range agentCaps {
 		cap := &agentCaps[i]
 		capMap[cap.ActionType] = cap
@@ -290,7 +443,9 @@ func (s *Scheduler) ValidateCapabilities(behaviorTreeID, agentID string) (*Capab
 // ============================================================
 
 // StartTask starts a new task for an agent
-// This is the main entry point for task execution
+// This is the main entry point for task execution.
+// The task is queued first and only dispatched when the agent's next
+// heartbeat confirms it is idle.
 func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string, params map[string]interface{}) (string, error) {
 	// Generate task ID
 	taskID := uuid.New().String()
@@ -408,28 +563,16 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 	// Extract required zones from entry step
 	requiredZones := s.extractRequiredZones(steps[entryIndex])
 
-	// Atomic: Check preconditions + Reserve zones + Start execution
-	success, errMsg := s.stateManager.TryStartExecution(
-		agentID,
-		taskID,
-		entryStepID,
-		actionGraphID,
-		requiredZones,
-		preconditions,
-	)
-	if !success {
-		return "", fmt.Errorf("cannot start task: %s", errMsg)
-	}
-
 	// Save to database
+	now := time.Now()
 	dbTask := &db.Task{
 		ID:               taskID,
-		BehaviorTreeID:    sql.NullString{String: actionGraphID, Valid: true},
+		BehaviorTreeID:   sql.NullString{String: actionGraphID, Valid: true},
 		AgentID:          sql.NullString{String: agentID, Valid: true},
-		Status:           string(TaskRunning),
+		Status:           string(TaskPending),
 		CurrentStepID:    sql.NullString{String: entryStepID, Valid: true},
 		CurrentStepIndex: entryIndex,
-		StartedAt:        sql.NullTime{Time: time.Now(), Valid: true},
+		CreatedAt:        now,
 	}
 	if err := s.repo.CreateTask(dbTask); err != nil {
 		log.Printf("Failed to save task to database: %v", err)
@@ -440,19 +583,20 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 
 	// Create running task
 	task := &RunningTask{
-		ID:            taskID,
+		ID:             taskID,
 		BehaviorTreeID: actionGraphID,
-		AgentID:       agentID,
-		Steps:         steps,
-		StepIndex:     stepIndex,
-		CurrentStep:   entryIndex,
-		Status:        TaskRunning,
-		RetryCount:    make(map[string]int),
-		StepResults:   make(map[string]map[string]interface{}),
-		ReservedZones: requiredZones,
-		StartedAt:     time.Now(),
-		ResultChan:    make(chan *StepResult, 1),
-		CancelFunc:    taskCancel,
+		AgentID:        agentID,
+		Steps:          steps,
+		StepIndex:      stepIndex,
+		CurrentStep:    entryIndex,
+		EntryStepID:    entryStepID,
+		Status:         TaskPending,
+		RetryCount:     make(map[string]int),
+		ReservedZones:  requiredZones,
+		Preconditions:  preconditions,
+		StepResults:    make(map[string]map[string]interface{}),
+		ResultChan:     make(chan *StepResult, 1),
+		CancelFunc:     taskCancel,
 	}
 	// Initialize pause condition variable
 	task.pauseCond = sync.NewCond(&task.pauseMu)
@@ -460,12 +604,13 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 	// Store task
 	s.tasksMu.Lock()
 	s.tasks[taskID] = task
+	s.taskQueues[agentID] = append(s.taskQueues[agentID], taskID)
 	s.tasksMu.Unlock()
 
-	// Start step execution in background
+	// Start lifecycle watcher in background. Actual dispatch happens on heartbeat.
 	go s.runTask(taskCtx, task)
 
-	log.Printf("Task started: %s (graph=%s, agent=%s, entry=%s)", taskID, actionGraphID, agentID, entryStepID)
+	log.Printf("Task queued: %s (graph=%s, agent=%s, entry=%s)", taskID, actionGraphID, agentID, entryStepID)
 
 	// Debug: Log graph structure
 	for i, step := range steps {
@@ -480,8 +625,7 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 	return taskID, nil
 }
 
-// runTask sends StartTask to agent and waits for completion (Agent-driven execution)
-// The agent executes the graph autonomously and reports progress via TaskStateUpdate
+// runTask waits for a queued agent-driven task to complete after heartbeat-triggered dispatch.
 func (s *Scheduler) runTask(ctx context.Context, task *RunningTask) {
 	// Create completion channel
 	completeChan := make(chan TaskCompletionResult, 1)
@@ -504,22 +648,12 @@ func (s *Scheduler) runTask(ctx context.Context, task *RunningTask) {
 
 		// Remove from active tasks
 		s.tasksMu.Lock()
+		s.removeQueuedTaskLocked(task.AgentID, task.ID)
 		delete(s.tasks, task.ID)
 		s.tasksMu.Unlock()
 
 		log.Printf("[Scheduler] Task completed: %s status=%s", task.ID, task.Status)
 	}()
-
-	// Send StartTask to agent (Agent-driven execution)
-	log.Printf("[Scheduler] Sending StartTask to agent: task=%s graph=%s agent=%s",
-		task.ID, task.BehaviorTreeID, task.AgentID)
-
-	err := s.quicHandler.SendStartTask(task.AgentID, task.ID, task.BehaviorTreeID, task.AgentID, nil)
-	if err != nil {
-		log.Printf("[Scheduler] Failed to send StartTask: %v", err)
-		task.Status = TaskFailed
-		return
-	}
 
 	// Wait for agent to complete the task
 	select {
@@ -1340,7 +1474,6 @@ func outcomeMatches(actual, expected string) bool {
 	return false
 }
 
-
 // extractRequiredZones extracts zone requirements from a step
 func (s *Scheduler) extractRequiredZones(step db.BehaviorTreeStep) []string {
 	// This would parse the step to determine required zones
@@ -1366,8 +1499,15 @@ func (s *Scheduler) CancelTask(taskID, reason string) error {
 
 	// Cancel context
 	task.CancelFunc()
+	s.removeQueuedTask(task.AgentID, taskID)
 
-	// Always send cancel to agent via QUIC (for agent-driven execution)
+	// If the task has never been dispatched, local cancellation is enough.
+	if !task.DispatchSent {
+		log.Printf("[CancelTask] Task %s was still queued; no cancel sent to agent", taskID)
+		return nil
+	}
+
+	// Otherwise send cancel to agent via QUIC.
 	log.Printf("[CancelTask] Sending cancel command to agent %s for task %s", task.AgentID, taskID)
 	err := s.quicHandler.SendCancelCommand(task.AgentID, "", task.AgentID, taskID, reason)
 	if err != nil {
@@ -1599,11 +1739,6 @@ func (s *Scheduler) canonicalToDBSteps(g *graph.CanonicalGraph) []db.BehaviorTre
 				step.FailureStates = v.Step.States.Failure
 			}
 
-			// Start conditions
-			if len(v.Step.StartConditions) > 0 {
-				step.StartConditions = graphToDBStartConditions(v.Step.StartConditions)
-			}
-
 			// Action
 			if v.Step.Action != nil {
 				step.Action = &db.StepAction{
@@ -1639,29 +1774,6 @@ func (s *Scheduler) canonicalToDBSteps(g *graph.CanonicalGraph) []db.BehaviorTre
 	}
 
 	return steps
-}
-
-func graphToDBStartConditions(conds []graph.StartCondition) []db.StartCondition {
-	if len(conds) == 0 {
-		return nil
-	}
-	out := make([]db.StartCondition, 0, len(conds))
-	for _, c := range conds {
-		out = append(out, db.StartCondition{
-			ID:              c.ID,
-			Operator:        c.Operator,
-			Quantifier:      c.Quantifier,
-			TargetType:      c.TargetType,
-			AgentID:         c.AgentID,
-			State:           c.State,
-			StateOperator:   c.StateOperator,
-			AllowedStates:   c.AllowedStates,
-			MaxStalenessSec: c.MaxStalenessSec,
-			RequireOnline:   c.RequireOnline,
-			Message:         c.Message,
-		})
-	}
-	return out
 }
 
 // graphToDBFieldSources converts graph schema field sources to DB format for scheduler use
@@ -1902,7 +2014,7 @@ func (s *Scheduler) StartMultiAgentTask(
 		// Save to database
 		dbTask := &db.Task{
 			ID:               taskID,
-			BehaviorTreeID:    sql.NullString{String: actionGraphID, Valid: true},
+			BehaviorTreeID:   sql.NullString{String: actionGraphID, Valid: true},
 			AgentID:          sql.NullString{String: agentID, Valid: true},
 			Status:           string(TaskRunning),
 			CurrentStepID:    sql.NullString{String: entryStepID, Valid: true},
@@ -1918,19 +2030,19 @@ func (s *Scheduler) StartMultiAgentTask(
 
 		// Create running task
 		task := &RunningTask{
-			ID:            taskID,
+			ID:             taskID,
 			BehaviorTreeID: actionGraphID,
-			AgentID:       agentID,
-			Steps:         steps,
-			StepIndex:     stepIndex,
-			CurrentStep:   entryIndex,
-			Status:        TaskRunning,
-			RetryCount:    make(map[string]int),
-			StepResults:   make(map[string]map[string]interface{}),
-			ReservedZones: executions[i].RequiredZones,
-			StartedAt:     time.Now(),
-			ResultChan:    make(chan *StepResult, 1),
-			CancelFunc:    taskCancel,
+			AgentID:        agentID,
+			Steps:          steps,
+			StepIndex:      stepIndex,
+			CurrentStep:    entryIndex,
+			Status:         TaskRunning,
+			RetryCount:     make(map[string]int),
+			StepResults:    make(map[string]map[string]interface{}),
+			ReservedZones:  executions[i].RequiredZones,
+			StartedAt:      time.Now(),
+			ResultChan:     make(chan *StepResult, 1),
+			CancelFunc:     taskCancel,
 		}
 		// Initialize pause condition variable
 		task.pauseCond = sync.NewCond(&task.pauseMu)
@@ -1965,8 +2077,8 @@ func (s *Scheduler) StartMultiAgentTask(
 func (s *Scheduler) runMultiAgentTask(ctx context.Context, task *RunningTask, syncMode string, barrier *sync.WaitGroup) {
 	// If barrier mode, wait for all agents to be ready
 	if syncMode == "barrier" {
-		barrier.Done()  // Signal this agent is ready
-		barrier.Wait()  // Wait for all agents to be ready
+		barrier.Done() // Signal this agent is ready
+		barrier.Wait() // Wait for all agents to be ready
 	}
 
 	// Run the task (reuse existing runTask logic)

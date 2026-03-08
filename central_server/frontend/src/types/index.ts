@@ -36,6 +36,10 @@ export interface Agent {
   status: 'online' | 'offline' | 'warning'
   ip_address: string | null
   last_seen: string | null
+  current_state?: string | null
+  current_state_code?: string | null
+  current_graph_id?: string | null
+  semantic_tags?: string[]
   has_capability_template?: boolean
   capability_template_saved_at?: string | null
   capability_template_capability_count?: number
@@ -219,6 +223,34 @@ export interface GraphStep {
   action?: StepAction
   wait_for?: WaitFor
   transition?: Transition
+  // PDDL Planning fields
+  resource_acquire?: string[]
+  resource_release?: string[]
+  planning_preconditions?: PlanningCondition[]
+  planning_effects?: PlanningEffect[]
+  planning_during?: PlanningEffect[]
+}
+
+// ============================================
+// PDDL Planning Types
+// ============================================
+
+export interface PlanningCondition {
+  variable: string
+  operator?: '==' | '!='
+  value: string
+}
+
+export interface PlanningEffect {
+  variable: string
+  value: string
+}
+
+export interface PlanningStateVar {
+  name: string
+  type: 'bool' | 'int' | 'string'
+  initial_value?: string
+  description?: string
 }
 
 export interface Precondition {
@@ -704,6 +736,8 @@ export interface BehaviorTree {
   preconditions: Precondition[] | null
   steps: GraphStep[]
   states?: GraphState[]         // Auto-generated and custom states
+  planning_states?: PlanningStateVar[] // PDDL planning state variables
+  task_distributor_id?: string
   auto_generate_states?: boolean // Whether to auto-generate states from steps
   version: number
   is_template: boolean          // true if agent_id is null
@@ -1314,4 +1348,108 @@ export interface RobotTelemetry {
   transforms?: TransformData[]
   updated_at: string
   is_stale?: boolean  // True if telemetry data is older than staleness threshold
+}
+
+// ============================================
+// PDDL Planning Problem & Plan Types
+// ============================================
+
+export interface StepAssignment {
+  step_id: string
+  step_name: string
+  agent_id: string
+  agent_name: string
+  order: number
+  reason: string
+}
+
+export interface PlanResult {
+  assignments: StepAssignment[]
+  is_valid: boolean
+  error_message?: string
+  total_steps: number
+  parallel_groups: number
+}
+
+export interface PlanningProblem {
+  id: string
+  name: string
+  behavior_tree_id: string
+  task_distributor_id?: string
+  initial_state?: Record<string, string>
+  goal_state: Record<string, string>
+  agent_ids: string[]
+  status: 'draft' | 'planned' | 'executing' | 'completed' | 'failed'
+  plan_result?: PlanResult
+  error_message?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface TaskDistributorState {
+  id: string
+  task_distributor_id: string
+  name: string
+  type: 'bool' | 'int' | 'string' | string
+  initial_value?: string
+  description?: string
+}
+
+export interface TaskDistributorResource {
+  id: string
+  task_distributor_id: string
+  name: string
+  kind?: 'type' | 'instance' | string
+  parent_resource_id?: string
+  description?: string
+}
+
+export interface TaskDistributor {
+  id: string
+  name: string
+  description?: string
+  created_at: string
+  updated_at: string
+  states?: TaskDistributorState[]
+  resources?: TaskDistributorResource[]
+}
+
+export interface ResourceAllocation {
+  resource: string
+  holder_agent?: string
+  holder_agent_id?: string
+  holder_agent_name?: string
+  plan_id?: string
+  problem_id?: string
+  plan_execution_id?: string
+  step_id?: string
+  acquired_at?: string
+}
+
+export interface PlanExecutionStep {
+  step_id: string
+  step_name: string
+  agent_id: string
+  agent_name: string
+  order: number
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | string
+  task_id?: string
+  started_at?: string
+  ended_at?: string
+  error?: string
+}
+
+export interface PlanExecution {
+  id: string
+  problem_id: string
+  behavior_tree_id: string
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | string
+  current_order: number
+  total_orders: number
+  started_at: string
+  completed_at?: string
+  error?: string
+  planning_state?: Record<string, string>
+  resources?: ResourceAllocation[]
+  steps: PlanExecutionStep[]
 }

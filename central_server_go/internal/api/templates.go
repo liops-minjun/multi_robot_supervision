@@ -126,10 +126,10 @@ func (s *Server) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 
 	// Create behavior tree as template
 	graph := &db.BehaviorTree{
-		ID:          req.ID,
-		Name:        req.Name,
-		Version:     1,
-		IsTemplate:  true,
+		ID:         req.ID,
+		Name:       req.Name,
+		Version:    1,
+		IsTemplate: true,
 	}
 
 	if req.Description != "" {
@@ -236,6 +236,43 @@ func (s *Server) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		preconJSON, _ := json.Marshal(req.Preconditions)
 		template.Preconditions = preconJSON
 	}
+	if req.States != nil {
+		dbStates := make([]db.GraphState, len(req.States))
+		for i, s := range req.States {
+			dbStates[i] = db.GraphState{
+				Code:         s.Code,
+				Name:         s.Name,
+				Type:         s.Type,
+				StepID:       s.StepID,
+				Phase:        s.Phase,
+				Color:        s.Color,
+				Description:  s.Description,
+				SemanticTags: s.SemanticTags,
+			}
+		}
+		statesJSON, _ := json.Marshal(dbStates)
+		template.States = statesJSON
+	}
+	if req.PlanningStates != nil {
+		dbPlanningStates := make([]db.PlanningStateVar, len(req.PlanningStates))
+		for i, ps := range req.PlanningStates {
+			dbPlanningStates[i] = db.PlanningStateVar{
+				Name:         ps.Name,
+				Type:         ps.Type,
+				InitialValue: ps.InitialValue,
+				Description:  ps.Description,
+			}
+		}
+		planningStatesJSON, _ := json.Marshal(dbPlanningStates)
+		template.PlanningStates = planningStatesJSON
+	}
+	if req.TaskDistributorID != nil {
+		if *req.TaskDistributorID == "" {
+			template.TaskDistributorID = sql.NullString{}
+		} else {
+			template.TaskDistributorID = sql.NullString{String: *req.TaskDistributorID, Valid: true}
+		}
+	}
 
 	template.Version++
 	template.UpdatedAt = time.Now()
@@ -327,8 +364,8 @@ func (s *Server) GetTemplateAssignments(w http.ResponseWriter, r *http.Request) 
 			ID:               a.ID,
 			AgentID:          a.AgentID,
 			AgentName:        agentName,
-			BehaviorTreeID:    templateID,
-			BehaviorTreeName:  template.Name,
+			BehaviorTreeID:   templateID,
+			BehaviorTreeName: template.Name,
 			ServerVersion:    a.ServerVersion,
 			DeployedVersion:  deployedVersion,
 			DeploymentStatus: a.DeploymentStatus,
@@ -474,7 +511,7 @@ func (s *Server) AssignTemplateToAgent(w http.ResponseWriter, r *http.Request) {
 	assignment := &db.AgentBehaviorTree{
 		ID:               uuid.New().String(),
 		AgentID:          req.AgentID,
-		BehaviorTreeID:    templateID,
+		BehaviorTreeID:   templateID,
 		ServerVersion:    template.Version,
 		DeploymentStatus: "pending",
 		Enabled:          req.Enabled,
@@ -495,8 +532,8 @@ func (s *Server) AssignTemplateToAgent(w http.ResponseWriter, r *http.Request) {
 		ID:               assignment.ID,
 		AgentID:          assignment.AgentID,
 		AgentName:        agent.Name,
-		BehaviorTreeID:    templateID,
-		BehaviorTreeName:  template.Name,
+		BehaviorTreeID:   templateID,
+		BehaviorTreeName: template.Name,
 		ServerVersion:    assignment.ServerVersion,
 		DeploymentStatus: assignment.DeploymentStatus,
 		Enabled:          assignment.Enabled,
@@ -583,8 +620,8 @@ type AgentOverviewInfo struct {
 	AgentName         string                      `json:"agent_name"`
 	Status            string                      `json:"status"`
 	RobotCount        int                         `json:"robot_count"`
-	ActionTypes       []string                    `json:"action_types"`        // Grouped by type (backward compat)
-	ActionServers     []AgentOverviewActionServer `json:"action_servers"`      // Individual servers
+	ActionTypes       []string                    `json:"action_types"`   // Grouped by type (backward compat)
+	ActionServers     []AgentOverviewActionServer `json:"action_servers"` // Individual servers
 	AssignedTemplates []map[string]interface{}    `json:"assigned_templates"`
 }
 
@@ -833,11 +870,11 @@ func (s *Server) deployBehaviorTreeToAgentSync(ctx context.Context, assignmentID
 	// Create deployment log
 	correlationID := uuid.New().String()
 	deployLog := &db.BehaviorTreeDeploymentLog{
-		ID:                 uuid.New().String(),
+		ID:                  uuid.New().String(),
 		AgentBehaviorTreeID: assignmentID,
-		Action:             "deploy",
-		Version:            graph.Version,
-		Status:             "initiated",
+		Action:              "deploy",
+		Version:             graph.Version,
+		Status:              "initiated",
 	}
 	s.repo.CreateDeploymentLog(deployLog)
 

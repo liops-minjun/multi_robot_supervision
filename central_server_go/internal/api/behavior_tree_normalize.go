@@ -41,11 +41,9 @@ func normalizeBehaviorTreeStep(step map[string]interface{}) {
 	}
 	delete(step, "jobName")
 
-	// Normalize auto_generate_states (camelCase to snake_case)
-	if autoGen, ok := step["autoGenerateStates"].(bool); ok {
-		step["auto_generate_states"] = autoGen
-	}
+	// Remove auto_generate_states (deprecated)
 	delete(step, "autoGenerateStates")
+	delete(step, "auto_generate_states")
 
 	preStates := extractStateList(step["pre_states"])
 	if len(preStates) == 0 {

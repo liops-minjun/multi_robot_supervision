@@ -20,6 +20,7 @@ type Server struct {
 	repo            *db.Repository
 	stateManager    *state.GlobalStateManager
 	scheduler       *executor.Scheduler
+	planExecutor    *executor.PlanExecutor
 	wsHub           *WebSocketHub
 	quicHandler     *fleetgrpc.RawQUICHandler
 	definitionsPath string
@@ -27,14 +28,18 @@ type Server struct {
 
 // NewServer creates a new API server
 func NewServer(repo *db.Repository, stateManager *state.GlobalStateManager, scheduler *executor.Scheduler, quicHandler *fleetgrpc.RawQUICHandler, definitionsPath string) *Server {
+	wsHub := NewWebSocketHub()
 	s := &Server{
 		repo:            repo,
 		stateManager:    stateManager,
 		scheduler:       scheduler,
-		wsHub:           NewWebSocketHub(),
+		wsHub:           wsHub,
 		quicHandler:     quicHandler,
 		definitionsPath: definitionsPath,
 	}
+	s.planExecutor = executor.NewPlanExecutor(scheduler, stateManager, repo, func(msg interface{}) {
+		wsHub.Broadcast(msg)
+	})
 
 	s.setupRouter()
 
@@ -240,6 +245,47 @@ func (s *Server) setupRouter() {
 
 		// Agent compatible templates
 		r.Get("/agents/{agentID}/compatible-templates", s.GetAgentCompatibleTemplates)
+
+		// PDDL Task Distribution
+		r.Route("/pddl", func(r chi.Router) {
+			r.Route("/problems", func(r chi.Router) {
+				r.Get("/", s.ListPlanningProblems)
+				r.Post("/", s.CreatePlanningProblem)
+				r.Get("/{problemID}", s.GetPlanningProblem)
+				r.Delete("/{problemID}", s.DeletePlanningProblem)
+				r.Post("/{problemID}/solve", s.SolvePlanningProblem)
+				r.Post("/{problemID}/execute", s.ExecutePlan)
+			})
+			r.Post("/preview", s.PreviewDistribution)
+
+			// Plan Executions
+			r.Route("/executions", func(r chi.Router) {
+				r.Get("/", s.ListPlanExecutions)
+				r.Get("/{executionID}", s.GetPlanExecution)
+				r.Post("/{executionID}/cancel", s.CancelPlanExecution)
+			})
+
+			// Resource allocations
+			r.Get("/resources", s.GetPlanResources)
+		})
+
+		// Task Distributors
+		r.Route("/task-distributors", func(r chi.Router) {
+			r.Get("/", s.ListTaskDistributors)
+			r.Post("/", s.CreateTaskDistributor)
+			r.Get("/{distributorID}", s.GetTaskDistributor)
+			r.Get("/{distributorID}/full", s.GetTaskDistributorFull)
+			r.Put("/{distributorID}", s.UpdateTaskDistributor)
+			r.Delete("/{distributorID}", s.DeleteTaskDistributor)
+			r.Get("/{distributorID}/states", s.ListTaskDistributorStates)
+			r.Post("/{distributorID}/states", s.CreateTaskDistributorState)
+			r.Put("/{distributorID}/states/{stateID}", s.UpdateTaskDistributorState)
+			r.Delete("/{distributorID}/states/{stateID}", s.DeleteTaskDistributorState)
+			r.Get("/{distributorID}/resources", s.ListTaskDistributorResources)
+			r.Post("/{distributorID}/resources", s.CreateTaskDistributorResource)
+			r.Put("/{distributorID}/resources/{resourceID}", s.UpdateTaskDistributorResource)
+			r.Delete("/{distributorID}/resources/{resourceID}", s.DeleteTaskDistributorResource)
+		})
 
 		// System/Internal endpoints
 		r.Route("/system", func(r chi.Router) {

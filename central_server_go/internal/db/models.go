@@ -30,7 +30,7 @@ type Agent struct {
 	CurrentGraphID   sql.NullString `gorm:"size:50"`               // Currently executing graph ID
 
 	// Offline RTM template snapshot metadata
-	CapabilityTemplateSavedAt       sql.NullTime `gorm:"index"`
+	CapabilityTemplateSavedAt         sql.NullTime `gorm:"index"`
 	CapabilityTemplateCapabilityCount int
 
 	// Relationships
@@ -170,8 +170,11 @@ type BehaviorTree struct {
 	RequiredActionTypes datatypes.JSON `gorm:"type:jsonb;default:'[]'"` // ["nav2_msgs/NavigateToPose", ...]
 
 	// State management
-	States             datatypes.JSON `gorm:"type:jsonb"`   // []GraphState - available states for this graph
-	AutoGenerateStates bool           `gorm:"default:true"` // Auto-generate states from steps
+	States datatypes.JSON `gorm:"type:jsonb"` // []GraphState - available states for this graph
+
+	// PDDL Planning state variables
+	PlanningStates    datatypes.JSON `gorm:"type:jsonb"` // []PlanningStateVar (legacy, fallback)
+	TaskDistributorID sql.NullString `gorm:"size:50"`    // Link to TaskDistributor for states/resources
 
 	// Edit lock fields (for concurrent editing prevention)
 	LockedBy      sql.NullString `gorm:"size:100"` // Display name of user who holds the lock
@@ -346,6 +349,27 @@ func (BehaviorTreeDeploymentLog) TableName() string {
 // Parsed Types for Steps (not stored in DB directly)
 // ============================================================
 
+// PlanningCondition represents a PDDL-style precondition for planning
+type PlanningCondition struct {
+	Variable string `json:"variable"`           // e.g., "object_status"
+	Operator string `json:"operator,omitempty"` // ==, != (default: ==)
+	Value    string `json:"value"`              // e.g., "on_table"
+}
+
+// PlanningEffect represents a PDDL-style effect for planning
+type PlanningEffect struct {
+	Variable string `json:"variable"` // e.g., "object_status"
+	Value    string `json:"value"`    // e.g., "in_gripper"
+}
+
+// PlanningStateVar represents a state variable used in PDDL planning
+type PlanningStateVar struct {
+	Name         string `json:"name"`                    // e.g., "object_status"
+	Type         string `json:"type"`                    // bool, int, string
+	InitialValue string `json:"initial_value,omitempty"` // e.g., "on_table"
+	Description  string `json:"description,omitempty"`
+}
+
 // BehaviorTreeStep represents a step in a behavior tree
 type BehaviorTreeStep struct {
 	ID           string `json:"id"`
@@ -355,8 +379,6 @@ type BehaviorTreeStep struct {
 	TerminalType string `json:"terminal_type,omitempty"` // success, failure
 	Alert        bool   `json:"alert,omitempty"`
 	Message      string `json:"message,omitempty"`
-
-	AutoGenerateStates bool `json:"auto_generate_states,omitempty"` // Whether to auto-generate states from job name
 
 	PreStates          []string      `json:"pre_states,omitempty"`
 	DuringStates       []string      `json:"during_states,omitempty"`
@@ -370,6 +392,13 @@ type BehaviorTreeStep struct {
 	Action     *StepAction     `json:"action,omitempty"`
 	WaitFor    *WaitFor        `json:"wait_for,omitempty"`
 	Transition *StepTransition `json:"transition,omitempty"`
+
+	// PDDL Planning fields
+	ResourceAcquire       []string            `json:"resource_acquire,omitempty"`
+	ResourceRelease       []string            `json:"resource_release,omitempty"`
+	PlanningPreconditions []PlanningCondition `json:"planning_preconditions,omitempty"`
+	PlanningEffects       []PlanningEffect    `json:"planning_effects,omitempty"`
+	PlanningDuring        []PlanningEffect    `json:"planning_during,omitempty"`
 }
 
 type StepAction struct {
@@ -514,61 +543,6 @@ type PreconditionFilter struct {
 	IncludeSelf   bool     `json:"include_self,omitempty"`   // Include self in any_agent_state
 }
 
-// ============================================================
-// State Generation Helpers
-// ============================================================
-
-// GenerateStatesFromSteps creates auto-generated states from behavior tree steps
-func GenerateStatesFromSteps(steps []BehaviorTreeStep, existingStates []GraphState) []GraphState {
-	states := make([]GraphState, 0)
-
-	// 1. Add system states
-	states = append(states, SystemStates...)
-
-	// 2. Keep existing custom states
-	for _, s := range existingStates {
-		if s.Type == "custom" {
-			states = append(states, s)
-		}
-	}
-
-	// 3. Generate auto states for each step
-	phases := []struct {
-		phase string
-		name  string
-		color string
-	}{
-		{"executing", "Executing", "#3b82f6"},
-		{"success", "Success", "#22c55e"},
-		{"failed", "Failed", "#ef4444"},
-	}
-
-	for _, step := range steps {
-		// Skip terminal steps
-		if step.Type == "terminal" {
-			continue
-		}
-
-		stepName := step.Name
-		if stepName == "" {
-			stepName = step.ID
-		}
-
-		for _, p := range phases {
-			states = append(states, GraphState{
-				Code:   step.ID + ":" + p.phase,
-				Name:   stepName + " - " + p.name,
-				Type:   "auto",
-				StepID: step.ID,
-				Phase:  p.phase,
-				Color:  p.color,
-			})
-		}
-	}
-
-	return states
-}
-
 // GetSemanticTagsForState returns semantic tags for a given state code
 func GetSemanticTagsForState(states []GraphState, stateCode string) []string {
 	for _, s := range states {
@@ -577,4 +551,73 @@ func GetSemanticTagsForState(states []GraphState, stateCode string) []string {
 		}
 	}
 	return nil
+}
+
+// ============================================================
+// PDDL Planning Problem
+// ============================================================
+
+// PlanningProblem represents a PDDL-style planning problem for task distribution
+type PlanningProblem struct {
+	ID                string         `gorm:"primaryKey;size:50"`
+	Name              string         `gorm:"size:200;not null"`
+	BehaviorTreeID    string         `gorm:"size:50;not null;index"`
+	TaskDistributorID sql.NullString `gorm:"size:50;index"`
+	InitialState      datatypes.JSON `gorm:"type:jsonb"`            // map[string]string
+	GoalState         datatypes.JSON `gorm:"type:jsonb;not null"`   // map[string]string
+	AgentIDs          datatypes.JSON `gorm:"type:jsonb;not null"`   // []string
+	Status            string         `gorm:"size:20;default:draft"` // draft, planned, executing, completed, failed
+	PlanResult        datatypes.JSON `gorm:"type:jsonb"`            // pddl.Plan (JSON)
+	ErrorMessage      sql.NullString `gorm:"type:text"`
+	CreatedAt         time.Time      `gorm:"autoCreateTime"`
+	UpdatedAt         time.Time      `gorm:"autoUpdateTime"`
+}
+
+func (PlanningProblem) TableName() string {
+	return "planning_problems"
+}
+
+// ============================================================
+// Task Distributor
+// ============================================================
+
+// TaskDistributor represents an entity that owns states and resources for PDDL planning
+type TaskDistributor struct {
+	ID          string    `gorm:"primaryKey;size:50"`
+	Name        string    `gorm:"size:200;not null"`
+	Description string    `gorm:"type:text"`
+	CreatedAt   time.Time `gorm:"autoCreateTime"`
+	UpdatedAt   time.Time `gorm:"autoUpdateTime"`
+}
+
+func (TaskDistributor) TableName() string {
+	return "task_distributors"
+}
+
+// TaskDistributorState represents a state variable owned by a TaskDistributor
+type TaskDistributorState struct {
+	ID                string `gorm:"primaryKey;size:50"`
+	TaskDistributorID string `gorm:"size:50;not null;index"`
+	Name              string `gorm:"size:100;not null"`
+	Type              string `gorm:"size:20;not null;default:string"` // bool, int, string
+	InitialValue      string `gorm:"size:200"`
+	Description       string `gorm:"type:text"`
+}
+
+func (TaskDistributorState) TableName() string {
+	return "task_distributor_states"
+}
+
+// TaskDistributorResource represents a resource owned by a TaskDistributor
+type TaskDistributorResource struct {
+	ID                string `gorm:"primaryKey;size:50"`
+	TaskDistributorID string `gorm:"size:50;not null;index"`
+	Name              string `gorm:"size:100;not null"`
+	Kind              string `gorm:"size:20;not null;default:instance"` // type, instance
+	ParentResourceID  string `gorm:"size:50;index"`
+	Description       string `gorm:"type:text"`
+}
+
+func (TaskDistributorResource) TableName() string {
+	return "task_distributor_resources"
 }

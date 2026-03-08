@@ -104,6 +104,9 @@ func main() {
 		rawQUICHandler.SetTaskCompleteCallback(func(taskID, status, errorMsg string) {
 			scheduler.NotifyTaskComplete(taskID, executor.TaskStatus(status), errorMsg)
 		})
+		rawQUICHandler.SetTaskObserveCallback(func(agentID string, isExecuting bool, currentTaskID string) {
+			scheduler.ObserveAgentExecution(agentID, isExecuting, currentTaskID)
+		})
 	}
 
 	// Create REST API server (with rawQUICHandler for QUIC-based deployments)

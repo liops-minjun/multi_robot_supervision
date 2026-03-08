@@ -33,6 +33,9 @@
   --color-accent-cyan: #06b6d4;
   --color-accent-orange: #f97316;
 
+  /* Accent RGB channels (for alpha support) */
+  --color-accent-rgb: 59 130 246;
+
   /* Button colors for light theme - higher contrast */
   --color-btn-blue-bg: #dbeafe;
   --color-btn-blue-text: #1d4ed8;
@@ -66,6 +69,9 @@
   --color-text-primary: #ffffff;
   --color-text-secondary: #a1a1aa;
   --color-text-muted: #71717a;
+
+  /* Accent RGB channels (for alpha support) */
+  --color-accent-rgb: 96 165 250;
 
   /* Button colors for dark theme - subtle backgrounds */
   --color-btn-blue-bg: rgba(59, 130, 246, 0.15);
