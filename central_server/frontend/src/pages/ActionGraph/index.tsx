@@ -1416,24 +1416,32 @@ function ActionGraphEditor() {
     })
   }, [tdStates, updatePlanningTask])
 
-  const handleAddPlanningResult = useCallback(() => {
-    if (!planningResultVariable) return
-    const stateVar = tdStates.find(item => item.name === planningResultVariable)
+  const handleUpsertPlanningResult = useCallback((effect: PlanningEffect) => {
+    if (!effect.variable) return
+    const stateVar = tdStates.find(item => item.name === effect.variable)
     const fallbackValue = getStateDefaultValue(stateVar)
     const nextEffect: PlanningEffect = {
-      variable: planningResultVariable,
-      value: planningResultValue || fallbackValue,
+      variable: effect.variable,
+      value: effect.value || fallbackValue,
     }
     void updatePlanningTask((current) => ({
       ...current,
       result_states: [
-        ...(current.result_states || []).filter(effect => effect.variable !== nextEffect.variable),
+        ...(current.result_states || []).filter(item => item.variable !== nextEffect.variable),
         nextEffect,
       ],
     }))
+  }, [tdStates, updatePlanningTask])
+
+  const handleAddPlanningResult = useCallback(() => {
+    if (!planningResultVariable) return
+    handleUpsertPlanningResult({
+      variable: planningResultVariable,
+      value: planningResultValue,
+    })
     setPlanningResultVariable('')
     setPlanningResultValue('')
-  }, [planningResultValue, planningResultVariable, tdStates, updatePlanningTask])
+  }, [handleUpsertPlanningResult, planningResultValue, planningResultVariable])
 
   const handleDeletePlanningResult = useCallback((variable: string) => {
     void updatePlanningTask((current) => ({
@@ -1442,15 +1450,46 @@ function ActionGraphEditor() {
     }))
   }, [updatePlanningTask])
 
-  // Clear validation errors when template changes
-  useEffect(() => {
-    setValidationErrors([])
-  }, [templateId])
-
   // Track last applied states to prevent infinite loops
   const lastAppliedStatesRef = useRef<string>('')
   const lastAppliedAgentsRef = useRef<Array<{ id: string; name: string }>>([])
   const lastAppliedTDRef = useRef<string>('')
+  const lastAppliedPlanningTaskRef = useRef<string>('')
+
+  useEffect(() => {
+    const planningKey = JSON.stringify({
+      taskTemplateName: selectedTemplate?.name || '',
+      planningTask,
+    })
+    if (planningKey !== lastAppliedPlanningTaskRef.current) {
+      lastAppliedPlanningTaskRef.current = planningKey
+      setNodes((nds) =>
+        nds.map((node) => ({
+          ...node,
+          data: {
+            ...node.data,
+            planningTask,
+            taskTemplateName: selectedTemplate?.name || '',
+            onTaskPlanningDuringChange: handlePlanningDuringChange,
+            onTaskPlanningResultUpsert: handleUpsertPlanningResult,
+            onTaskPlanningResultDelete: handleDeletePlanningResult,
+          },
+        }))
+      )
+    }
+  }, [
+    handleDeletePlanningResult,
+    handlePlanningDuringChange,
+    handleUpsertPlanningResult,
+    planningTask,
+    selectedTemplate?.name,
+    setNodes,
+  ])
+
+  // Clear validation errors when template changes
+  useEffect(() => {
+    setValidationErrors([])
+  }, [templateId])
 
   // Update existing nodes' availableStates when state definition loads
   useEffect(() => {
@@ -1501,13 +1540,28 @@ function ActionGraphEditor() {
             taskDistributorId,
             taskDistributorStates: tdStates,
             taskDistributorResources: tdResources,
+            planningTask,
+            taskTemplateName: selectedTemplate?.name || '',
+            onTaskPlanningDuringChange: handlePlanningDuringChange,
+            onTaskPlanningResultUpsert: handleUpsertPlanningResult,
+            onTaskPlanningResultDelete: handleDeletePlanningResult,
             resourceAcquire: filterResourceTokens(node.data.resourceAcquire),
             resourceRelease: filterResourceTokens(node.data.resourceRelease),
           },
         }))
       )
     }
-  }, [tdStates, tdResources, taskDistributorId, setNodes])
+  }, [
+    handleDeletePlanningResult,
+    handlePlanningDuringChange,
+    handleUpsertPlanningResult,
+    planningTask,
+    selectedTemplate?.name,
+    tdStates,
+    tdResources,
+    taskDistributorId,
+    setNodes,
+  ])
 
   // Convert ReactFlow nodes/edges back to ActionGraph steps
   const convertGraphToSteps = useCallback((): {
@@ -2141,6 +2195,11 @@ function ActionGraphEditor() {
           // Task Distributor data
           taskDistributorStates: tdStates,
           taskDistributorResources: tdResources,
+          planningTask,
+          taskTemplateName: selectedTemplate?.name || '',
+          onTaskPlanningDuringChange: handlePlanningDuringChange,
+          onTaskPlanningResultUpsert: handleUpsertPlanningResult,
+          onTaskPlanningResultDelete: handleDeletePlanningResult,
           resourceAcquire: [],
           resourceRelease: [],
           isEditing,
@@ -2155,7 +2214,20 @@ function ActionGraphEditor() {
         return newNodes
       })
     },
-    [screenToFlowPosition, setNodes, availableStates, availableAgents, isEditing, tdStates, tdResources]
+    [
+      availableAgents,
+      availableStates,
+      handleDeletePlanningResult,
+      handlePlanningDuringChange,
+      handleUpsertPlanningResult,
+      isEditing,
+      planningTask,
+      screenToFlowPosition,
+      selectedTemplate?.name,
+      setNodes,
+      tdResources,
+      tdStates,
+    ]
   )
 
   const onDragStart = (event: React.DragEvent<HTMLDivElement>, item: PaletteItem) => {
@@ -2393,14 +2465,21 @@ function ActionGraphEditor() {
           </div>
 
           <div className="px-3 py-3 border-b border-primary space-y-3">
-            <div className="flex items-center gap-1.5">
-              <Zap size={12} className="text-amber-400" />
-              <span className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider">Task Planning</span>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5">
+                <Zap size={12} className="text-amber-400" />
+                <span className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider">Current Task Planning</span>
+              </div>
+              {selectedTemplate?.name && (
+                <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[9px] text-amber-200">
+                  {selectedTemplate.name}
+                </span>
+              )}
             </div>
 
             {!taskDistributorId ? (
               <div className="rounded-lg border border-dashed border-border bg-base/40 px-3 py-3 text-[10px] leading-5 text-muted">
-                Task Distributor를 연결해야 Task 수준의 State / Resource 요구사항을 설정할 수 있습니다.
+                이 패널이 현재 선택된 Task 전체에 저장되는 planning 설정입니다. Task Distributor를 연결해야 state / result / resource 요구사항을 설정할 수 있습니다.
               </div>
             ) : (
               <>
@@ -2537,7 +2616,7 @@ function ActionGraphEditor() {
                 <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-2">
                   <div className="mb-2 flex items-center justify-between">
                     <span className="text-[10px] font-medium text-amber-300">Resources</span>
-                    <span className="text-[9px] text-secondary">Action Node Sync</span>
+                    <span className="text-[9px] text-secondary">Action Node Runtime Sync</span>
                   </div>
 
                   {tdResources.length === 0 ? (
@@ -2581,7 +2660,7 @@ function ActionGraphEditor() {
                         </div>
                       ))}
                       <div className="rounded border border-amber-500/15 bg-amber-500/5 px-2 py-1.5 text-[9px] text-secondary">
-                        planner required_resources는 Action Node acquire 집합에서 자동 동기화됩니다.
+                        현재 선택된 Task의 planner required_resources는 Action Node의 runtime acquire 집합에서 자동 동기화됩니다.
                       </div>
                     </div>
                   )}
@@ -3477,6 +3556,8 @@ function convertActionGraphToGraph(
         jobName: step.job_name || (isTerminal ? '' : getDefaultJobNameTemplate(normalizedServer || step.action?.server, step.name || step.id)),
         resourceAcquire: Array.from(new Set(step.resource_acquire || [])),
         resourceRelease: Array.from(new Set(step.resource_release || [])),
+        planningTask: actionGraph.planning_task,
+        taskTemplateName: actionGraph.name || '',
         finalState: isTerminal ? (step.terminal_type === 'success' ? defaultState : errorState) : undefined,
         availableStates,
         availableAgents,

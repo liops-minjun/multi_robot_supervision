@@ -1,6 +1,6 @@
 import { memo, useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { Handle, Position, NodeProps, useReactFlow, useUpdateNodeInternals, useNodes } from 'reactflow'
-import { ChevronDown, ChevronUp, X, Loader2, Download, Lock, Unlock } from 'lucide-react'
+import { ChevronDown, ChevronUp, X, Loader2, Download, Lock, Unlock, Plus } from 'lucide-react'
 import type { EndStateConfig, ActionField, ParameterFieldSource } from '../../../types'
 import { capabilityApi } from '../../../api/client'
 
@@ -144,6 +144,10 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
   const params = data.params || {}
   const fieldSources = data.fieldSources || {}
   const runtimeResources = data.taskDistributorResources || []
+  const planningStates = data.taskDistributorStates || []
+  const taskPlanning = data.planningTask
+  const [planningResultVariable, setPlanningResultVariable] = useState('')
+  const [planningResultValue, setPlanningResultValue] = useState('')
   const runtimeResourceTypes = useMemo(
     () => runtimeResources.filter(resource => resource.kind === 'type'),
     [runtimeResources]
@@ -158,6 +162,15 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
     () => acquiredResources.filter(token => !releasedResources.includes(token)),
     [acquiredResources, releasedResources]
   )
+  const currentPlanningDuring = taskPlanning?.during_state?.[0]
+
+  const getPlanningStateDefaultValue = useCallback((variable?: string) => {
+    const stateVar = planningStates.find(item => item.name === variable)
+    if (!stateVar) return ''
+    if (stateVar.type === 'bool') return 'true'
+    if (stateVar.type === 'int') return '0'
+    return stateVar.initial_value || ''
+  }, [planningStates])
 
   const formatRuntimeResourceToken = useCallback((token: string) => {
     if (token.startsWith('type:')) {
@@ -181,6 +194,25 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
     const currentValues = field === 'resourceAcquire' ? acquiredResources : releasedResources
     updateData(field, currentValues.filter(value => value !== token))
   }, [acquiredResources, releasedResources, updateData])
+
+  const handlePlanningDuringVariableChange = useCallback((variable: string) => {
+    data.onTaskPlanningDuringChange?.(variable, variable ? getPlanningStateDefaultValue(variable) : '')
+  }, [data, getPlanningStateDefaultValue])
+
+  const handlePlanningDuringValueChange = useCallback((value: string) => {
+    if (!currentPlanningDuring?.variable) return
+    data.onTaskPlanningDuringChange?.(currentPlanningDuring.variable, value)
+  }, [currentPlanningDuring?.variable, data])
+
+  const handlePlanningResultAdd = useCallback(() => {
+    if (!planningResultVariable) return
+    data.onTaskPlanningResultUpsert?.({
+      variable: planningResultVariable,
+      value: planningResultValue || getPlanningStateDefaultValue(planningResultVariable),
+    })
+    setPlanningResultVariable('')
+    setPlanningResultValue('')
+  }, [data, getPlanningStateDefaultValue, planningResultValue, planningResultVariable])
 
   const availableSteps: AvailableStep[] = useMemo(() => {
     return allNodes
@@ -484,21 +516,177 @@ const StateActionNode = memo(({ id, data, selected }: NodeProps<StateActionNodeD
         </div>
       </div>
 
-      {/* Task-level planning moved to the Task Planning panel */}
+      {/* Task-level planning summary */}
       <div className="border-b border-primary">
         <div className="px-3 py-2">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-1.5">
               <div className="w-2 h-2 rounded-sm bg-violet-500" />
-              <span className="text-[10px] text-primary uppercase tracking-wider font-medium">Task Planning</span>
+              <span className="text-[10px] text-primary uppercase tracking-wider font-medium">Current Task Planning</span>
             </div>
-            <span className="text-[8px] text-muted">Root Panel</span>
+            <span className="text-[8px] text-muted">Selected Task</span>
           </div>
           <div className="rounded border border-violet-500/20 bg-violet-500/5 p-2">
-            <p className="text-[9px] leading-5 text-secondary">
-              PDDL planning state / result state editing is task-level로 이동했습니다.
-              Resource occupancy는 위 Runtime Resources에서 step 단위로 설정되고, task panel이 이를 집계합니다.
-            </p>
+            {data.taskTemplateName && (
+              <div className="mb-2 rounded border border-violet-500/15 bg-base/40 px-2 py-1 text-[9px] text-violet-200">
+                저장 대상 Task: {data.taskTemplateName}
+              </div>
+            )}
+            <div className="space-y-2 text-[9px] text-secondary">
+              <p className="leading-5">
+                이 Action Node가 아니라 현재 선택된 Task 전체에 저장되는 planning 설정입니다.
+                Resource 점유/해제는 위 Runtime Resources에서 step 단위로 설정하고, 현재 Task planning이 이를 집계합니다.
+              </p>
+
+              <div className="rounded border border-violet-500/15 bg-base/40 px-2 py-1.5">
+                <span className="text-[8px] uppercase tracking-wider text-violet-300">During State</span>
+                {!data.taskDistributorId ? (
+                  <div className="mt-1 text-[9px] text-muted">Task Distributor 연결 후 설정 가능합니다.</div>
+                ) : planningStates.length === 0 ? (
+                  <div className="mt-1 text-[9px] text-muted">사용 가능한 state가 없습니다.</div>
+                ) : (
+                  <div className="mt-1 space-y-1.5">
+                    <div className="flex items-center gap-1">
+                      <select
+                        className="flex-1 rounded border border-border bg-base px-2 py-1 text-[9px] text-primary outline-none"
+                        value={currentPlanningDuring?.variable || ''}
+                        onChange={(e) => handlePlanningDuringVariableChange(e.target.value)}
+                      >
+                        <option value="">state 선택</option>
+                        {planningStates.map((stateVar) => (
+                          <option key={stateVar.id} value={stateVar.name}>{stateVar.name}</option>
+                        ))}
+                      </select>
+                      <span className="text-[9px] text-secondary">=</span>
+                      {(() => {
+                        const currentVar = planningStates.find(item => item.name === currentPlanningDuring?.variable)
+                        if (currentVar?.type === 'bool') {
+                          return (
+                            <select
+                              className="w-20 rounded border border-border bg-base px-2 py-1 text-[9px] text-primary outline-none"
+                              value={currentPlanningDuring?.value || 'true'}
+                              onChange={(e) => handlePlanningDuringValueChange(e.target.value)}
+                              disabled={!currentPlanningDuring?.variable}
+                            >
+                              <option value="true">true</option>
+                              <option value="false">false</option>
+                            </select>
+                          )
+                        }
+                        return (
+                          <input
+                            type={currentVar?.type === 'int' ? 'number' : 'text'}
+                            className="w-20 rounded border border-border bg-base px-2 py-1 text-[9px] text-primary outline-none disabled:opacity-40"
+                            value={currentPlanningDuring?.value || ''}
+                            onChange={(e) => handlePlanningDuringValueChange(e.target.value)}
+                            disabled={!currentPlanningDuring?.variable}
+                          />
+                        )
+                      })()}
+                      {currentPlanningDuring && (
+                        <button
+                          onClick={() => data.onTaskPlanningDuringChange?.('', '')}
+                          className="text-[9px] text-muted hover:text-red-400"
+                          title="clear"
+                        >
+                          <X size={10} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded border border-violet-500/15 bg-base/40 px-2 py-1.5">
+                <span className="text-[8px] uppercase tracking-wider text-violet-300">Result States</span>
+                {!data.taskDistributorId ? (
+                  <div className="mt-1 text-[9px] text-muted">Task Distributor 연결 후 설정 가능합니다.</div>
+                ) : planningStates.length === 0 ? (
+                  <div className="mt-1 text-[9px] text-muted">사용 가능한 state가 없습니다.</div>
+                ) : (
+                  <div className="mt-1 space-y-1.5">
+                    <div className="flex items-center gap-1">
+                      <select
+                        className="flex-1 rounded border border-border bg-base px-2 py-1 text-[9px] text-primary outline-none"
+                        value={planningResultVariable}
+                        onChange={(e) => {
+                          const variable = e.target.value
+                          setPlanningResultVariable(variable)
+                          setPlanningResultValue(getPlanningStateDefaultValue(variable))
+                        }}
+                      >
+                        <option value="">state 선택</option>
+                        {planningStates.map((stateVar) => (
+                          <option key={stateVar.id} value={stateVar.name}>{stateVar.name}</option>
+                        ))}
+                      </select>
+                      {(() => {
+                        const currentVar = planningStates.find(item => item.name === planningResultVariable)
+                        if (currentVar?.type === 'bool') {
+                          return (
+                            <select
+                              className="w-20 rounded border border-border bg-base px-2 py-1 text-[9px] text-primary outline-none"
+                              value={planningResultValue || 'true'}
+                              onChange={(e) => setPlanningResultValue(e.target.value)}
+                              disabled={!planningResultVariable}
+                            >
+                              <option value="true">true</option>
+                              <option value="false">false</option>
+                            </select>
+                          )
+                        }
+                        return (
+                          <input
+                            type={currentVar?.type === 'int' ? 'number' : 'text'}
+                            className="w-20 rounded border border-border bg-base px-2 py-1 text-[9px] text-primary outline-none disabled:opacity-40"
+                            value={planningResultValue}
+                            onChange={(e) => setPlanningResultValue(e.target.value)}
+                            disabled={!planningResultVariable}
+                          />
+                        )
+                      })()}
+                      <button
+                        onClick={handlePlanningResultAdd}
+                        disabled={!planningResultVariable}
+                        className="rounded bg-violet-500/20 px-1.5 py-1 text-violet-300 disabled:opacity-40"
+                        title="add result state"
+                      >
+                        <Plus size={10} />
+                      </button>
+                    </div>
+
+                    <div className="flex flex-wrap gap-1">
+                      {(taskPlanning?.result_states || []).length === 0 ? (
+                        <span className="text-[9px] text-muted">설정 없음</span>
+                      ) : (taskPlanning?.result_states || []).map((effect) => (
+                        <span key={effect.variable} className="inline-flex items-center gap-1 rounded-full bg-violet-500/10 px-1.5 py-0.5 text-[8px] text-violet-200">
+                          {effect.variable} = {effect.value}
+                          <button onClick={() => data.onTaskPlanningResultDelete?.(effect.variable)}>
+                            <X size={9} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded border border-violet-500/15 bg-base/40 px-2 py-1.5">
+                <span className="text-[8px] uppercase tracking-wider text-violet-300">Required Resources</span>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {(taskPlanning?.required_resources || []).length === 0 ? (
+                    <span className="text-[9px] text-muted">설정 없음</span>
+                  ) : (taskPlanning?.required_resources || []).map((token) => (
+                    <span key={token} className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[8px] text-amber-200">
+                      {formatRuntimeResourceToken(token)}
+                    </span>
+                  ))}
+                </div>
+                <div className="mt-1 text-[8px] text-muted">
+                  Resource requirement은 위 Runtime Resources의 acquire / release 설정에서 자동 집계됩니다.
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>

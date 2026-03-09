@@ -6,6 +6,7 @@ import type {
   DuringStateTarget,
   PlanningCondition,
   PlanningEffect,
+  PlanningTaskSpec,
   TaskDistributorState,
   TaskDistributorResource,
 } from '../../../types'
@@ -47,6 +48,11 @@ export interface StateActionNodeData {
   taskDistributorId?: string
   taskDistributorStates?: TaskDistributorState[]
   taskDistributorResources?: TaskDistributorResource[]
+  planningTask?: PlanningTaskSpec
+  taskTemplateName?: string
+  onTaskPlanningDuringChange?: (variable: string, value?: string) => void
+  onTaskPlanningResultUpsert?: (effect: PlanningEffect) => void
+  onTaskPlanningResultDelete?: (variable: string) => void
 }
 
 export type NormalizedDuringStateTarget = {
