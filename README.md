@@ -537,3 +537,19 @@ open http://localhost:7474
 # 라이선스
 
 MIT License
+
+---
+
+# 최근 수정 사항
+
+## 2026-03-09 - PDDL execute 즉시 취소 문제 수정
+
+- 증상: PDDL에서 `풀기` 후 `실행`을 누르면 `cancelled by user`로 즉시 종료됨
+- 원인: `ExecutePlan()`이 HTTP 요청의 `r.Context()`를 그대로 사용해서, 응답 반환 직후 plan execution이 함께 cancel됨
+- 수정: `central_server_go/internal/api/pddl.go`에서
+  `StartPlanExecution(r.Context(), ...)` 를
+  `StartPlanExecution(context.WithoutCancel(r.Context()), ...)` 로 변경
+- 효과: HTTP 응답이 끝난 뒤에도 plan execution이 계속 진행됨
+
+상세 메모:
+- `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`

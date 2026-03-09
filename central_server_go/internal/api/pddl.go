@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -233,8 +234,15 @@ func (s *Server) ExecutePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Start plan execution via PlanExecutor
-	executionID, err := s.planExecutor.StartPlanExecution(r.Context(), id, pp.BehaviorTreeID, &plan)
+	// Start plan execution via PlanExecutor.
+	// Do not bind long-running plan execution lifetime to the HTTP request context,
+	// otherwise the execution is cancelled immediately after the response is sent.
+	executionID, err := s.planExecutor.StartPlanExecution(
+		context.WithoutCancel(r.Context()),
+		id,
+		pp.BehaviorTreeID,
+		&plan,
+	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to start execution: %v", err))
 		return
