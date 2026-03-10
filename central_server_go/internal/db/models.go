@@ -377,6 +377,7 @@ type PlanningStateVar struct {
 // The behavior tree itself is the runtime task; the planner only needs the
 // task's resource requirements and state transitions.
 type PlanningTaskSpec struct {
+	Preconditions     []PlanningCondition `json:"preconditions,omitempty"`
 	RequiredResources []string         `json:"required_resources,omitempty"`
 	DuringState       []PlanningEffect `json:"during_state,omitempty"`
 	ResultStates      []PlanningEffect `json:"result_states,omitempty"`
@@ -384,7 +385,7 @@ type PlanningTaskSpec struct {
 
 // HasData reports whether the task spec contains any planning metadata.
 func (spec PlanningTaskSpec) HasData() bool {
-	return len(spec.RequiredResources) > 0 || len(spec.DuringState) > 0 || len(spec.ResultStates) > 0
+	return len(spec.Preconditions) > 0 || len(spec.RequiredResources) > 0 || len(spec.DuringState) > 0 || len(spec.ResultStates) > 0
 }
 
 // DecodePlanningTaskSpec parses task-level planning metadata from stored JSON.
@@ -592,6 +593,7 @@ type PlanningProblem struct {
 	ID                string         `gorm:"primaryKey;size:50"`
 	Name              string         `gorm:"size:200;not null"`
 	BehaviorTreeID    string         `gorm:"size:50;not null;index"`
+	BehaviorTreeIDs   datatypes.JSON `gorm:"type:jsonb"`            // []string (preferred, multi-task support)
 	TaskDistributorID sql.NullString `gorm:"size:50;index"`
 	InitialState      datatypes.JSON `gorm:"type:jsonb"`            // map[string]string
 	GoalState         datatypes.JSON `gorm:"type:jsonb;not null"`   // map[string]string

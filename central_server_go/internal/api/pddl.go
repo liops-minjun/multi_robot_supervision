@@ -26,6 +26,7 @@ import (
 type PlanningProblemCreateRequest struct {
 	Name              string            `json:"name"`
 	BehaviorTreeID    string            `json:"behavior_tree_id"`
+	BehaviorTreeIDs   []string          `json:"behavior_tree_ids,omitempty"`
 	TaskDistributorID string            `json:"task_distributor_id,omitempty"`
 	InitialState      map[string]string `json:"initial_state,omitempty"`
 	GoalState         map[string]string `json:"goal_state"`
@@ -37,6 +38,7 @@ type PlanningProblemResponse struct {
 	ID                string            `json:"id"`
 	Name              string            `json:"name"`
 	BehaviorTreeID    string            `json:"behavior_tree_id"`
+	BehaviorTreeIDs   []string          `json:"behavior_tree_ids,omitempty"`
 	TaskDistributorID string            `json:"task_distributor_id,omitempty"`
 	InitialState      map[string]string `json:"initial_state,omitempty"`
 	GoalState         map[string]string `json:"goal_state"`
@@ -51,10 +53,39 @@ type PlanningProblemResponse struct {
 // PreviewDistributionRequest represents a request to preview task distribution without saving
 type PreviewDistributionRequest struct {
 	BehaviorTreeID    string            `json:"behavior_tree_id"`
+	BehaviorTreeIDs   []string          `json:"behavior_tree_ids,omitempty"`
 	TaskDistributorID string            `json:"task_distributor_id,omitempty"`
 	InitialState      map[string]string `json:"initial_state,omitempty"`
 	GoalState         map[string]string `json:"goal_state"`
 	AgentIDs          []string          `json:"agent_ids"`
+}
+
+func normalizeBehaviorTreeIDs(primary string, ids []string) []string {
+	seen := make(map[string]bool)
+	normalized := make([]string, 0, len(ids)+1)
+	appendID := func(id string) {
+		if id == "" || seen[id] {
+			return
+		}
+		seen[id] = true
+		normalized = append(normalized, id)
+	}
+	appendID(primary)
+	for _, id := range ids {
+		appendID(id)
+	}
+	return normalized
+}
+
+func decodeBehaviorTreeIDs(pp *db.PlanningProblem) []string {
+	if pp == nil {
+		return nil
+	}
+	var ids []string
+	if pp.BehaviorTreeIDs != nil && len(pp.BehaviorTreeIDs) > 0 {
+		_ = json.Unmarshal(pp.BehaviorTreeIDs, &ids)
+	}
+	return normalizeBehaviorTreeIDs(pp.BehaviorTreeID, ids)
 }
 
 // ============================================================
@@ -89,8 +120,9 @@ func (s *Server) CreatePlanningProblem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if req.BehaviorTreeID == "" {
-		writeError(w, http.StatusBadRequest, "behavior_tree_id is required")
+	behaviorTreeIDs := normalizeBehaviorTreeIDs(req.BehaviorTreeID, req.BehaviorTreeIDs)
+	if len(behaviorTreeIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "behavior_tree_id or behavior_tree_ids is required")
 		return
 	}
 	if len(req.GoalState) == 0 {
@@ -102,17 +134,20 @@ func (s *Server) CreatePlanningProblem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify BT exists
-	bt, err := s.repo.GetBehaviorTree(req.BehaviorTreeID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get behavior tree: %v", err))
-		return
-	}
-	if bt == nil {
-		writeError(w, http.StatusNotFound, "behavior tree not found")
-		return
+	// Verify all selected BTs exist
+	for _, btID := range behaviorTreeIDs {
+		bt, err := s.repo.GetBehaviorTree(btID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get behavior tree %q: %v", btID, err))
+			return
+		}
+		if bt == nil {
+			writeError(w, http.StatusNotFound, fmt.Sprintf("behavior tree %q not found", btID))
+			return
+		}
 	}
 
+	behaviorTreeIDsJSON, _ := json.Marshal(behaviorTreeIDs)
 	initialStateJSON, _ := json.Marshal(req.InitialState)
 	goalStateJSON, _ := json.Marshal(req.GoalState)
 	agentIDsJSON, _ := json.Marshal(req.AgentIDs)
@@ -121,7 +156,8 @@ func (s *Server) CreatePlanningProblem(w http.ResponseWriter, r *http.Request) {
 	pp := &db.PlanningProblem{
 		ID:                uuid.New().String()[:8],
 		Name:              req.Name,
-		BehaviorTreeID:    req.BehaviorTreeID,
+		BehaviorTreeID:    behaviorTreeIDs[0],
+		BehaviorTreeIDs:   datatypes.JSON(behaviorTreeIDsJSON),
 		TaskDistributorID: sql.NullString{String: req.TaskDistributorID, Valid: req.TaskDistributorID != ""},
 		InitialState:      datatypes.JSON(initialStateJSON),
 		GoalState:         datatypes.JSON(goalStateJSON),
@@ -240,7 +276,7 @@ func (s *Server) ExecutePlan(w http.ResponseWriter, r *http.Request) {
 	executionID, err := s.planExecutor.StartPlanExecution(
 		context.WithoutCancel(r.Context()),
 		id,
-		pp.BehaviorTreeID,
+		decodeBehaviorTreeIDs(pp),
 		&plan,
 	)
 	if err != nil {
@@ -304,8 +340,9 @@ func (s *Server) PreviewDistribution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.BehaviorTreeID == "" {
-		writeError(w, http.StatusBadRequest, "behavior_tree_id is required")
+	behaviorTreeIDs := normalizeBehaviorTreeIDs(req.BehaviorTreeID, req.BehaviorTreeIDs)
+	if len(behaviorTreeIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "behavior_tree_id or behavior_tree_ids is required")
 		return
 	}
 	if len(req.GoalState) == 0 {
@@ -321,9 +358,11 @@ func (s *Server) PreviewDistribution(w http.ResponseWriter, r *http.Request) {
 	initialStateJSON, _ := json.Marshal(req.InitialState)
 	goalStateJSON, _ := json.Marshal(req.GoalState)
 	agentIDsJSON, _ := json.Marshal(req.AgentIDs)
+	behaviorTreeIDsJSON, _ := json.Marshal(behaviorTreeIDs)
 
 	pp := &db.PlanningProblem{
-		BehaviorTreeID:    req.BehaviorTreeID,
+		BehaviorTreeID:    behaviorTreeIDs[0],
+		BehaviorTreeIDs:   datatypes.JSON(behaviorTreeIDsJSON),
 		TaskDistributorID: sql.NullString{String: req.TaskDistributorID, Valid: req.TaskDistributorID != ""},
 		InitialState:      datatypes.JSON(initialStateJSON),
 		GoalState:         datatypes.JSON(goalStateJSON),
@@ -345,22 +384,32 @@ func (s *Server) PreviewDistribution(w http.ResponseWriter, r *http.Request) {
 
 // solveProblem builds a PlanProblem from a PlanningProblem and runs the planner
 func (s *Server) solveProblem(pp *db.PlanningProblem) (*pddl.Plan, error) {
-	// Load behavior tree
-	bt, err := s.repo.GetBehaviorTree(pp.BehaviorTreeID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get behavior tree: %w", err)
-	}
-	if bt == nil {
-		return nil, fmt.Errorf("behavior tree not found")
+	behaviorTreeIDs := decodeBehaviorTreeIDs(pp)
+	if len(behaviorTreeIDs) == 0 {
+		return nil, fmt.Errorf("no behavior trees selected")
 	}
 
-	// Parse planning state vars: prefer TaskDistributor, fallback to BT.PlanningStates
+	behaviorTrees := make([]*db.BehaviorTree, 0, len(behaviorTreeIDs))
+	for _, btID := range behaviorTreeIDs {
+		bt, err := s.repo.GetBehaviorTree(btID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get behavior tree %q: %w", btID, err)
+		}
+		if bt == nil {
+			return nil, fmt.Errorf("behavior tree %q not found", btID)
+		}
+		behaviorTrees = append(behaviorTrees, bt)
+	}
+
+	primaryBT := behaviorTrees[0]
+
+	// Parse planning state vars: prefer TaskDistributor, fallback to merged BT.PlanningStates
 	var stateVars []db.PlanningStateVar
 	selectedTDID := ""
 	if pp.TaskDistributorID.Valid && pp.TaskDistributorID.String != "" {
 		selectedTDID = pp.TaskDistributorID.String
-	} else if bt.TaskDistributorID.Valid && bt.TaskDistributorID.String != "" {
-		selectedTDID = bt.TaskDistributorID.String
+	} else if primaryBT.TaskDistributorID.Valid && primaryBT.TaskDistributorID.String != "" {
+		selectedTDID = primaryBT.TaskDistributorID.String
 	}
 
 	if selectedTDID != "" {
@@ -375,8 +424,39 @@ func (s *Server) solveProblem(pp *db.PlanningProblem) (*pddl.Plan, error) {
 				})
 			}
 		}
-	} else if bt.PlanningStates != nil {
-		json.Unmarshal(bt.PlanningStates, &stateVars)
+	} else {
+		stateVarMap := make(map[string]db.PlanningStateVar)
+		for _, bt := range behaviorTrees {
+			if bt.PlanningStates == nil {
+				continue
+			}
+			var btStateVars []db.PlanningStateVar
+			if err := json.Unmarshal(bt.PlanningStates, &btStateVars); err != nil {
+				return nil, fmt.Errorf("failed to parse planning states for %q: %w", bt.ID, err)
+			}
+			for _, sv := range btStateVars {
+				if sv.Name == "" {
+					continue
+				}
+				if existing, ok := stateVarMap[sv.Name]; ok {
+					if existing.Type == "" && sv.Type != "" {
+						existing.Type = sv.Type
+					}
+					if existing.InitialValue == "" && sv.InitialValue != "" {
+						existing.InitialValue = sv.InitialValue
+					}
+					if existing.Description == "" && sv.Description != "" {
+						existing.Description = sv.Description
+					}
+					stateVarMap[sv.Name] = existing
+					continue
+				}
+				stateVarMap[sv.Name] = sv
+			}
+		}
+		for _, sv := range stateVarMap {
+			stateVars = append(stateVars, sv)
+		}
 	}
 
 	resources := make([]pddl.ResourceInfo, 0)
@@ -430,26 +510,30 @@ func (s *Server) solveProblem(pp *db.PlanningProblem) (*pddl.Plan, error) {
 		})
 	}
 
-	taskSpec, err := db.DecodePlanningTaskSpec(bt.PlanningTask)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse task planning metadata: %w", err)
-	}
-	if !taskSpec.HasData() {
-		return nil, fmt.Errorf("behavior tree %q does not define task planning metadata", bt.ID)
-	}
-	if len(taskSpec.ResultStates) == 0 {
-		return nil, fmt.Errorf("behavior tree %q does not define task result states", bt.ID)
-	}
+	tasks := make([]pddl.PlanTask, 0, len(behaviorTrees))
+	for _, bt := range behaviorTrees {
+		taskSpec, err := db.DecodePlanningTaskSpec(bt.PlanningTask)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse task planning metadata for %q: %w", bt.ID, err)
+		}
+		if !taskSpec.HasData() {
+			return nil, fmt.Errorf("behavior tree %q does not define task planning metadata", bt.ID)
+		}
+		if len(taskSpec.ResultStates) == 0 {
+			return nil, fmt.Errorf("behavior tree %q does not define task result states", bt.ID)
+		}
 
-	tasks := []pddl.PlanTask{{
-		TaskID:              bt.ID,
-		TaskName:            bt.Name,
-		BehaviorTreeID:      bt.ID,
-		RequiredActionTypes: decodeStringSlice(bt.RequiredActionTypes),
-		RequiredResources:   append([]string{}, taskSpec.RequiredResources...),
-		ResultStates:        append([]db.PlanningEffect{}, taskSpec.ResultStates...),
-		DuringState:         append([]db.PlanningEffect{}, taskSpec.DuringState...),
-	}}
+		tasks = append(tasks, pddl.PlanTask{
+			TaskID:              bt.ID,
+			TaskName:            bt.Name,
+			BehaviorTreeID:      bt.ID,
+			RequiredActionTypes: decodeStringSlice(bt.RequiredActionTypes),
+			Preconditions:       append([]db.PlanningCondition{}, taskSpec.Preconditions...),
+			RequiredResources:   append([]string{}, taskSpec.RequiredResources...),
+			ResultStates:        append([]db.PlanningEffect{}, taskSpec.ResultStates...),
+			DuringState:         append([]db.PlanningEffect{}, taskSpec.DuringState...),
+		})
+	}
 
 	// Parse initial and goal states
 	var initialState, goalState map[string]string
@@ -476,14 +560,15 @@ func toPlanExecutionResponse(exec *executor.PlanExecution, stateManager *state.G
 	snapshot := exec.Snapshot()
 
 	resp := PlanExecutionResponse{
-		ID:             snapshot.ID,
-		ProblemID:      snapshot.ProblemID,
-		BehaviorTreeID: snapshot.BehaviorTreeID,
-		Status:         snapshot.Status,
-		CurrentOrder:   snapshot.CurrentOrder,
-		TotalOrders:    snapshot.TotalOrders,
-		StartedAt:      snapshot.StartedAt,
-		Error:          snapshot.Error,
+		ID:              snapshot.ID,
+		ProblemID:       snapshot.ProblemID,
+		BehaviorTreeID:  snapshot.BehaviorTreeID,
+		BehaviorTreeIDs: append([]string{}, snapshot.BehaviorTreeIDs...),
+		Status:          snapshot.Status,
+		CurrentOrder:    snapshot.CurrentOrder,
+		TotalOrders:     snapshot.TotalOrders,
+		StartedAt:       snapshot.StartedAt,
+		Error:           snapshot.Error,
 	}
 
 	if snapshot.CompletedAt != nil {
@@ -495,16 +580,17 @@ func toPlanExecutionResponse(exec *executor.PlanExecution, stateManager *state.G
 	for _, ss := range snapshot.Steps {
 		agentNames[ss.AgentID] = ss.AgentName
 		resp.Steps = append(resp.Steps, PlanExecutionStepResponse{
-			TaskID:        ss.TaskID,
-			TaskName:      ss.TaskName,
-			RuntimeTaskID: ss.RuntimeTaskID,
-			StepID:        ss.StepID,
-			StepName:      ss.StepName,
-			AgentID:       ss.AgentID,
-			AgentName:     ss.AgentName,
-			Order:         ss.Order,
-			Status:        ss.Status,
-			Error:         ss.Error,
+			TaskID:         ss.TaskID,
+			TaskName:       ss.TaskName,
+			BehaviorTreeID: ss.BehaviorTreeID,
+			RuntimeTaskID:  ss.RuntimeTaskID,
+			StepID:         ss.StepID,
+			StepName:       ss.StepName,
+			AgentID:        ss.AgentID,
+			AgentName:      ss.AgentName,
+			Order:          ss.Order,
+			Status:         ss.Status,
+			Error:          ss.Error,
 		})
 	}
 
@@ -547,6 +633,10 @@ func toPlanningProblemResponse(pp *db.PlanningProblem) PlanningProblemResponse {
 	if pp.InitialState != nil {
 		json.Unmarshal(pp.InitialState, &resp.InitialState)
 	}
+	if pp.BehaviorTreeIDs != nil && len(pp.BehaviorTreeIDs) > 0 {
+		json.Unmarshal(pp.BehaviorTreeIDs, &resp.BehaviorTreeIDs)
+	}
+	resp.BehaviorTreeIDs = normalizeBehaviorTreeIDs(resp.BehaviorTreeID, resp.BehaviorTreeIDs)
 	if pp.GoalState != nil {
 		json.Unmarshal(pp.GoalState, &resp.GoalState)
 	}

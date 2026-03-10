@@ -3598,6 +3598,7 @@ func (r *Repository) CreatePlanningProblem(pp *PlanningProblem) error {
 		"id":                  pp.ID,
 		"name":                pp.Name,
 		"behavior_tree_id":    pp.BehaviorTreeID,
+		"behavior_tree_ids":   string(pp.BehaviorTreeIDs),
 		"task_distributor_id": pp.TaskDistributorID.String,
 		"initial_state":       string(pp.InitialState),
 		"goal_state":          string(pp.GoalState),
@@ -3614,6 +3615,7 @@ func (r *Repository) CreatePlanningProblem(pp *PlanningProblem) error {
 				id: $id,
 				name: $name,
 				behavior_tree_id: $behavior_tree_id,
+				behavior_tree_ids: $behavior_tree_ids,
 				task_distributor_id: $task_distributor_id,
 				initial_state: $initial_state,
 				goal_state: $goal_state,
@@ -3664,8 +3666,9 @@ func (r *Repository) ListPlanningProblems(behaviorTreeID string) ([]PlanningProb
 	query := "MATCH (p:PlanningProblem) "
 	params := map[string]any{}
 	if behaviorTreeID != "" {
-		query += "WHERE p.behavior_tree_id = $bt_id "
+		query += "WHERE p.behavior_tree_id = $bt_id OR p.behavior_tree_ids CONTAINS $bt_marker "
 		params["bt_id"] = behaviorTreeID
+		params["bt_marker"] = fmt.Sprintf("\"%s\"", behaviorTreeID)
 	}
 	query += "RETURN p ORDER BY p.created_at_ms DESC"
 
@@ -3741,6 +3744,9 @@ func parsePlanningProblemNode(props map[string]any) *PlanningProblem {
 	}
 	if is := getString(props, "initial_state"); is != "" {
 		pp.InitialState = datatypes.JSON([]byte(is))
+	}
+	if btIDs := getString(props, "behavior_tree_ids"); btIDs != "" {
+		pp.BehaviorTreeIDs = datatypes.JSON([]byte(btIDs))
 	}
 	if gs := getString(props, "goal_state"); gs != "" {
 		pp.GoalState = datatypes.JSON([]byte(gs))

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   RefreshCw, Play, Eye, Square, ChevronDown, ChevronRight, Info, Target,
   Database, Workflow, AlertTriangle, Link2, Plus, Trash2, Check, X, Layers,
@@ -8,7 +8,7 @@ import { useTranslation } from '../../i18n'
 import { behaviorTreeApi, agentApi, capabilityApi, pddlApi, taskDistributorApi, fleetApi } from '../../api/client'
 import type {
   BehaviorTree, Agent, PlanResult, PlanExecution, ResourceAllocation,
-  TaskDistributor, GraphListItem, TaskDistributorState, TaskDistributorResource, RobotStateSnapshot,
+  TaskDistributor, GraphListItem, TaskDistributorState, TaskDistributorResource, RobotStateSnapshot, PlanningTaskSpec,
 } from '../../types'
 import GoalEditor from './components/GoalEditor'
 import PlanVisualization from './components/PlanVisualization'
@@ -78,6 +78,8 @@ const TYPE_BADGE: Record<string, { bg: string; text: string }> = {
   string: { bg: 'bg-orange-500/15', text: 'text-orange-400' },
 }
 
+const PDDL_DRAFT_STORAGE_KEY = 'mcs.pddl.draft.v1'
+
 function buildInstanceNames(typeName: string, count: number) {
   const normalized = typeName.trim().replace(/\s+/g, ' ')
   if (!normalized) return []
@@ -134,6 +136,53 @@ function resolveRuntimeStepId(graph: BehaviorTree | null, runtime?: RobotStateSn
   if (!graph || !runtime?.current_step_id) return null
   if (runtime.current_graph_id && runtime.current_graph_id !== graph.id) return null
   return runtime.current_step_id
+}
+
+const EMPTY_PLANNING_TASK: PlanningTaskSpec = {
+  preconditions: [],
+  required_resources: [],
+  during_state: [],
+  result_states: [],
+}
+
+function mergePlanningTasks(tasks: Array<PlanningTaskSpec | null | undefined>): PlanningTaskSpec {
+  const preconditions = new Map<string, { operator?: '==' | '!='; value: string }>()
+  const requiredResources = new Set<string>()
+  const duringStates = new Map<string, string>()
+  const resultStates = new Map<string, string>()
+
+  for (const task of tasks) {
+    for (const condition of task?.preconditions || []) {
+      if (condition?.variable) preconditions.set(condition.variable, { operator: condition.operator, value: condition.value })
+    }
+    for (const resource of task?.required_resources || []) {
+      if (resource) requiredResources.add(resource)
+    }
+    for (const effect of task?.during_state || []) {
+      if (effect?.variable) duringStates.set(effect.variable, effect.value)
+    }
+    for (const effect of task?.result_states || []) {
+      if (effect?.variable) resultStates.set(effect.variable, effect.value)
+    }
+  }
+
+  return {
+    preconditions: Array.from(preconditions.entries()).map(([variable, data]) => ({ variable, operator: data.operator, value: data.value })),
+    required_resources: Array.from(requiredResources),
+    during_state: Array.from(duringStates.entries()).map(([variable, value]) => ({ variable, value })),
+    result_states: Array.from(resultStates.entries()).map(([variable, value]) => ({ variable, value })),
+  }
+}
+
+function getApiErrorMessage(error: unknown): string {
+  const err = error as {
+    response?: { data?: { error?: string; message?: string } }
+    message?: string
+  }
+  return err?.response?.data?.error
+    || err?.response?.data?.message
+    || err?.message
+    || String(error)
 }
 
 // ---------------------------------------------------------------------------
@@ -310,6 +359,9 @@ export default function PDDL() {
   const [newStateInitialValue, setNewStateInitialValue] = useState('')
   const [editingStateId, setEditingStateId] = useState<string | null>(null)
   const [editStateInitialValue, setEditStateInitialValue] = useState('')
+  const didRestoreDraftRef = useRef(false)
+  const skipNextSelectionResetRef = useRef(false)
+  const restoredSelectionKeyRef = useRef<string | null>(null)
 
   // -----------------------------------------------------------------------
   // Derived values
@@ -319,7 +371,7 @@ export default function PDDL() {
     () => selectedBTIds.map(id => btCache.get(id)).filter((bt): bt is BehaviorTree => bt != null),
     [selectedBTIds, btCache]
   )
-  const selectedBT = selectedBTs[0] || null
+  const singleSelectedBT = selectedBTs.length === 1 ? selectedBTs[0] : null
 
   const selectedDistributor = distributors.find(d => d.id === selectedDistributorId) || null
 
@@ -369,21 +421,35 @@ export default function PDDL() {
     [resourceTypeName, resourceTypeCount]
   )
 
+  const selectedTaskPlanningByTaskId = useMemo(
+    () => Object.fromEntries(selectedBTs.map(bt => [bt.id, bt.planning_task || EMPTY_PLANNING_TASK])),
+    [selectedBTs]
+  )
   const selectedTaskPlanning = useMemo(
-    () => selectedBT?.planning_task || { required_resources: [], during_state: [], result_states: [] },
-    [selectedBT]
+    () => mergePlanningTasks(Object.values(selectedTaskPlanningByTaskId)),
+    [selectedTaskPlanningByTaskId]
   )
 
-  const requiredActionTypes = useMemo(() => {
-    if (selectedBT?.required_action_types?.length) {
-      return selectedBT.required_action_types
+  const requiredActionTypesByTaskId = useMemo(() => {
+    const entries: Record<string, string[]> = {}
+    for (const bt of selectedBTs) {
+      if (bt.required_action_types?.length) {
+        entries[bt.id] = bt.required_action_types
+        continue
+      }
+      const types = new Set<string>()
+      for (const step of bt.steps || []) {
+        if (step.action?.type) types.add(step.action.type)
+      }
+      entries[bt.id] = Array.from(types)
     }
-    const types = new Set<string>()
-    for (const step of selectedBT?.steps || []) {
-      if (step.action?.type) types.add(step.action.type)
-    }
-    return Array.from(types)
-  }, [selectedBT])
+    return entries
+  }, [selectedBTs])
+
+  const requiredActionTypes = useMemo(
+    () => Array.from(new Set(Object.values(requiredActionTypesByTaskId).flat())),
+    [requiredActionTypesByTaskId]
+  )
 
 
   // -----------------------------------------------------------------------
@@ -424,6 +490,81 @@ export default function PDDL() {
   }, [])
 
   useEffect(() => { loadData(); loadDistributors() }, [loadData, loadDistributors])
+
+  useEffect(() => {
+    if (didRestoreDraftRef.current) return
+    didRestoreDraftRef.current = true
+
+    try {
+      const raw = window.localStorage.getItem(PDDL_DRAFT_STORAGE_KEY)
+      if (!raw) return
+
+      const draft = JSON.parse(raw) as {
+        selectedBTIds?: string[]
+        selectedDistributorId?: string | null
+        selectedAgentIds?: string[]
+        goalState?: Record<string, string>
+        initialState?: Record<string, string>
+        showInitialState?: boolean
+      }
+
+      skipNextSelectionResetRef.current = true
+      restoredSelectionKeyRef.current = `${[...(Array.isArray(draft.selectedBTIds) ? draft.selectedBTIds : [])].sort().join(',')}|${draft.selectedDistributorId || ''}`
+      setSelectedBTIds(Array.isArray(draft.selectedBTIds) ? draft.selectedBTIds : [])
+      setSelectedDistributorId(draft.selectedDistributorId || null)
+      setSelectedAgentIds(Array.isArray(draft.selectedAgentIds) ? draft.selectedAgentIds : [])
+      setGoalState(draft.goalState || {})
+      setInitialState(draft.initialState || {})
+      setShowInitialState(Boolean(draft.showInitialState))
+    } catch (err) {
+      console.error('Failed to restore PDDL draft:', err)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (selectedBTIds.length === 0) return
+
+    const missingIds = selectedBTIds.filter(id => !btCache.has(id))
+    if (missingIds.length === 0) return
+
+    let cancelled = false
+
+    const loadMissingBTs = async () => {
+      try {
+        const trees = await Promise.all(missingIds.map(id => behaviorTreeApi.get(id)))
+        if (cancelled) return
+        setBtCache(prev => {
+          const next = new Map(prev)
+          for (const tree of trees) {
+            next.set(tree.id, tree)
+          }
+          return next
+        })
+      } catch (err) {
+        console.error('Failed to restore selected BT details:', err)
+      }
+    }
+
+    void loadMissingBTs()
+    return () => {
+      cancelled = true
+    }
+  }, [selectedBTIds, btCache])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(PDDL_DRAFT_STORAGE_KEY, JSON.stringify({
+        selectedBTIds,
+        selectedDistributorId,
+        selectedAgentIds,
+        goalState,
+        initialState,
+        showInitialState,
+      }))
+    } catch (err) {
+      console.error('Failed to persist PDDL draft:', err)
+    }
+  }, [selectedBTIds, selectedDistributorId, selectedAgentIds, goalState, initialState, showInitialState])
 
   // -----------------------------------------------------------------------
   // Effects
@@ -519,6 +660,14 @@ export default function PDDL() {
     [selectedBTIds, selectedDistributorId]
   )
   useEffect(() => {
+    if (skipNextSelectionResetRef.current) {
+      skipNextSelectionResetRef.current = false
+      return
+    }
+    if (restoredSelectionKeyRef.current && restoredSelectionKeyRef.current === selectionKey) {
+      restoredSelectionKeyRef.current = null
+      return
+    }
     setGoalState({})
     setInitialState({})
     setPlan(null)
@@ -535,7 +684,7 @@ export default function PDDL() {
 
   const handleToggleBT = useCallback(async (id: string) => {
     if (selectedBTIds.includes(id)) {
-      setSelectedBTIds([])
+      setSelectedBTIds(prev => prev.filter(item => item !== id))
       return
     }
     let bt = btCache.get(id)
@@ -548,15 +697,15 @@ export default function PDDL() {
         return
       }
     }
-    setSelectedBTIds([id])
-    if (bt.task_distributor_id) {
+    setSelectedBTIds(prev => [...prev, id])
+    if (bt.task_distributor_id && !selectedDistributorId) {
       setSelectedDistributorId(bt.task_distributor_id)
       const td = distributors.find(d => d.id === bt!.task_distributor_id)
       if (td) {
         setAutoLinkNotice(td.name)
         setTimeout(() => setAutoLinkNotice(null), 4000)
       }
-    } else if (selectedDistributorId) {
+    } else if (selectedDistributorId && !bt.task_distributor_id) {
       try {
         const updated = await behaviorTreeApi.update(id, {
           task_distributor_id: selectedDistributorId,
@@ -586,19 +735,28 @@ export default function PDDL() {
   const handleSelectDistributor = useCallback(async (distributorId: string) => {
     setSelectedDistributorId(distributorId)
 
-    if (!selectedBT || selectedBT.task_distributor_id === distributorId) {
+    const targets = selectedBTs.filter(bt => bt.task_distributor_id !== distributorId)
+    if (targets.length === 0) {
       return
     }
 
     try {
-      const updated = await behaviorTreeApi.update(selectedBT.id, {
-        task_distributor_id: distributorId,
+      const updatedTrees = await Promise.all(targets.map(bt =>
+        behaviorTreeApi.update(bt.id, {
+          task_distributor_id: distributorId,
+        })
+      ))
+      setBtCache(prev => {
+        const next = new Map(prev)
+        for (const updated of updatedTrees) {
+          next.set(updated.id, updated)
+        }
+        return next
       })
-      setBtCache(prev => new Map(prev).set(updated.id, updated))
       setAssignmentNotice(
         t('pddl.distributorAssignedToTask', {
           distributor: distributors.find(d => d.id === distributorId)?.name || distributorId,
-          task: updated.name,
+          task: updatedTrees.length === 1 ? updatedTrees[0].name : `${updatedTrees.length} tasks`,
         })
       )
       setTimeout(() => setAssignmentNotice(null), 4000)
@@ -607,7 +765,7 @@ export default function PDDL() {
       setAssignmentNotice(t('pddl.distributorAssignError'))
       setTimeout(() => setAssignmentNotice(null), 4000)
     }
-  }, [selectedBT, distributors, t])
+  }, [selectedBTs, distributors, t])
 
   // -----------------------------------------------------------------------
   // TD CRUD handlers
@@ -815,12 +973,18 @@ export default function PDDL() {
   // Plan handlers
   // -----------------------------------------------------------------------
 
+  const selectedBehaviorTreeIds = selectedBTs.map(bt => bt.id)
+  const selectedBehaviorTreeLabel = selectedBTs.length === 1
+    ? selectedBTs[0].name
+    : `${selectedBTs.length} tasks`
+
   const handlePreview = async () => {
-    if (!selectedBT || !selectedDistributor || selectedAgentIds.length === 0 || Object.keys(goalState).length === 0) return
+    if (selectedBTs.length === 0 || !selectedDistributor || selectedAgentIds.length === 0 || Object.keys(goalState).length === 0) return
     setIsSolving(true); setPlan(null); setExecutionId(null); setExecution(null); setResourceAllocations([])
     try {
       const result = await pddlApi.preview({
-        behavior_tree_id: selectedBT.id,
+        behavior_tree_id: selectedBehaviorTreeIds[0],
+        behavior_tree_ids: selectedBehaviorTreeIds,
         task_distributor_id: selectedDistributor.id,
         initial_state: Object.keys(initialState).length > 0 ? initialState : undefined,
         goal_state: goalState,
@@ -829,17 +993,18 @@ export default function PDDL() {
       setPlan(result)
     } catch (err) {
       console.error('Preview failed:', err)
-      setPlan({ assignments: [], is_valid: false, error_message: String(err), total_steps: 0, parallel_groups: 0 })
+      setPlan({ assignments: [], is_valid: false, error_message: getApiErrorMessage(err), total_steps: 0, parallel_groups: 0 })
     } finally { setIsSolving(false) }
   }
 
   const handleSaveAndSolve = async () => {
-    if (!selectedBT || !selectedDistributor || selectedAgentIds.length === 0 || Object.keys(goalState).length === 0) return
+    if (selectedBTs.length === 0 || !selectedDistributor || selectedAgentIds.length === 0 || Object.keys(goalState).length === 0) return
     setIsSolving(true); setPlan(null); setExecutionId(null); setExecution(null); setResourceAllocations([])
     try {
       const problem = await pddlApi.createProblem({
-        name: `${selectedBT.name} - ${new Date().toLocaleString()}`,
-        behavior_tree_id: selectedBT.id,
+        name: `${selectedBehaviorTreeLabel} - ${new Date().toLocaleString()}`,
+        behavior_tree_id: selectedBehaviorTreeIds[0],
+        behavior_tree_ids: selectedBehaviorTreeIds,
         task_distributor_id: selectedDistributor.id,
         initial_state: Object.keys(initialState).length > 0 ? initialState : undefined,
         goal_state: goalState,
@@ -849,16 +1014,17 @@ export default function PDDL() {
       if (solved.plan_result) setPlan(solved.plan_result)
     } catch (err) {
       console.error('Solve failed:', err)
-      setPlan({ assignments: [], is_valid: false, error_message: String(err), total_steps: 0, parallel_groups: 0 })
+      setPlan({ assignments: [], is_valid: false, error_message: getApiErrorMessage(err), total_steps: 0, parallel_groups: 0 })
     } finally { setIsSolving(false) }
   }
 
   const handleExecute = async () => {
-    if (!plan?.is_valid || !selectedBT || !selectedDistributor) return
+    if (!plan?.is_valid || selectedBTs.length === 0 || !selectedDistributor) return
     try {
       const problem = await pddlApi.createProblem({
-        name: `${selectedBT.name} - Exec ${new Date().toLocaleString()}`,
-        behavior_tree_id: selectedBT.id,
+        name: `${selectedBehaviorTreeLabel} - Exec ${new Date().toLocaleString()}`,
+        behavior_tree_id: selectedBehaviorTreeIds[0],
+        behavior_tree_ids: selectedBehaviorTreeIds,
         task_distributor_id: selectedDistributor.id,
         initial_state: Object.keys(initialState).length > 0 ? initialState : undefined,
         goal_state: goalState,
@@ -886,10 +1052,13 @@ export default function PDDL() {
   const recommendedAgents = useMemo(
     () => agents.filter(a =>
       a.isOnline &&
-      requiredActionTypes.length > 0 &&
-      requiredActionTypes.every(type => a.capabilities.includes(type))
+      selectedBTs.length > 0 &&
+      selectedBTs.some(bt => {
+        const taskRequirements = requiredActionTypesByTaskId[bt.id] || []
+        return taskRequirements.length === 0 || taskRequirements.every(type => a.capabilities.includes(type))
+      })
     ),
-    [agents, requiredActionTypes]
+    [agents, selectedBTs, requiredActionTypesByTaskId]
   )
   const recommendedAgentIds = recommendedAgents.map(({ agent }) => agent.id)
   const recommendedSet = useMemo(() => new Set(recommendedAgentIds), [recommendedAgentIds])
@@ -962,9 +1131,9 @@ export default function PDDL() {
       .map(agentId => {
         const agentEntry = agents.find(item => item.agent.id === agentId) || null
         const runtime = agentRuntimeMap[agentId] || null
-        const currentStepId = resolveRuntimeStepId(selectedBT, runtime)
+        const currentStepId = resolveRuntimeStepId(singleSelectedBT, runtime)
         const currentStepName = currentStepId
-          ? selectedBT?.steps.find(step => step.id === currentStepId)?.job_name || selectedBT?.steps.find(step => step.id === currentStepId)?.name || currentStepId
+          ? singleSelectedBT?.steps.find(step => step.id === currentStepId)?.job_name || singleSelectedBT?.steps.find(step => step.id === currentStepId)?.name || currentStepId
           : null
         const dispatches = agentDispatchMap.get(agentId) || []
         const heldResources = heldResourcesByAgent.get(agentId)
@@ -983,7 +1152,7 @@ export default function PDDL() {
         }
       })
       .sort((left, right) => left.agentId.localeCompare(right.agentId))
-  }, [runtimeAgentIds, agents, agentRuntimeMap, selectedBT, agentDispatchMap, heldResourcesByAgent])
+  }, [runtimeAgentIds, agents, agentRuntimeMap, singleSelectedBT, agentDispatchMap, heldResourcesByAgent])
   const planStatus = execution?.status
     ? translateStatus(execution.status)
     : plan?.is_valid
@@ -1008,13 +1177,13 @@ export default function PDDL() {
   }, [selectedDistributor, selectedBTs.length, selectedAgentIds, goalState, t])
   const executeTooltip = useMemo(() => {
     if (!selectedDistributor) return t('pddl.needDistributor')
-    if (!selectedBT) return t('pddl.needBT')
+    if (selectedBTs.length === 0) return t('pddl.needBT')
     if (isExecuting) return t('pddl.alreadyExecuting')
     if (!plan?.is_valid) return t('pddl.needValidPlan')
     return undefined
-  }, [selectedDistributor, selectedBT, plan, isExecuting, t])
-  const canSolve = !!selectedDistributor && !!selectedBT && selectedAgentIds.length > 0 && Object.keys(goalState).length > 0
-  const canExecute = !!selectedDistributor && !!selectedBT && !!plan?.is_valid && !isExecuting
+  }, [selectedDistributor, selectedBTs.length, plan, isExecuting, t])
+  const canSolve = !!selectedDistributor && selectedBTs.length > 0 && selectedAgentIds.length > 0 && Object.keys(goalState).length > 0
+  const canExecute = !!selectedDistributor && selectedBTs.length > 0 && !!plan?.is_valid && !isExecuting
 
   const sortedAgents = useMemo(
     () => [...agents].sort((a, b) => {
@@ -1154,7 +1323,7 @@ export default function PDDL() {
           <SidebarSection
             icon={Workflow}
             title={t('pddl.selectBT')}
-            count={selectedBT ? '1' : undefined}
+            count={selectedBTs.length > 0 ? String(selectedBTs.length) : undefined}
           >
             {treeList.length === 0 ? (
               <p className="rounded-xl border border-dashed border-border bg-base/40 px-3 py-6 text-center text-xs text-muted">
@@ -1175,8 +1344,7 @@ export default function PDDL() {
                       }`}
                     >
                       <input
-                        type="radio"
-                        name="pddl-selected-task"
+                        type="checkbox"
                         checked={isSelected}
                         onChange={() => handleToggleBT(item.id)}
                         className="h-3.5 w-3.5 shrink-0 border-border text-accent focus:ring-accent/30"
@@ -1201,9 +1369,9 @@ export default function PDDL() {
                 })}
               </div>
             )}
-            {selectedBT && (
+            {selectedBTs.length > 0 && (
               <div className="mt-2 rounded-xl border border-border bg-surface px-3 py-2 text-[11px] text-secondary">
-                Capability {requiredActionTypes.length} · Resource {(selectedTaskPlanning.required_resources || []).length} · Result {(selectedTaskPlanning.result_states || []).length}
+                Capability {requiredActionTypes.length} · Need {(selectedTaskPlanning.preconditions || []).length} · Resource {(selectedTaskPlanning.required_resources || []).length} · Result {(selectedTaskPlanning.result_states || []).length}
               </div>
             )}
           </SidebarSection>
@@ -1232,7 +1400,7 @@ export default function PDDL() {
                   </span>
                 </div>
                 <div className="mt-0.5 flex items-center gap-2 text-[10px] text-secondary">
-                  <span>{selectedBT ? selectedBT.name : `0 ${t('pddl.tasksSelectedShort')}`}</span>
+                  <span>{selectedBTs.length > 0 ? selectedBehaviorTreeLabel : `0 ${t('pddl.tasksSelectedShort')}`}</span>
                   <span>·</span>
                   <span>{selectedAgentIds.length} {t('pddl.agentsSelectedShort')}</span>
                   <span>·</span>
@@ -1550,9 +1718,9 @@ export default function PDDL() {
                   const heldResources = heldResourcesByAgent.get(agent.id) || heldResourcesByAgent.get(agent.name) || []
                   const runtime = agentRuntimeMap[agent.id]
                   const agentStateLabel = resolveRuntimeStateLabel(runtime, agent) || (isOnline ? t('pddl.agentReadyState') : t('pddl.agentOfflineState'))
-                  const currentStepId = resolveRuntimeStepId(selectedBT, runtime)
+                  const currentStepId = resolveRuntimeStepId(singleSelectedBT, runtime)
                   const currentStepName = currentStepId
-                    ? selectedBT?.steps.find(step => step.id === currentStepId)?.job_name || selectedBT?.steps.find(step => step.id === currentStepId)?.name || currentStepId
+                    ? singleSelectedBT?.steps.find(step => step.id === currentStepId)?.job_name || singleSelectedBT?.steps.find(step => step.id === currentStepId)?.name || currentStepId
                     : null
                   return (
                     <button
@@ -1638,13 +1806,16 @@ export default function PDDL() {
                 plan={plan}
                 isLoading={isSolving}
                 taskPlanning={selectedTaskPlanning}
-                taskName={selectedBT?.name}
+                taskPlanningByTaskId={selectedTaskPlanningByTaskId}
+                taskName={selectedBTs.length === 1 ? selectedBTs[0].name : selectedBehaviorTreeLabel}
+                taskNameByTaskId={Object.fromEntries(selectedBTs.map(bt => [bt.id, bt.name]))}
                 requiredActionTypes={requiredActionTypes}
+                requiredActionTypesByTaskId={requiredActionTypesByTaskId}
                 execution={execution}
                 resources={selectedDistributor?.resources || []}
               />
 
-              {selectedBT && runtimeViewAgents.length > 0 && (
+              {singleSelectedBT && runtimeViewAgents.length > 0 && (
                 <div className="mt-4 space-y-3">
                   <div className="flex items-center gap-2 px-1">
                     <Bot size={14} className="text-emerald-400" />
@@ -1659,7 +1830,7 @@ export default function PDDL() {
                   <div className="grid gap-3 xl:grid-cols-2">
                     {runtimeViewAgents.map((entry) => {
                       const activeDispatch = entry.dispatches[0]
-                      const graphMismatch = entry.runtime?.current_graph_id && entry.runtime.current_graph_id !== selectedBT.id
+                      const graphMismatch = entry.runtime?.current_graph_id && entry.runtime.current_graph_id !== singleSelectedBT.id
 
                       return (
                         <div key={entry.agentId} className="rounded-2xl border border-border bg-base/60 p-3">
@@ -1692,7 +1863,7 @@ export default function PDDL() {
                             <div className="rounded-xl border border-border bg-surface px-3 py-2">
                               <div className="text-[10px] uppercase tracking-wider text-muted">Graph</div>
                               <div className="mt-1 truncate text-xs text-primary">
-                                {entry.runtime?.current_graph_id || entry.agent?.current_graph_id || selectedBT.id}
+                                {entry.runtime?.current_graph_id || entry.agent?.current_graph_id || singleSelectedBT.id}
                               </div>
                             </div>
                             <div className="rounded-xl border border-border bg-surface px-3 py-2">
@@ -1713,7 +1884,7 @@ export default function PDDL() {
 
                           <div className="mt-3 h-56 overflow-hidden rounded-2xl border border-border bg-base">
                             <ActionGraphViewer
-                              actionGraph={selectedBT}
+                              actionGraph={singleSelectedBT}
                               currentStepId={entry.currentStepId}
                               className="h-full"
                               compact={true}

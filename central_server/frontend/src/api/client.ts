@@ -756,6 +756,7 @@ export const pddlApi = {
   createProblem: async (req: {
     name: string
     behavior_tree_id: string
+    behavior_tree_ids?: string[]
     task_distributor_id?: string
     initial_state?: Record<string, string>
     goal_state: Record<string, string>
@@ -794,6 +795,7 @@ export const pddlApi = {
 
   preview: async (req: {
     behavior_tree_id: string
+    behavior_tree_ids?: string[]
     task_distributor_id?: string
     initial_state?: Record<string, string>
     goal_state: Record<string, string>

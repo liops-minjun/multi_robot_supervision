@@ -4,9 +4,6 @@ import type {
   GraphState,
   ParameterFieldSource,
   DuringStateTarget,
-  PlanningCondition,
-  PlanningEffect,
-  PlanningTaskSpec,
   TaskDistributorState,
   TaskDistributorResource,
 } from '../../../types'
@@ -41,18 +38,9 @@ export interface StateActionNodeData {
   // PDDL Planning fields
   resourceAcquire?: string[]
   resourceRelease?: string[]
-  planningPreconditions?: PlanningCondition[]
-  planningEffects?: PlanningEffect[]
-  planningDuring?: PlanningEffect[]
-  hasPlanningStates?: boolean  // True if parent BT has planning_states defined
   taskDistributorId?: string
   taskDistributorStates?: TaskDistributorState[]
   taskDistributorResources?: TaskDistributorResource[]
-  planningTask?: PlanningTaskSpec
-  taskTemplateName?: string
-  onTaskPlanningDuringChange?: (variable: string, value?: string) => void
-  onTaskPlanningResultUpsert?: (effect: PlanningEffect) => void
-  onTaskPlanningResultDelete?: (variable: string) => void
 }
 
 export type NormalizedDuringStateTarget = {

@@ -771,7 +771,17 @@ func planningTaskRequestToJSON(task *PlanningTaskResponse) []byte {
 	}
 
 	spec := db.PlanningTaskSpec{
+		Preconditions:     make([]db.PlanningCondition, 0, len(task.Preconditions)),
 		RequiredResources: append([]string{}, task.RequiredResources...),
+	}
+	if len(task.Preconditions) > 0 {
+		for _, cond := range task.Preconditions {
+			spec.Preconditions = append(spec.Preconditions, db.PlanningCondition{
+				Variable: cond.Variable,
+				Operator: cond.Operator,
+				Value:    cond.Value,
+			})
+		}
 	}
 	if len(task.DuringState) > 0 {
 		spec.DuringState = make([]db.PlanningEffect, 0, len(task.DuringState))
@@ -807,7 +817,17 @@ func planningTaskJSONToResponse(raw []byte) *PlanningTaskResponse {
 	}
 
 	response := &PlanningTaskResponse{
+		Preconditions:     make([]PlanningConditionResponse, 0, len(spec.Preconditions)),
 		RequiredResources: append([]string{}, spec.RequiredResources...),
+	}
+	if len(spec.Preconditions) > 0 {
+		for _, cond := range spec.Preconditions {
+			response.Preconditions = append(response.Preconditions, PlanningConditionResponse{
+				Variable: cond.Variable,
+				Operator: cond.Operator,
+				Value:    cond.Value,
+			})
+		}
 	}
 	if len(spec.DuringState) > 0 {
 		response.DuringState = make([]PlanningEffectResponse, 0, len(spec.DuringState))

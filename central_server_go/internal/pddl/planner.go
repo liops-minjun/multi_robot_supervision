@@ -59,6 +59,9 @@ func Solve(problem *PlanProblem) *Plan {
 			if used[task.TaskID] {
 				continue
 			}
+			if !preconditionsMet(currentState, task.Preconditions) {
+				continue
+			}
 			score := taskGoalProgress(task, currentState, problem.GoalState)
 			if score > bestScore {
 				bestScore = score
@@ -343,10 +346,62 @@ func findFreeTypeInstance(typeID string, heldInstances map[string]int, currentOr
 }
 
 // Legacy compatibility for helper reuse.
-func relaxedPreconditionsMet(_ map[string]map[string]bool, _ []db.PlanningCondition) bool {
+func relaxedPreconditionsMet(reachable map[string]map[string]bool, conds []db.PlanningCondition) bool {
+	for _, cond := range conds {
+		if cond.Variable == "" {
+			continue
+		}
+		values := reachable[cond.Variable]
+		if len(values) == 0 {
+			return false
+		}
+
+		op := cond.Operator
+		if op == "" {
+			op = "=="
+		}
+
+		switch op {
+		case "==":
+			if !values[cond.Value] {
+				return false
+			}
+		case "!=":
+			if len(values) == 1 && values[cond.Value] {
+				return false
+			}
+		default:
+			if !values[cond.Value] {
+				return false
+			}
+		}
+	}
 	return true
 }
 
-func preconditionsMet(_ map[string]string, _ []db.PlanningCondition) bool {
+func preconditionsMet(current map[string]string, conds []db.PlanningCondition) bool {
+	for _, cond := range conds {
+		if cond.Variable == "" {
+			continue
+		}
+		op := cond.Operator
+		if op == "" {
+			op = "=="
+		}
+
+		currentValue := current[cond.Variable]
+		switch op {
+		case "!=":
+			if currentValue == cond.Value {
+				return false
+			}
+		case "==":
+			fallthrough
+		default:
+			if currentValue != cond.Value {
+				return false
+			}
+		}
+	}
 	return true
 }

@@ -247,6 +247,7 @@ export interface PlanningEffect {
 }
 
 export interface PlanningTaskSpec {
+  preconditions?: PlanningCondition[]
   required_resources?: string[]
   during_state?: PlanningEffect[]
   result_states?: PlanningEffect[]
@@ -1389,6 +1390,7 @@ export interface PlanningProblem {
   id: string
   name: string
   behavior_tree_id: string
+  behavior_tree_ids?: string[]
   task_distributor_id?: string
   initial_state?: Record<string, string>
   goal_state: Record<string, string>
@@ -1444,6 +1446,7 @@ export interface ResourceAllocation {
 export interface PlanExecutionStep {
   task_id: string
   task_name?: string
+  behavior_tree_id?: string
   runtime_task_id?: string
   step_id: string
   step_name: string
@@ -1460,6 +1463,7 @@ export interface PlanExecution {
   id: string
   problem_id: string
   behavior_tree_id: string
+  behavior_tree_ids?: string[]
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | string
   current_order: number
   total_orders: number

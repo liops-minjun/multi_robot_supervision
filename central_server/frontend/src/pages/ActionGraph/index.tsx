@@ -86,6 +86,7 @@ const DEFAULT_STATE_COLORS: Record<string, StateColorType> = {
 }
 
 const emptyPlanningTask = (): PlanningTaskSpec => ({
+  preconditions: [],
   required_resources: [],
   during_state: [],
   result_states: [],
@@ -110,59 +111,35 @@ function formatPlanningResourceToken(token: string, resources: TaskDistributorRe
   return token
 }
 
-type TaskResourceFlowSummary = {
-  token: string
-  acquireSteps: string[]
-  releaseSteps: string[]
-  holdUntilTaskEnd: boolean
+function buildPlanningResourceTokenSet(resources: TaskDistributorResource[]): Set<string> {
+  return new Set(resources.map(resource => `${resource.kind === 'type' ? 'type' : 'instance'}:${resource.id}`))
 }
 
-function collectTaskResourceFlow(nodes: Node[]): TaskResourceFlowSummary[] {
-  const summary = new Map<string, { acquireSteps: Set<string>; releaseSteps: Set<string> }>()
+function filterPlanningTaskForDistributor(
+  spec: PlanningTaskSpec,
+  states: TaskDistributorState[],
+  resources: TaskDistributorResource[]
+): PlanningTaskSpec {
+  const validStateNames = new Set(states.map(state => state.name))
+  const validResourceTokens = buildPlanningResourceTokenSet(resources)
 
-  const ensureEntry = (token: string) => {
-    const normalized = token.trim()
-    if (!normalized) return null
-    if (!summary.has(normalized)) {
-      summary.set(normalized, {
-        acquireSteps: new Set<string>(),
-        releaseSteps: new Set<string>(),
-      })
-    }
-    return summary.get(normalized) || null
+  return {
+    preconditions: (spec.preconditions || [])
+      .filter(condition => validStateNames.has(condition.variable))
+      .map(condition => ({
+        variable: condition.variable,
+        operator: condition.operator || '==',
+        value: condition.value,
+      })),
+    required_resources: (spec.required_resources || []).filter(token =>
+      validResourceTokens.size === 0 ? false : validResourceTokens.has(token)
+    ),
+    during_state: (spec.during_state || [])
+      .filter(effect => validStateNames.has(effect.variable))
+      .slice(0, 1),
+    result_states: (spec.result_states || [])
+      .filter(effect => validStateNames.has(effect.variable)),
   }
-
-  for (const node of nodes) {
-    if (node.type !== 'action') continue
-    const nodeData = node.data as {
-      jobName?: string
-      label?: string
-      resourceAcquire?: string[]
-      resourceRelease?: string[]
-    }
-    const stepName = nodeData.jobName?.trim() || nodeData.label?.trim() || node.id
-
-    for (const token of nodeData.resourceAcquire || []) {
-      const entry = ensureEntry(token)
-      if (!entry) continue
-      entry.acquireSteps.add(stepName)
-    }
-
-    for (const token of nodeData.resourceRelease || []) {
-      const entry = ensureEntry(token)
-      if (!entry) continue
-      entry.releaseSteps.add(stepName)
-    }
-  }
-
-  return Array.from(summary.entries())
-    .map(([token, value]) => ({
-      token,
-      acquireSteps: Array.from(value.acquireSteps).sort(),
-      releaseSteps: Array.from(value.releaseSteps).sort(),
-      holdUntilTaskEnd: value.acquireSteps.size > value.releaseSteps.size,
-    }))
-    .sort((left, right) => left.token.localeCompare(right.token))
 }
 
 const OUTCOME_EDGE_COLORS: Record<ActionOutcome, string> = {
@@ -522,6 +499,7 @@ function ActionGraphEditor() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showAssignModal, setShowAssignModal] = useState(false)
   const [showAddStateModal, setShowAddStateModal] = useState(false)
+  const [showTaskPddlConfigModal, setShowTaskPddlConfigModal] = useState(false)
 
   const [expandedCategories, setExpandedCategories] = useState<string[]>([
     'Discovered Actions',
@@ -796,10 +774,15 @@ function ActionGraphEditor() {
   })
   const tdStates: TaskDistributorState[] = taskDistributorFull?.states || []
   const tdResources: TaskDistributorResource[] = taskDistributorFull?.resources || []
-  const [planningResultVariable, setPlanningResultVariable] = useState('')
-  const [planningResultValue, setPlanningResultValue] = useState('')
 
   const normalizePlanningTask = useCallback((spec?: PlanningTaskSpec): PlanningTaskSpec => {
+    const normalizedPreconditions = (spec?.preconditions || [])
+      .filter(condition => condition.variable)
+      .map(condition => ({
+        variable: condition.variable,
+        operator: condition.operator || '==',
+        value: condition.value,
+      }))
     const normalizedDuring = (spec?.during_state || [])
       .filter(effect => effect.variable)
       .slice(0, 1)
@@ -808,38 +791,12 @@ function ActionGraphEditor() {
       .filter(effect => effect.variable)
       .map(effect => ({ variable: effect.variable, value: effect.value }))
     return {
+      preconditions: normalizedPreconditions,
       required_resources: Array.from(new Set((spec?.required_resources || []).filter(Boolean))),
       during_state: normalizedDuring,
       result_states: normalizedResults,
     }
   }, [])
-
-  // Handle task distributor change
-  const handleTaskDistributorChange = useCallback(async (tdId: string) => {
-    if (!selectedTemplateId) return
-    const normalizedTdId = tdId || undefined
-    const queryKey = ['template', selectedTemplateId]
-    const previousTemplate = queryClient.getQueryData<ActionGraph>(queryKey)
-    try {
-      if (previousTemplate) {
-        queryClient.setQueryData<ActionGraph>(queryKey, {
-          ...previousTemplate,
-          task_distributor_id: normalizedTdId,
-        })
-      }
-      await templateApi.update(selectedTemplateId, { task_distributor_id: normalizedTdId } as Partial<ActionGraph>, sessionId)
-      queryClient.invalidateQueries({ queryKey })
-      queryClient.invalidateQueries({ queryKey: ['templates-all'] })
-      if (tdId) {
-        queryClient.invalidateQueries({ queryKey: ['task-distributor-full', tdId] })
-      }
-    } catch (err) {
-      if (previousTemplate) {
-        queryClient.setQueryData<ActionGraph>(queryKey, previousTemplate)
-      }
-      console.error('Failed to update task distributor:', err)
-    }
-  }, [selectedTemplateId, sessionId, queryClient])
 
   // Fetch assignments for selected template
   const { data: templateAssignments = [] } = useQuery({
@@ -1350,141 +1307,15 @@ function ActionGraphEditor() {
            currentState.edges !== lastSavedStateRef.current.edges
   }, [nodes, edges])
 
-  const taskResourceFlow = useMemo(
-    () => collectTaskResourceFlow(nodes),
-    [nodes]
-  )
-  const derivedPlanningResourceTokens = useMemo(
-    () => taskResourceFlow
-      .filter(flow => flow.acquireSteps.length > 0)
-      .map(flow => flow.token),
-    [taskResourceFlow]
-  )
-  const syncPlanningTaskWithNodeResources = useCallback((spec?: PlanningTaskSpec): PlanningTaskSpec => (
-    normalizePlanningTask({
-      ...(spec || emptyPlanningTask()),
-      required_resources: derivedPlanningResourceTokens,
-    })
-  ), [derivedPlanningResourceTokens, normalizePlanningTask])
   const planningTask = useMemo(
-    () => syncPlanningTaskWithNodeResources(selectedTemplate?.planning_task || emptyPlanningTask()),
-    [selectedTemplate?.planning_task, syncPlanningTaskWithNodeResources]
+    () => normalizePlanningTask(selectedTemplate?.planning_task || emptyPlanningTask()),
+    [normalizePlanningTask, selectedTemplate?.planning_task]
   )
-  const activePlanningDuring = planningTask.during_state?.[0] || null
-
-  const updatePlanningTask = useCallback(async (updater: (current: PlanningTaskSpec) => PlanningTaskSpec) => {
-    if (!selectedTemplateId) return
-
-    const queryKey = ['template', selectedTemplateId]
-    const previousTemplate = queryClient.getQueryData<ActionGraph>(queryKey)
-    const currentTask = syncPlanningTaskWithNodeResources(previousTemplate?.planning_task || emptyPlanningTask())
-    const nextTask = syncPlanningTaskWithNodeResources(updater(currentTask))
-
-    try {
-      if (previousTemplate) {
-        queryClient.setQueryData<ActionGraph>(queryKey, {
-          ...previousTemplate,
-          planning_task: nextTask,
-        })
-      }
-      await templateApi.update(selectedTemplateId, { planning_task: nextTask } as Partial<ActionGraph>, sessionId)
-      queryClient.invalidateQueries({ queryKey })
-      queryClient.invalidateQueries({ queryKey: ['templates-all'] })
-    } catch (error) {
-      if (previousTemplate) {
-        queryClient.setQueryData<ActionGraph>(queryKey, previousTemplate)
-      }
-      console.error('Failed to update task planning metadata:', error)
-    }
-  }, [queryClient, selectedTemplateId, sessionId, syncPlanningTaskWithNodeResources])
-
-  const handlePlanningDuringChange = useCallback((variable: string, value?: string) => {
-    void updatePlanningTask((current) => {
-      if (!variable) {
-        return { ...current, during_state: [] }
-      }
-      const stateVar = tdStates.find(item => item.name === variable)
-      return {
-        ...current,
-        during_state: [{
-          variable,
-          value: value ?? (current.during_state?.[0]?.variable === variable
-            ? current.during_state?.[0]?.value || getStateDefaultValue(stateVar)
-            : getStateDefaultValue(stateVar)),
-        }],
-      }
-    })
-  }, [tdStates, updatePlanningTask])
-
-  const handleUpsertPlanningResult = useCallback((effect: PlanningEffect) => {
-    if (!effect.variable) return
-    const stateVar = tdStates.find(item => item.name === effect.variable)
-    const fallbackValue = getStateDefaultValue(stateVar)
-    const nextEffect: PlanningEffect = {
-      variable: effect.variable,
-      value: effect.value || fallbackValue,
-    }
-    void updatePlanningTask((current) => ({
-      ...current,
-      result_states: [
-        ...(current.result_states || []).filter(item => item.variable !== nextEffect.variable),
-        nextEffect,
-      ],
-    }))
-  }, [tdStates, updatePlanningTask])
-
-  const handleAddPlanningResult = useCallback(() => {
-    if (!planningResultVariable) return
-    handleUpsertPlanningResult({
-      variable: planningResultVariable,
-      value: planningResultValue,
-    })
-    setPlanningResultVariable('')
-    setPlanningResultValue('')
-  }, [handleUpsertPlanningResult, planningResultValue, planningResultVariable])
-
-  const handleDeletePlanningResult = useCallback((variable: string) => {
-    void updatePlanningTask((current) => ({
-      ...current,
-      result_states: (current.result_states || []).filter(effect => effect.variable !== variable),
-    }))
-  }, [updatePlanningTask])
 
   // Track last applied states to prevent infinite loops
   const lastAppliedStatesRef = useRef<string>('')
   const lastAppliedAgentsRef = useRef<Array<{ id: string; name: string }>>([])
   const lastAppliedTDRef = useRef<string>('')
-  const lastAppliedPlanningTaskRef = useRef<string>('')
-
-  useEffect(() => {
-    const planningKey = JSON.stringify({
-      taskTemplateName: selectedTemplate?.name || '',
-      planningTask,
-    })
-    if (planningKey !== lastAppliedPlanningTaskRef.current) {
-      lastAppliedPlanningTaskRef.current = planningKey
-      setNodes((nds) =>
-        nds.map((node) => ({
-          ...node,
-          data: {
-            ...node.data,
-            planningTask,
-            taskTemplateName: selectedTemplate?.name || '',
-            onTaskPlanningDuringChange: handlePlanningDuringChange,
-            onTaskPlanningResultUpsert: handleUpsertPlanningResult,
-            onTaskPlanningResultDelete: handleDeletePlanningResult,
-          },
-        }))
-      )
-    }
-  }, [
-    handleDeletePlanningResult,
-    handlePlanningDuringChange,
-    handleUpsertPlanningResult,
-    planningTask,
-    selectedTemplate?.name,
-    setNodes,
-  ])
 
   // Clear validation errors when template changes
   useEffect(() => {
@@ -1540,11 +1371,6 @@ function ActionGraphEditor() {
             taskDistributorId,
             taskDistributorStates: tdStates,
             taskDistributorResources: tdResources,
-            planningTask,
-            taskTemplateName: selectedTemplate?.name || '',
-            onTaskPlanningDuringChange: handlePlanningDuringChange,
-            onTaskPlanningResultUpsert: handleUpsertPlanningResult,
-            onTaskPlanningResultDelete: handleDeletePlanningResult,
             resourceAcquire: filterResourceTokens(node.data.resourceAcquire),
             resourceRelease: filterResourceTokens(node.data.resourceRelease),
           },
@@ -1552,11 +1378,6 @@ function ActionGraphEditor() {
       )
     }
   }, [
-    handleDeletePlanningResult,
-    handlePlanningDuringChange,
-    handleUpsertPlanningResult,
-    planningTask,
-    selectedTemplate?.name,
     tdStates,
     tdResources,
     taskDistributorId,
@@ -2193,13 +2014,9 @@ function ActionGraphEditor() {
           jobName: defaultJobName,
           endStates: defaultEndStates,
           // Task Distributor data
+          taskDistributorId,
           taskDistributorStates: tdStates,
           taskDistributorResources: tdResources,
-          planningTask,
-          taskTemplateName: selectedTemplate?.name || '',
-          onTaskPlanningDuringChange: handlePlanningDuringChange,
-          onTaskPlanningResultUpsert: handleUpsertPlanningResult,
-          onTaskPlanningResultDelete: handleDeletePlanningResult,
           resourceAcquire: [],
           resourceRelease: [],
           isEditing,
@@ -2217,14 +2034,10 @@ function ActionGraphEditor() {
     [
       availableAgents,
       availableStates,
-      handleDeletePlanningResult,
-      handlePlanningDuringChange,
-      handleUpsertPlanningResult,
       isEditing,
-      planningTask,
       screenToFlowPosition,
-      selectedTemplate?.name,
       setNodes,
+      taskDistributorId,
       tdResources,
       tdStates,
     ]
@@ -2435,238 +2248,78 @@ function ActionGraphEditor() {
       {/* Middle: Node Palette (when task loaded) */}
       {selectedTemplate && (
         <div className="w-56 bg-surface border-r border-primary flex flex-col">
-          {/* PDDL Task Distributor Selection */}
+          {/* PDDL Config */}
           <div className="px-3 py-2 border-b border-primary">
-            <div className="flex items-center gap-1.5 mb-1.5">
-              <FileCode size={12} className="text-violet-400" />
-              <span className="text-[10px] font-semibold text-violet-400 uppercase tracking-wider">PDDL Task Distributor</span>
-            </div>
-            <select
-              value={taskDistributorId || ''}
-              onChange={(e) => handleTaskDistributorChange(e.target.value)}
-              className="w-full px-2 py-1.5 bg-elevated border border-primary rounded-lg text-xs text-primary focus:outline-none focus:border-violet-500 cursor-pointer"
+            <button
+              onClick={() => setShowTaskPddlConfigModal(true)}
+              className="w-full rounded-lg border border-violet-500/40 bg-gradient-to-r from-violet-600/20 to-violet-500/10 px-3 py-2 text-left transition-all hover:border-violet-400/70 hover:from-violet-600/30 hover:to-violet-500/20"
             >
-              <option value="">TD 선택 안함</option>
-              {taskDistributors.map((td) => (
-                <option key={td.id} value={td.id}>{td.name}</option>
-              ))}
-            </select>
-            {taskDistributorId && taskDistributorFull ? (
-              <div className="mt-1.5 flex items-center gap-2 text-[10px] text-muted">
-                <span className="px-1.5 py-0.5 bg-violet-500/10 text-violet-400 rounded">States: {tdStates.length}</span>
-                <span className="px-1.5 py-0.5 bg-violet-500/10 text-violet-400 rounded">Resources: {tdResources.length}</span>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <FileCode size={14} className="text-violet-300" />
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase tracking-wider text-violet-300">PDDL Config</div>
+                    <div className="text-[10px] text-violet-200/80">Task 단위 planning 설정</div>
+                  </div>
+                </div>
+                <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[9px] text-violet-200">열기</span>
               </div>
-            ) : !taskDistributorId ? (
-              <div className="mt-1.5 flex items-center gap-1 text-[10px] text-yellow-400">
-                <AlertCircle size={10} />
-                <span>TD를 선택해야 PDDL 설정 가능</span>
-              </div>
-            ) : null}
-          </div>
+            </button>
 
-          <div className="px-3 py-3 border-b border-primary space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5">
-                <Zap size={12} className="text-amber-400" />
-                <span className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider">Current Task Planning</span>
-              </div>
-              {selectedTemplate?.name && (
-                <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[9px] text-amber-200">
-                  {selectedTemplate.name}
-                </span>
-              )}
-            </div>
-
-            {!taskDistributorId ? (
-              <div className="rounded-lg border border-dashed border-border bg-base/40 px-3 py-3 text-[10px] leading-5 text-muted">
-                이 패널이 현재 선택된 Task 전체에 저장되는 planning 설정입니다. Task Distributor를 연결해야 state / result / resource 요구사항을 설정할 수 있습니다.
-              </div>
-            ) : (
-              <>
-                <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 p-2">
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="text-[10px] font-medium text-violet-300">State</span>
-                    {activePlanningDuring && (
-                      <button
-                        onClick={() => handlePlanningDuringChange('')}
-                        className="text-[9px] text-muted hover:text-red-400"
-                      >
-                        clear
-                      </button>
+            <div className="mt-2 space-y-1.5 text-[10px]">
+              {taskDistributorId && taskDistributorFull ? (
+                <>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-violet-300">
+                      TD: {taskDistributorFull.name}
+                    </span>
+                    <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-violet-300">
+                      States {tdStates.length}
+                    </span>
+                    <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-violet-300">
+                      Resources {tdResources.length}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {(planningTask.preconditions || []).slice(0, 2).map((condition) => (
+                      <span key={condition.variable} className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[9px] text-emerald-200">
+                        Need: {condition.variable}{condition.operator || '=='}{condition.value}
+                      </span>
+                    ))}
+                    {(planningTask.preconditions || []).length > 2 && (
+                      <span className="rounded bg-surface px-1.5 py-0.5 text-[9px] text-secondary">
+                        +{(planningTask.preconditions || []).length - 2} more need
+                      </span>
+                    )}
+                    {(planningTask.result_states || []).slice(0, 2).map((effect) => (
+                      <span key={effect.variable} className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[9px] text-amber-200">
+                        Result: {effect.variable}={effect.value}
+                      </span>
+                    ))}
+                    {(planningTask.result_states || []).length > 2 && (
+                      <span className="rounded bg-surface px-1.5 py-0.5 text-[9px] text-secondary">
+                        +{(planningTask.result_states || []).length - 2} more
+                      </span>
+                    )}
+                    {(planningTask.required_resources || []).slice(0, 2).map((token) => (
+                      <span key={token} className="rounded bg-sky-500/10 px-1.5 py-0.5 text-[9px] text-sky-200">
+                        Resource: {formatPlanningResourceToken(token, tdResources)}
+                      </span>
+                    ))}
+                    {(planningTask.required_resources || []).length > 2 && (
+                      <span className="rounded bg-surface px-1.5 py-0.5 text-[9px] text-secondary">
+                        +{(planningTask.required_resources || []).length - 2} more resource
+                      </span>
                     )}
                   </div>
-
-                  {tdStates.length === 0 ? (
-                    <p className="text-[10px] text-muted italic">사용 가능한 state가 없습니다</p>
-                  ) : (
-                    <div className="space-y-2">
-                      <div>
-                        <div className="mb-1 text-[9px] font-medium text-violet-200">During State</div>
-                        <div className="flex items-center gap-1">
-                          <select
-                            className="flex-1 rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none"
-                            value={activePlanningDuring?.variable || ''}
-                            onChange={(e) => handlePlanningDuringChange(e.target.value)}
-                          >
-                            <option value="">state 선택</option>
-                            {tdStates.map((stateVar) => (
-                              <option key={stateVar.id} value={stateVar.name}>{stateVar.name}</option>
-                            ))}
-                          </select>
-                          <span className="text-[10px] text-secondary">=</span>
-                          {(() => {
-                            const currentVar = tdStates.find(item => item.name === activePlanningDuring?.variable)
-                            if (currentVar?.type === 'bool') {
-                              return (
-                                <select
-                                  className="w-20 rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none"
-                                  value={activePlanningDuring?.value || 'true'}
-                                  onChange={(e) => handlePlanningDuringChange(activePlanningDuring?.variable || '', e.target.value)}
-                                  disabled={!activePlanningDuring?.variable}
-                                >
-                                  <option value="true">true</option>
-                                  <option value="false">false</option>
-                                </select>
-                              )
-                            }
-                            return (
-                              <input
-                                type={currentVar?.type === 'int' ? 'number' : 'text'}
-                                className="w-24 rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none disabled:opacity-40"
-                                value={activePlanningDuring?.value || ''}
-                                onChange={(e) => handlePlanningDuringChange(activePlanningDuring?.variable || '', e.target.value)}
-                                disabled={!activePlanningDuring?.variable}
-                              />
-                            )
-                          })()}
-                        </div>
-                      </div>
-
-                      <div>
-                        <div className="mb-1 text-[9px] font-medium text-violet-200">Result States</div>
-                        <div className="flex gap-1">
-                          <select
-                            className="flex-1 rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none"
-                            value={planningResultVariable}
-                            onChange={(e) => {
-                              const variable = e.target.value
-                              setPlanningResultVariable(variable)
-                              const stateVar = tdStates.find(item => item.name === variable)
-                              setPlanningResultValue(getStateDefaultValue(stateVar))
-                            }}
-                          >
-                            <option value="">state 선택</option>
-                            {tdStates.map((stateVar) => (
-                              <option key={stateVar.id} value={stateVar.name}>{stateVar.name}</option>
-                            ))}
-                          </select>
-                          {(() => {
-                            const currentVar = tdStates.find(item => item.name === planningResultVariable)
-                            if (currentVar?.type === 'bool') {
-                              return (
-                                <select
-                                  className="w-20 rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none"
-                                  value={planningResultValue || 'true'}
-                                  onChange={(e) => setPlanningResultValue(e.target.value)}
-                                  disabled={!planningResultVariable}
-                                >
-                                  <option value="true">true</option>
-                                  <option value="false">false</option>
-                                </select>
-                              )
-                            }
-                            return (
-                              <input
-                                type={currentVar?.type === 'int' ? 'number' : 'text'}
-                                className="w-24 rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none disabled:opacity-40"
-                                value={planningResultValue}
-                                onChange={(e) => setPlanningResultValue(e.target.value)}
-                                disabled={!planningResultVariable}
-                              />
-                            )
-                          })()}
-                          <button
-                            onClick={handleAddPlanningResult}
-                            disabled={!planningResultVariable}
-                            className="rounded bg-violet-500/20 px-2 text-violet-300 disabled:opacity-40"
-                          >
-                            <Plus size={12} />
-                          </button>
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {(planningTask.result_states || []).length === 0 ? (
-                            <span className="text-[9px] text-muted">결과 상태 없음</span>
-                          ) : (planningTask.result_states || []).map((effect) => (
-                            <span
-                              key={effect.variable}
-                              className="inline-flex items-center gap-1 rounded-full bg-violet-500/10 px-2 py-0.5 text-[9px] text-violet-200"
-                            >
-                              {effect.variable} = {effect.value}
-                              <button onClick={() => handleDeletePlanningResult(effect.variable)}>
-                                <X size={9} />
-                              </button>
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                </>
+              ) : (
+                <div className="flex items-center gap-1 text-yellow-400">
+                  <AlertCircle size={10} />
+                  <span>Task Distributor를 연결한 뒤 PDDL Config에서 필요한 상태 / 결과 상태 / resource를 설정하세요.</span>
                 </div>
-
-                <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-2">
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="text-[10px] font-medium text-amber-300">Resources</span>
-                    <span className="text-[9px] text-secondary">Action Node Runtime Sync</span>
-                  </div>
-
-                  {tdResources.length === 0 ? (
-                    <p className="text-[10px] text-muted italic">사용 가능한 resource가 없습니다</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {taskResourceFlow.length === 0 ? (
-                        <p className="text-[10px] text-muted">
-                          각 Action Node에서 acquire / release resource를 지정하면 여기서 task 요구사항으로 자동 집계됩니다.
-                        </p>
-                      ) : taskResourceFlow.map((flow) => (
-                        <div key={flow.token} className="rounded border border-amber-500/20 bg-base/50 p-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[10px] font-medium text-amber-200">
-                              {formatPlanningResourceToken(flow.token, tdResources)}
-                            </span>
-                            <span className={`rounded-full px-1.5 py-0.5 text-[8px] ${
-                              flow.holdUntilTaskEnd
-                                ? 'bg-rose-500/10 text-rose-300'
-                                : 'bg-emerald-500/10 text-emerald-300'
-                            }`}>
-                              {flow.holdUntilTaskEnd ? 'task end hold' : 'released in-step'}
-                            </span>
-                          </div>
-                          <div className="mt-1 flex flex-wrap gap-1">
-                            <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[8px] text-amber-200">
-                              acquire {flow.acquireSteps.length}
-                            </span>
-                            <span className="rounded-full bg-surface px-1.5 py-0.5 text-[8px] text-secondary">
-                              release {flow.releaseSteps.length}
-                            </span>
-                          </div>
-                          <div className="mt-1 text-[9px] text-secondary">
-                            Acquire: {flow.acquireSteps.join(', ')}
-                          </div>
-                          {flow.releaseSteps.length > 0 && (
-                            <div className="mt-1 text-[9px] text-secondary">
-                              Release: {flow.releaseSteps.join(', ')}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                      <div className="rounded border border-amber-500/15 bg-amber-500/5 px-2 py-1.5 text-[9px] text-secondary">
-                        현재 선택된 Task의 planner required_resources는 Action Node의 runtime acquire 집합에서 자동 동기화됩니다.
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
+              )}
+            </div>
           </div>
 
           {/* States Management */}
@@ -3434,6 +3087,16 @@ function ActionGraphEditor() {
           }}
         />
       )}
+
+      {/* Task PDDL Config Modal */}
+      {showTaskPddlConfigModal && selectedTemplate && (
+        <TaskPddlConfigModal
+          template={selectedTemplate}
+          taskDistributors={taskDistributors}
+          sessionId={sessionId}
+          onClose={() => setShowTaskPddlConfigModal(false)}
+        />
+      )}
     </div>
   )
 }
@@ -3556,8 +3219,6 @@ function convertActionGraphToGraph(
         jobName: step.job_name || (isTerminal ? '' : getDefaultJobNameTemplate(normalizedServer || step.action?.server, step.name || step.id)),
         resourceAcquire: Array.from(new Set(step.resource_acquire || [])),
         resourceRelease: Array.from(new Set(step.resource_release || [])),
-        planningTask: actionGraph.planning_task,
-        taskTemplateName: actionGraph.name || '',
         finalState: isTerminal ? (step.terminal_type === 'success' ? defaultState : errorState) : undefined,
         availableStates,
         availableAgents,
@@ -3661,6 +3322,535 @@ function convertActionGraphToGraph(
   }
 
   return { initialNodes: nodes, initialEdges: edges }
+}
+
+function TaskPddlConfigModal({
+  template,
+  taskDistributors,
+  sessionId,
+  onClose,
+}: {
+  template: ActionGraph
+  taskDistributors: Omit<TaskDistributor, 'states' | 'resources'>[]
+  sessionId?: string
+  onClose: () => void
+}) {
+  const queryClient = useQueryClient()
+  const [selectedDistributorId, setSelectedDistributorId] = useState(template.task_distributor_id || '')
+  const [localPlanningTask, setLocalPlanningTask] = useState<PlanningTaskSpec>(() => ({
+    ...emptyPlanningTask(),
+    ...(template.planning_task || {}),
+  }))
+  const [pendingPreconditionVariable, setPendingPreconditionVariable] = useState('')
+  const [pendingPreconditionOperator, setPendingPreconditionOperator] = useState<'==' | '!='>('==')
+  const [pendingPreconditionValue, setPendingPreconditionValue] = useState('')
+  const [pendingResultVariable, setPendingResultVariable] = useState('')
+  const [pendingResultValue, setPendingResultValue] = useState('')
+  const [pendingResourceToken, setPendingResourceToken] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
+
+  const { data: selectedDistributorFull, isLoading: isDistributorLoading } = useQuery({
+    queryKey: ['task-distributor-full', selectedDistributorId],
+    queryFn: () => taskDistributorApi.getFull(selectedDistributorId),
+    enabled: !!selectedDistributorId,
+  })
+
+  const distributorStates = selectedDistributorFull?.states || []
+  const distributorResources = selectedDistributorFull?.resources || []
+
+  useEffect(() => {
+    if (!selectedDistributorId) {
+      setLocalPlanningTask(emptyPlanningTask())
+      setPendingPreconditionVariable('')
+      setPendingPreconditionOperator('==')
+      setPendingPreconditionValue('')
+      setPendingResultVariable('')
+      setPendingResultValue('')
+      setPendingResourceToken('')
+      return
+    }
+    if (!selectedDistributorFull) return
+
+    setLocalPlanningTask((current) => {
+      const nextTask = filterPlanningTaskForDistributor(
+        current,
+        distributorStates,
+        distributorResources
+      )
+      return JSON.stringify(nextTask) === JSON.stringify(current) ? current : nextTask
+    })
+  }, [distributorResources, distributorStates, selectedDistributorFull, selectedDistributorId])
+
+  const handleAddPrecondition = useCallback(() => {
+    if (!pendingPreconditionVariable) return
+    const stateVar = distributorStates.find(item => item.name === pendingPreconditionVariable)
+    const nextCondition = {
+      variable: pendingPreconditionVariable,
+      operator: pendingPreconditionOperator,
+      value: pendingPreconditionValue || getStateDefaultValue(stateVar),
+    }
+    setLocalPlanningTask((current) => ({
+      ...current,
+      preconditions: [
+        ...(current.preconditions || []).filter(condition => condition.variable !== nextCondition.variable),
+        nextCondition,
+      ],
+    }))
+    setPendingPreconditionVariable('')
+    setPendingPreconditionOperator('==')
+    setPendingPreconditionValue('')
+  }, [distributorStates, pendingPreconditionOperator, pendingPreconditionValue, pendingPreconditionVariable])
+
+  const handleDeletePrecondition = useCallback((variable: string) => {
+    setLocalPlanningTask((current) => ({
+      ...current,
+      preconditions: (current.preconditions || []).filter(condition => condition.variable !== variable),
+    }))
+  }, [])
+
+  const handleAddResultState = useCallback(() => {
+    if (!pendingResultVariable) return
+    const stateVar = distributorStates.find(item => item.name === pendingResultVariable)
+    const nextEffect: PlanningEffect = {
+      variable: pendingResultVariable,
+      value: pendingResultValue || getStateDefaultValue(stateVar),
+    }
+    setLocalPlanningTask((current) => ({
+      ...current,
+      result_states: [
+        ...(current.result_states || []).filter(effect => effect.variable !== nextEffect.variable),
+        nextEffect,
+      ],
+    }))
+    setPendingResultVariable('')
+    setPendingResultValue('')
+  }, [distributorStates, pendingResultValue, pendingResultVariable])
+
+  const handleDeleteResultState = useCallback((variable: string) => {
+    setLocalPlanningTask((current) => ({
+      ...current,
+      result_states: (current.result_states || []).filter(effect => effect.variable !== variable),
+    }))
+  }, [])
+
+  const handleAddRequiredResource = useCallback(() => {
+    if (!pendingResourceToken) return
+    setLocalPlanningTask((current) => ({
+      ...current,
+      required_resources: Array.from(new Set([...(current.required_resources || []), pendingResourceToken])),
+    }))
+    setPendingResourceToken('')
+  }, [pendingResourceToken])
+
+  const handleDeleteRequiredResource = useCallback((token: string) => {
+    setLocalPlanningTask((current) => ({
+      ...current,
+      required_resources: (current.required_resources || []).filter(value => value !== token),
+    }))
+  }, [])
+
+  const handleSave = useCallback(async () => {
+    const queryKey = ['template', template.id]
+    const previousTemplate = queryClient.getQueryData<ActionGraph>(queryKey)
+    const normalizedDistributorId = selectedDistributorId || undefined
+    const nextPlanningTask = normalizedDistributorId
+      ? filterPlanningTaskForDistributor(localPlanningTask, distributorStates, distributorResources)
+      : emptyPlanningTask()
+
+    try {
+      setIsSaving(true)
+      if (previousTemplate) {
+        queryClient.setQueryData<ActionGraph>(queryKey, {
+          ...previousTemplate,
+          task_distributor_id: normalizedDistributorId,
+          planning_task: nextPlanningTask,
+        })
+      }
+
+      await templateApi.update(template.id, {
+        task_distributor_id: normalizedDistributorId,
+        planning_task: nextPlanningTask,
+      } as Partial<ActionGraph>, sessionId)
+
+      queryClient.invalidateQueries({ queryKey })
+      queryClient.invalidateQueries({ queryKey: ['templates-all'] })
+      if (normalizedDistributorId) {
+        queryClient.invalidateQueries({ queryKey: ['task-distributor-full', normalizedDistributorId] })
+      }
+      onClose()
+    } catch (error) {
+      if (previousTemplate) {
+        queryClient.setQueryData<ActionGraph>(queryKey, previousTemplate)
+      }
+      alert(extractApiErrorMessage(error, 'PDDL 설정 저장에 실패했습니다'))
+    } finally {
+      setIsSaving(false)
+    }
+  }, [
+    distributorResources,
+    distributorStates,
+    localPlanningTask,
+    onClose,
+    queryClient,
+    selectedDistributorId,
+    sessionId,
+    template.id,
+  ])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="max-h-[90vh] w-full max-w-3xl overflow-hidden rounded-xl border border-primary bg-surface shadow-2xl">
+        <div className="flex items-center justify-between border-b border-primary px-6 py-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <FileCode size={18} className="text-violet-300" />
+              <h2 className="text-lg font-semibold text-primary">PDDL Config</h2>
+            </div>
+            <p className="mt-1 text-sm text-secondary">
+              <span className="font-medium text-violet-200">{template.name || template.id}</span> 태스크 전체의 planning 설정을 관리합니다.
+            </p>
+          </div>
+          <button onClick={onClose} className="text-muted transition-colors hover:text-primary">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="max-h-[calc(90vh-144px)] overflow-y-auto p-6">
+          <div className="space-y-4">
+            <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <Zap size={14} className="text-violet-300" />
+                <span className="text-sm font-semibold text-violet-200">Task Distributor 선택</span>
+              </div>
+              <p className="mb-3 text-xs leading-5 text-secondary">
+                이 태스크가 사용할 PDDL 상태 변수와 resource 목록입니다. 여기서 선택한 distributor의 state / resource만 아래 설정에 사용할 수 있습니다.
+              </p>
+              <select
+                value={selectedDistributorId}
+                onChange={(e) => setSelectedDistributorId(e.target.value)}
+                className="w-full rounded-lg border border-primary bg-elevated px-3 py-2 text-sm text-primary outline-none focus:border-violet-500"
+              >
+                <option value="">TD 선택 안함</option>
+                {taskDistributors.map((distributor) => (
+                  <option key={distributor.id} value={distributor.id}>{distributor.name}</option>
+                ))}
+              </select>
+              {!selectedDistributorId ? (
+                <div className="mt-3 flex items-center gap-1 text-xs text-yellow-400">
+                  <AlertCircle size={12} />
+                  <span>Task Distributor를 연결해야 state / result / resource 요구사항을 저장할 수 있습니다.</span>
+                </div>
+              ) : selectedDistributorFull ? (
+                <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
+                  <span className="rounded bg-violet-500/10 px-2 py-1 text-violet-200">States {distributorStates.length}</span>
+                  <span className="rounded bg-violet-500/10 px-2 py-1 text-violet-200">Resources {distributorResources.length}</span>
+                  {selectedDistributorFull.description && (
+                    <span className="rounded bg-surface px-2 py-1 text-secondary">{selectedDistributorFull.description}</span>
+                  )}
+                </div>
+              ) : isDistributorLoading ? (
+                <div className="mt-3 text-xs text-secondary">Task Distributor 불러오는 중...</div>
+              ) : null}
+            </div>
+
+            <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <Activity size={14} className="text-violet-300" />
+                <span className="text-sm font-semibold text-violet-200">Task 조건 / 결과 설정</span>
+              </div>
+              <p className="mb-3 text-xs leading-5 text-secondary">
+                <strong className="text-violet-200">Required States</strong>는 이 태스크가 시작되기 전에 만족해야 하는 값이고,
+                <strong className="ml-1 text-violet-200">Result States</strong>는 이 태스크가 성공 종료된 뒤 planner가 반영할 값입니다.
+              </p>
+
+              {!selectedDistributorId ? (
+                <div className="rounded-lg border border-dashed border-border bg-base/40 px-3 py-3 text-xs text-muted">
+                  먼저 Task Distributor를 선택하세요.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-violet-200">Required States</div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <select
+                        className="min-w-0 flex-[1_1_180px] rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+                        value={pendingPreconditionVariable}
+                        onChange={(e) => {
+                          const variable = e.target.value
+                          setPendingPreconditionVariable(variable)
+                          const stateVar = distributorStates.find(item => item.name === variable)
+                          setPendingPreconditionValue(getStateDefaultValue(stateVar))
+                        }}
+                      >
+                        <option value="">state 선택</option>
+                        {distributorStates.map((stateVar) => (
+                          <option key={stateVar.id} value={stateVar.name}>{stateVar.name}</option>
+                        ))}
+                      </select>
+                      <select
+                        className="w-[88px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+                        value={pendingPreconditionOperator}
+                        onChange={(e) => setPendingPreconditionOperator(e.target.value as '==' | '!=')}
+                        disabled={!pendingPreconditionVariable}
+                      >
+                        <option value="==">==</option>
+                        <option value="!=">!=</option>
+                      </select>
+                      {(() => {
+                        const currentVar = distributorStates.find(item => item.name === pendingPreconditionVariable)
+                        if (currentVar?.type === 'bool') {
+                          return (
+                            <select
+                              className="w-[90px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+                              value={pendingPreconditionValue || 'true'}
+                              onChange={(e) => setPendingPreconditionValue(e.target.value)}
+                              disabled={!pendingPreconditionVariable}
+                            >
+                              <option value="true">true</option>
+                              <option value="false">false</option>
+                            </select>
+                          )
+                        }
+                        return (
+                          <input
+                            type={currentVar?.type === 'int' ? 'number' : 'text'}
+                            className="w-[120px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none disabled:opacity-40"
+                            value={pendingPreconditionValue}
+                            onChange={(e) => setPendingPreconditionValue(e.target.value)}
+                            disabled={!pendingPreconditionVariable}
+                          />
+                        )
+                      })()}
+                      <button
+                        onClick={handleAddPrecondition}
+                        disabled={!pendingPreconditionVariable}
+                        className="shrink-0 rounded bg-violet-500/20 px-3 py-2 text-sm text-violet-200 disabled:opacity-40"
+                      >
+                        추가
+                      </button>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(localPlanningTask.preconditions || []).length === 0 ? (
+                        <span className="text-xs text-muted">필요 상태 없음</span>
+                      ) : (localPlanningTask.preconditions || []).map((condition) => (
+                        <span
+                          key={condition.variable}
+                          className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-1 text-xs text-emerald-200"
+                        >
+                          {condition.variable} {condition.operator || '=='} {condition.value}
+                          <button onClick={() => handleDeletePrecondition(condition.variable)}>
+                            <X size={10} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-violet-200">Result States</div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <select
+                        className="min-w-0 flex-[1_1_180px] rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+                        value={pendingResultVariable}
+                        onChange={(e) => {
+                          const variable = e.target.value
+                          setPendingResultVariable(variable)
+                          const stateVar = distributorStates.find(item => item.name === variable)
+                          setPendingResultValue(getStateDefaultValue(stateVar))
+                        }}
+                      >
+                        <option value="">state 선택</option>
+                        {distributorStates.map((stateVar) => (
+                          <option key={stateVar.id} value={stateVar.name}>{stateVar.name}</option>
+                        ))}
+                      </select>
+                      {(() => {
+                        const currentVar = distributorStates.find(item => item.name === pendingResultVariable)
+                        if (currentVar?.type === 'bool') {
+                          return (
+                            <select
+                              className="w-[90px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+                              value={pendingResultValue || 'true'}
+                              onChange={(e) => setPendingResultValue(e.target.value)}
+                              disabled={!pendingResultVariable}
+                            >
+                              <option value="true">true</option>
+                              <option value="false">false</option>
+                            </select>
+                          )
+                        }
+                        return (
+                          <input
+                            type={currentVar?.type === 'int' ? 'number' : 'text'}
+                            className="w-[120px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none disabled:opacity-40"
+                            value={pendingResultValue}
+                            onChange={(e) => setPendingResultValue(e.target.value)}
+                            disabled={!pendingResultVariable}
+                          />
+                        )
+                      })()}
+                      <button
+                        onClick={handleAddResultState}
+                        disabled={!pendingResultVariable}
+                        className="shrink-0 rounded bg-violet-500/20 px-3 py-2 text-sm text-violet-200 disabled:opacity-40"
+                      >
+                        추가
+                      </button>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(localPlanningTask.result_states || []).length === 0 ? (
+                        <span className="text-xs text-muted">결과 상태 없음</span>
+                      ) : (localPlanningTask.result_states || []).map((effect) => (
+                        <span
+                          key={effect.variable}
+                          className="inline-flex items-center gap-1 rounded-full bg-violet-500/10 px-2 py-1 text-xs text-violet-200"
+                        >
+                          {effect.variable} = {effect.value}
+                          <button onClick={() => handleDeleteResultState(effect.variable)}>
+                            <X size={10} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <Lock size={14} className="text-amber-300" />
+                <span className="text-sm font-semibold text-amber-200">Required Resources</span>
+              </div>
+              <p className="mb-3 text-xs leading-5 text-secondary">
+                이 태스크가 실행될 때 planner가 점유 충돌을 피해야 하는 resource입니다. 지금은 step별 acquire/release 대신 <strong className="text-amber-200">task 전체 단위</strong>로 간단하게 설정합니다.
+              </p>
+
+              {!selectedDistributorId ? (
+                <div className="rounded-lg border border-dashed border-border bg-base/40 px-3 py-3 text-xs text-muted">
+                  먼저 Task Distributor를 선택하세요.
+                </div>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      className="min-w-0 flex-[1_1_220px] rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+                      value={pendingResourceToken}
+                      onChange={(e) => setPendingResourceToken(e.target.value)}
+                    >
+                      <option value="">resource 선택</option>
+                      {distributorResources.map((resource) => {
+                        const token = `${resource.kind === 'type' ? 'type' : 'instance'}:${resource.id}`
+                        return (
+                          <option key={token} value={token}>
+                            {resource.kind === 'type' ? `[TYPE] ${resource.name}` : resource.name}
+                          </option>
+                        )
+                      })}
+                    </select>
+                    <button
+                      onClick={handleAddRequiredResource}
+                      disabled={!pendingResourceToken}
+                      className="shrink-0 rounded bg-amber-500/20 px-3 py-2 text-sm text-amber-200 disabled:opacity-40"
+                    >
+                      추가
+                    </button>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {(localPlanningTask.required_resources || []).length === 0 ? (
+                      <span className="text-xs text-muted">required resource 없음</span>
+                    ) : (localPlanningTask.required_resources || []).map((token) => (
+                      <span
+                        key={token}
+                        className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-1 text-xs text-amber-200"
+                      >
+                        {formatPlanningResourceToken(token, distributorResources)}
+                        <button onClick={() => handleDeleteRequiredResource(token)}>
+                          <X size={10} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-primary bg-base/40 p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <Server size={14} className="text-primary" />
+                <span className="text-sm font-semibold text-primary">Available Variables / Resources</span>
+              </div>
+              <p className="mb-3 text-xs leading-5 text-secondary">
+                아래 목록은 현재 선택한 Task Distributor가 제공하는 변수와 resource입니다. description이 있으면 함께 표시합니다.
+              </p>
+
+              <div className="grid gap-3 lg:grid-cols-2">
+                <div className="rounded-lg border border-violet-500/15 bg-violet-500/5 p-3">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-wider text-violet-300">States</div>
+                  <div className="space-y-2">
+                    {distributorStates.length === 0 ? (
+                      <div className="text-xs text-muted">state 없음</div>
+                    ) : distributorStates.map((stateVar) => (
+                      <div key={stateVar.id} className="rounded border border-violet-500/15 bg-base/50 px-2 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-medium text-violet-200">{stateVar.name}</span>
+                          <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] text-violet-200">{stateVar.type}</span>
+                        </div>
+                        <div className="mt-1 text-[11px] text-secondary">
+                          기본값: <span className="text-primary">{stateVar.initial_value || '(empty)'}</span>
+                        </div>
+                        {stateVar.description && (
+                          <div className="mt-1 text-[11px] leading-5 text-secondary">{stateVar.description}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-amber-500/15 bg-amber-500/5 p-3">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-wider text-amber-300">Resources</div>
+                  <div className="space-y-2">
+                    {distributorResources.length === 0 ? (
+                      <div className="text-xs text-muted">resource 없음</div>
+                    ) : distributorResources.map((resource) => (
+                      <div key={resource.id} className="rounded border border-amber-500/15 bg-base/50 px-2 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-medium text-amber-200">{resource.name}</span>
+                          <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-200">
+                            {resource.kind === 'type' ? 'type' : 'instance'}
+                          </span>
+                        </div>
+                        {resource.description && (
+                          <div className="mt-1 text-[11px] leading-5 text-secondary">{resource.description}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-3 border-t border-primary px-6 py-4">
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-primary px-4 py-2 text-sm text-secondary transition-colors hover:bg-elevated hover:text-primary"
+          >
+            닫기
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={isSaving || (!!selectedDistributorId && !selectedDistributorFull)}
+            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Save size={14} />
+            {isSaving ? '저장 중...' : '저장'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function CreateTemplateModal({

@@ -97,7 +97,14 @@ type PlanningEffectResponse struct {
 	Value    string `json:"value"`
 }
 
+type PlanningConditionResponse struct {
+	Variable string `json:"variable"`
+	Operator string `json:"operator,omitempty"`
+	Value    string `json:"value"`
+}
+
 type PlanningTaskResponse struct {
+	Preconditions     []PlanningConditionResponse `json:"preconditions,omitempty"`
 	RequiredResources []string                `json:"required_resources,omitempty"`
 	DuringState       []PlanningEffectResponse `json:"during_state,omitempty"`
 	ResultStates      []PlanningEffectResponse `json:"result_states,omitempty"`
@@ -672,6 +679,7 @@ type AgentConnectionStatusResponse struct {
 type PlanExecutionStepResponse struct {
 	TaskID        string `json:"task_id"`
 	TaskName      string `json:"task_name,omitempty"`
+	BehaviorTreeID string `json:"behavior_tree_id,omitempty"`
 	RuntimeTaskID string `json:"runtime_task_id,omitempty"`
 	StepID        string `json:"step_id"`
 	StepName      string `json:"step_name"`
@@ -700,6 +708,7 @@ type PlanExecutionResponse struct {
 	ID             string                          `json:"id"`
 	ProblemID      string                          `json:"problem_id"`
 	BehaviorTreeID string                          `json:"behavior_tree_id"`
+	BehaviorTreeIDs []string                        `json:"behavior_tree_ids,omitempty"`
 	Status         string                          `json:"status"`
 	CurrentOrder   int                             `json:"current_order"`
 	TotalOrders    int                             `json:"total_orders"`

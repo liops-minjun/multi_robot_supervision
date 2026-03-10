@@ -553,3 +553,128 @@ MIT License
 
 상세 메모:
 - `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`
+
+## 2026-03-09 - PDDL draft 복원 후 goal 초기화 버그 수정
+
+- 증상:
+  - PDDL 화면을 벗어났다가 돌아오면 selected task/distributor는 복원되지만 goal이 다시 비워지는 문제 발생
+- 원인:
+  - draft 복원 직후 기존 selection reset effect가 한 번 더 실행되면서 goal / initial override를 다시 초기화
+- 수정:
+  - 복원된 selectionKey를 한 번 무시하는 guard 추가
+  - 이제 복원 직후에는 goal / initial override가 유지됨
+- 추가 개선:
+  - solve 실패 시 generic AxiosError 대신 backend가 내려준 실제 error/message를 우선 표시하도록 개선
+- 주의:
+  - selection 변경 시 reset 동작과 연결되어 있으므로 goal 유지/초기화 모두 회귀 테스트 필요
+
+상세 메모:
+- `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`
+
+## 2026-03-09 - PDDL 화면 Draft 자동 저장/복원
+
+- 목적: PDDL 화면에서 task 선택, agent 선택, goal, initial override를 설정한 뒤 다른 화면(예: task 수정)으로 갔다가 돌아와도 작업 중인 draft를 유지
+- 수정:
+  - PDDL 화면 상태를 localStorage에 자동 저장
+  - 페이지 진입 시 draft 자동 복원
+  - 복원된 task ID의 상세 정보가 캐시에 없으면 자동 재조회
+  - 기존 selection reset 로직이 복원 직후 goal/initial state를 지워버리지 않도록 guard 추가
+- 자동 저장 대상:
+  - selected tasks
+  - selected distributor
+  - selected agents
+  - goal state
+  - initial state override
+  - initial state editor open/close 상태
+- 주의:
+  - PDDL selection 변경 시 기존 plan/execution 초기화 흐름과 맞물리므로 회귀 테스트 필요
+
+상세 메모:
+- `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`
+
+## 2026-03-09 - PDDL 다중 Task 선택 지원
+
+- 목적: PDDL에서 task(behavior tree)를 하나가 아니라 여러 개 선택해서 planning / execution 할 수 있도록 확장
+- 프론트 수정:
+  - PDDL task 선택 UI를 단일 선택에서 다중 선택으로 변경
+  - preview / create / solve / execute 요청에 `behavior_tree_ids` 추가
+- 백엔드 수정:
+  - planning problem에 여러 behavior tree ID 저장
+  - `solveProblem()`이 선택된 여러 BT를 모두 읽어서 여러 `PlanTask`로 planner에 전달
+  - `PlanExecutor`가 assignment별 `behavior_tree_id`로 실제 실행하도록 변경
+  - plan execution 응답에 `behavior_tree_ids`, step별 `behavior_tree_id` 포함
+- 효과:
+  - PDDL이 단일 task 실행 래퍼 수준을 넘어, 여러 task를 한 planning problem 안에서 다룰 수 있는 기반 마련
+- 주의:
+  - 영향 범위가 커서 기존 단일 task preview / solve / execute도 반드시 회귀 테스트 필요
+
+상세 메모:
+- `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`
+
+## 2026-03-09 - ActionGraph planning result/during 버튼 레이아웃 수정
+
+- 증상:
+  - ActionGraph의 `Current Task Planning -> Result States`에서 `+` 버튼이 카드 오른쪽 밖으로 밀려나 보이고 클릭이 잘 되지 않음
+  - 같은 영역의 `During State`도 좁은 폭에서 버튼/입력창 정렬이 불안정함
+- 수정:
+  - `central_server/frontend/src/pages/ActionGraph/nodes/StateActionNode.tsx`에서 `During State`, `Result States` 행을 wrapping 가능한 flex 레이아웃으로 변경
+  - 상태 선택 입력은 `min-w-0`, 값 입력/버튼은 `shrink-0` 처리해서 카드 안에 유지되도록 수정
+- 주의:
+  - ActionGraph 노드 편집 UI를 건드렸으므로 `Result States` 추가/삭제, `During State` 설정/초기화, Runtime Resources UI를 함께 회귀 테스트 필요
+
+상세 메모:
+- `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`
+
+## 2026-03-09 - ActionGraph task-level PDDL Config 모달로 통합
+
+- 목적:
+  - `During State`, `Result States`, `required_resources` 같은 PDDL planning 설정을 액션 노드 단위가 아니라 태스크 전체 단위로 관리하도록 UI 정리
+- 수정:
+  - 사이드바 상단에 `PDDL Config` 버튼 추가
+  - 버튼 클릭 시 태스크 전체 planning 설정을 관리하는 모달 오픈
+  - 모달에서 다음 항목을 관리:
+    - Task Distributor 선택
+    - During State
+    - Result States
+    - Available state/resource 설명
+    - Action Node runtime acquire/release에서 자동 집계된 required_resources 요약
+    - `저장`, `닫기` 버튼
+  - Action Node 내부의 중복된 `Current Task Planning` UI 제거
+- 유지한 것:
+  - `Runtime Resources`는 step별 acquire / release 설정이므로 Action Node에 그대로 유지
+- 추가 수정:
+  - 새로 드롭한 Action Node도 현재 `task_distributor_id`를 즉시 이어받도록 해서 Runtime Resources가 바로 설정 가능하게 수정
+- 제거/정리한 불필요 설정:
+  - node-level task planning 편집 UI
+  - required_resources 수동 입력 흐름 (이제 자동 집계 결과만 사용)
+  - 관련 중복 frontend node-data 필드
+- 주의:
+  - ActionGraph 편집 흐름 전반에 영향이 있으므로 Task Distributor 선택, modal 저장/닫기, Runtime Resources 자동 동기화, 기존 task 로드 시 planning 값 표시를 회귀 테스트해야 함
+
+상세 메모:
+- `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`
+
+## 2026-03-09 - ActionGraph PDDL 단순화 (task-level required/result/resource)
+
+- 목적:
+  - PDDL planning 설정을 액션 노드 단위가 아니라 태스크 전체 단위로 단순화해서, "이 태스크가 시작되려면 무엇이 필요하고", "끝나면 어떤 값이 바뀌는지"를 한 곳에서 관리할 수 있게 정리
+- 프론트 수정:
+  - ActionGraph `PDDL Config` 모달에서 다음만 관리하도록 변경
+    - Task Distributor 선택
+    - Required States (`preconditions`)
+    - Result States (`result_states`)
+    - Required Resources (`required_resources`)
+  - Action Node 내부의 `Runtime Resources` UI 제거
+  - PDDL 화면 task 요약에 `Need`(preconditions) 개수 표시
+- 백엔드 수정:
+  - `PlanningTaskSpec`에 `preconditions` 추가
+  - planner가 task 선택 시 현재 planning state와 `preconditions`를 비교해 실행 가능 task만 고르도록 수정
+- 효과:
+  - 사용자는 step-level acquire/release 같은 세세한 설정 없이 task-level planning만 우선 구성 가능
+  - 예: `cnc_01_empty == true` 가 필요하고, 성공 후 `cnc_01_service_done = true` 가 되는 식으로 간단히 설정 가능
+- 주의:
+  - 이전에 Action Node Runtime Resources 기반으로 required_resources를 잡던 task는 이제 task-level `PDDL Config`에서 다시 확인/설정해야 함
+  - 영향 범위가 커서 기존 single-task / multi-task planning 흐름 모두 회귀 테스트 필요
+
+상세 메모:
+- `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`

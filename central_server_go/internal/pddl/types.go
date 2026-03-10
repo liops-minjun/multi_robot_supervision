@@ -16,6 +16,7 @@ type PlanTask struct {
 	TaskName            string
 	BehaviorTreeID      string
 	RequiredActionTypes []string
+	Preconditions       []db.PlanningCondition
 	RequiredResources   []string
 	ResultStates        []db.PlanningEffect
 	DuringState         []db.PlanningEffect
