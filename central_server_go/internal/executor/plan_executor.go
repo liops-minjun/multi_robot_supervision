@@ -62,6 +62,10 @@ type PlanExecution struct {
 	orderGroups [][]pddl.TaskAssignment
 	cancelFunc  context.CancelFunc
 	mu          sync.RWMutex
+
+	persistProblemStatus   bool
+	runtimeInitialState    map[string]string
+	runtimeTaskDistributor string
 }
 
 // PlanExecutor orchestrates PDDL plan execution
@@ -88,6 +92,31 @@ func NewPlanExecutor(scheduler *Scheduler, stateManager *state.GlobalStateManage
 
 // StartPlanExecution starts executing a solved plan
 func (pe *PlanExecutor) StartPlanExecution(ctx context.Context, problemID string, behaviorTreeIDs []string, plan *pddl.Plan) (string, error) {
+	return pe.startPlanExecution(ctx, problemID, behaviorTreeIDs, plan, true, nil, "")
+}
+
+// StartRuntimePlanExecution starts an execution that is managed in-memory by the
+// server instead of a persisted PlanningProblem row.
+func (pe *PlanExecutor) StartRuntimePlanExecution(
+	ctx context.Context,
+	problemID string,
+	behaviorTreeIDs []string,
+	taskDistributorID string,
+	initialState map[string]string,
+	plan *pddl.Plan,
+) (string, error) {
+	return pe.startPlanExecution(ctx, problemID, behaviorTreeIDs, plan, false, initialState, taskDistributorID)
+}
+
+func (pe *PlanExecutor) startPlanExecution(
+	ctx context.Context,
+	problemID string,
+	behaviorTreeIDs []string,
+	plan *pddl.Plan,
+	persistProblemStatus bool,
+	initialState map[string]string,
+	taskDistributorID string,
+) (string, error) {
 	if !plan.IsValid {
 		return "", fmt.Errorf("plan is not valid: %s", plan.ErrorMessage)
 	}
@@ -157,6 +186,9 @@ func (pe *PlanExecutor) StartPlanExecution(ctx context.Context, problemID string
 		StartedAt:       time.Now(),
 		orderGroups:     groups,
 		cancelFunc:      cancel,
+		persistProblemStatus:   persistProblemStatus,
+		runtimeInitialState:    cloneStringMap(initialState),
+		runtimeTaskDistributor: strings.TrimSpace(taskDistributorID),
 	}
 
 	pe.mu.Lock()
@@ -201,27 +233,10 @@ func (pe *PlanExecutor) runPlanExecution(ctx context.Context, exec *PlanExecutio
 		}
 	}
 
-	pp, err := pe.repo.GetPlanningProblem(exec.ProblemID)
-	if err != nil {
-		pe.failExecution(exec, fmt.Sprintf("failed to load planning problem: %v", err))
-		return
-	}
-	if pp == nil {
-		pe.failExecution(exec, "planning problem not found")
-		return
-	}
-
-	initialPlanningState, err := pe.buildInitialPlanningState(pp, primaryBT)
+	initialPlanningState, selectedDistributorID, err := pe.resolvePlanningContext(exec, primaryBT)
 	if err != nil {
 		pe.failExecution(exec, fmt.Sprintf("failed to build planning state: %v", err))
 		return
-	}
-
-	selectedDistributorID := ""
-	if pp != nil && pp.TaskDistributorID.Valid && pp.TaskDistributorID.String != "" {
-		selectedDistributorID = pp.TaskDistributorID.String
-	} else if primaryBT != nil && primaryBT.TaskDistributorID.Valid && primaryBT.TaskDistributorID.String != "" {
-		selectedDistributorID = primaryBT.TaskDistributorID.String
 	}
 
 	// Initialize planning state
@@ -292,7 +307,9 @@ func (pe *PlanExecutor) runPlanExecution(ctx context.Context, exec *PlanExecutio
 	exec.CompletedAt = time.Now()
 	exec.mu.Unlock()
 
-	pe.repo.UpdatePlanningProblemStatus(exec.ProblemID, "completed", nil, "")
+	if exec.persistProblemStatus {
+		pe.repo.UpdatePlanningProblemStatus(exec.ProblemID, "completed", nil, "")
+	}
 	pe.broadcastPlanUpdate(exec)
 
 	log.Printf("[PlanExecutor] Plan execution %s completed successfully", exec.ID)
@@ -314,6 +331,17 @@ func uniqueStrings(values []string) []string {
 		result = append(result, value)
 	}
 	return result
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 // dispatchStep dispatches a single task to an agent and waits for completion.
@@ -429,6 +457,49 @@ func (pe *PlanExecutor) buildInitialPlanningState(
 	}
 
 	return initial, nil
+}
+
+func (pe *PlanExecutor) resolvePlanningContext(
+	exec *PlanExecution,
+	primaryBT *db.BehaviorTree,
+) (map[string]string, string, error) {
+	if exec == nil {
+		return nil, "", fmt.Errorf("execution is nil")
+	}
+
+	if len(exec.runtimeInitialState) > 0 || exec.runtimeTaskDistributor != "" || !exec.persistProblemStatus {
+		initial := cloneStringMap(exec.runtimeInitialState)
+		if initial == nil {
+			initial = map[string]string{}
+		}
+		selectedDistributorID := exec.runtimeTaskDistributor
+		if selectedDistributorID == "" && primaryBT != nil && primaryBT.TaskDistributorID.Valid && primaryBT.TaskDistributorID.String != "" {
+			selectedDistributorID = primaryBT.TaskDistributorID.String
+		}
+		return initial, selectedDistributorID, nil
+	}
+
+	pp, err := pe.repo.GetPlanningProblem(exec.ProblemID)
+	if err != nil {
+		return nil, "", err
+	}
+	if pp == nil {
+		return nil, "", fmt.Errorf("planning problem not found")
+	}
+
+	initial, err := pe.buildInitialPlanningState(pp, primaryBT)
+	if err != nil {
+		return nil, "", err
+	}
+
+	selectedDistributorID := ""
+	if pp.TaskDistributorID.Valid && pp.TaskDistributorID.String != "" {
+		selectedDistributorID = pp.TaskDistributorID.String
+	} else if primaryBT != nil && primaryBT.TaskDistributorID.Valid && primaryBT.TaskDistributorID.String != "" {
+		selectedDistributorID = primaryBT.TaskDistributorID.String
+	}
+
+	return initial, selectedDistributorID, nil
 }
 
 func (pe *PlanExecutor) loadExecutionTaskSpecs(behaviorTrees map[string]*db.BehaviorTree) (map[string]db.PlanningTaskSpec, error) {
@@ -695,7 +766,9 @@ func (pe *PlanExecutor) failExecution(exec *PlanExecution, errMsg string) {
 	exec.Error = errMsg
 	exec.mu.Unlock()
 
-	pe.repo.UpdatePlanningProblemStatus(exec.ProblemID, "failed", nil, errMsg)
+	if exec.persistProblemStatus {
+		pe.repo.UpdatePlanningProblemStatus(exec.ProblemID, "failed", nil, errMsg)
+	}
 	pe.broadcastPlanUpdate(exec)
 	pe.stateManager.ReleaseAllPlanResources(exec.ProblemID)
 
@@ -746,7 +819,9 @@ func (pe *PlanExecutor) cancelExecution(exec *PlanExecution) {
 	exec.Error = "cancelled by user"
 	exec.mu.Unlock()
 
-	pe.repo.UpdatePlanningProblemStatus(exec.ProblemID, "cancelled", nil, "cancelled by user")
+	if exec.persistProblemStatus {
+		pe.repo.UpdatePlanningProblemStatus(exec.ProblemID, "cancelled", nil, "cancelled by user")
+	}
 	pe.broadcastPlanUpdate(exec)
 	pe.stateManager.ReleaseAllPlanResources(exec.ProblemID)
 

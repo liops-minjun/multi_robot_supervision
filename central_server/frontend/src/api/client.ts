@@ -41,7 +41,9 @@ import type {
   StepAssignment,
   TaskDistributor,
   TaskDistributorState,
-  TaskDistributorResource
+  TaskDistributorResource,
+  RealtimeSession,
+  RealtimeGoalRule
 } from '../types'
 
 const api = axios.create({
@@ -827,6 +829,35 @@ export const pddlApi = {
 
   cancelExecution: async (id: string): Promise<void> => {
     await api.post(`/pddl/executions/${id}/cancel`)
+  },
+
+  listRealtimeSessions: async (): Promise<RealtimeSession[]> => {
+    const { data } = await api.get('/pddl/realtime-sessions')
+    return data
+  },
+
+  getRealtimeSession: async (id: string): Promise<RealtimeSession> => {
+    const { data } = await api.get(`/pddl/realtime-sessions/${id}`)
+    return data
+  },
+
+  startRealtimeSession: async (req: {
+    name: string
+    behavior_tree_id: string
+    behavior_tree_ids?: string[]
+    task_distributor_id?: string
+    initial_state?: Record<string, string>
+    agent_ids: string[]
+    tick_interval_sec?: number
+    goals: RealtimeGoalRule[]
+  }): Promise<RealtimeSession> => {
+    const { data } = await api.post('/pddl/realtime-sessions', req)
+    return data
+  },
+
+  stopRealtimeSession: async (id: string): Promise<RealtimeSession> => {
+    const { data } = await api.post(`/pddl/realtime-sessions/${id}/stop`)
+    return data
   },
 
   // Resources

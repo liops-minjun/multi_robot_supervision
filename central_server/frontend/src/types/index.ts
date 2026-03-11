@@ -1481,3 +1481,33 @@ export interface PlanExecution {
   resources?: ResourceAllocation[]
   steps: PlanExecutionStep[]
 }
+
+export interface RealtimeGoalRule {
+  id: string
+  name: string
+  priority: number
+  enabled: boolean
+  activation_conditions?: PlanningCondition[]
+  goal_state: Record<string, string>
+}
+
+export interface RealtimeSession {
+  id: string
+  name: string
+  status: string
+  behavior_tree_ids: string[]
+  task_distributor_id?: string
+  agent_ids: string[]
+  tick_interval_sec: number
+  goals: RealtimeGoalRule[]
+  current_state: Record<string, string>
+  live_state?: Record<string, string>
+  selected_goal_id?: string
+  selected_goal_name?: string
+  active_execution_id?: string
+  active_execution_status?: string
+  last_error?: string
+  last_plan?: PlanResult
+  started_at: string
+  updated_at: string
+}

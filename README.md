@@ -894,3 +894,49 @@ Important regression test points:
 
 상세 메모:
 - `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`
+
+## 2026-03-11 - Realtime PDDL Loop MVP
+
+- 목적:
+  - 기존 one-shot `Preview -> Solve -> Execute` 중심 PDDL 메뉴를, 우선순위 goal 후보를 반복 평가하는 realtime PDDL 루프 방향으로 확장 시작
+- 백엔드 추가:
+  - `GET /api/pddl/realtime-sessions`
+  - `POST /api/pddl/realtime-sessions`
+  - `GET /api/pddl/realtime-sessions/{sessionID}`
+  - `POST /api/pddl/realtime-sessions/{sessionID}/stop`
+  - in-memory realtime session manager 추가
+    - 세션별 planner state 유지
+    - goal 후보(priority 오름차순) 선택
+    - activation condition 만족 + goal 미충족인 첫 후보를 solve
+    - solve 성공 시 runtime plan execution 시작
+    - 완료 시 task result state를 세션 current_state에 반영
+    - 동일 state/goal 조합에서 실패 시 즉시 무한 재시도하지 않도록 차단
+- 실행기(PlanExecutor) 보강:
+  - `StartRuntimePlanExecution(...)` 추가
+  - DB에 `planning_problems` row를 저장하지 않아도 runtime execution 가능
+  - runtime execution이 직접 initial planning state / task distributor context를 받을 수 있게 확장
+- 프론트(PDDL 페이지) 추가:
+  - `Realtime PDDL Loop` 섹션 추가
+  - realtime goal rule 편집기 추가
+    - goal 이름
+    - priority
+    - activation conditions
+    - goal state
+  - tick interval 입력
+  - realtime start / stop 버튼
+  - session state / live state 표시
+  - 현재 one-shot goal을 realtime goal 후보로 복사하는 버튼 추가
+  - draft persistence에 realtime goal / tick interval / active realtime session ID 포함
+- 현재 한계:
+  - 아직 telemetry 기반 planning state 반영은 미구현
+  - 즉, 지금은 realtime session 내부 planner state + task result state 반영까지가 MVP
+  - 다음 단계에서 battery / cnc running-done / lane occupancy 연동 필요
+- 회귀 테스트 포인트:
+  - 기존 one-shot PDDL preview / solve / execute가 여전히 동작하는지
+  - realtime start/stop이 일반 plan execution cancel 흐름을 깨지 않는지
+  - priority 숫자가 낮을수록 먼저 선택되는지
+  - completed execution 이후 session `current_state`가 result states로 갱신되는지
+  - 실패한 동일 state/goal 조합을 매 tick마다 무한 재시도하지 않는지
+
+상세 메모:
+- `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`

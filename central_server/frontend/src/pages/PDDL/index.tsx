@@ -9,9 +9,11 @@ import { behaviorTreeApi, agentApi, capabilityApi, pddlApi, taskDistributorApi, 
 import type {
   BehaviorTree, Agent, PlanResult, PlanExecution, ResourceAllocation,
   TaskDistributor, GraphListItem, TaskDistributorState, TaskDistributorResource, RobotStateSnapshot, PlanningTaskSpec,
+  RealtimeGoalRule, RealtimeSession,
 } from '../../types'
 import GoalEditor from './components/GoalEditor'
 import PlanVisualization from './components/PlanVisualization'
+import RealtimeGoalEditor from './components/RealtimeGoalEditor'
 import { ActionGraphViewer } from '../../components/BehaviorTreeViewer'
 
 // ---------------------------------------------------------------------------
@@ -78,7 +80,7 @@ const TYPE_BADGE: Record<string, { bg: string; text: string }> = {
   string: { bg: 'bg-orange-500/15', text: 'text-orange-400' },
 }
 
-const PDDL_DRAFT_STORAGE_KEY = 'mcs.pddl.draft.v1'
+const PDDL_DRAFT_STORAGE_KEY = 'mcs.pddl.draft.v2'
 
 function buildInstanceNames(typeName: string, count: number) {
   const normalized = typeName.trim().replace(/\s+/g, ' ')
@@ -183,6 +185,17 @@ function getApiErrorMessage(error: unknown): string {
     || err?.response?.data?.message
     || err?.message
     || String(error)
+}
+
+function createRealtimeGoalTemplate(index: number): RealtimeGoalRule {
+  return {
+    id: `realtime_goal_${index + 1}`,
+    name: `Realtime goal ${index + 1}`,
+    priority: index + 1,
+    enabled: true,
+    activation_conditions: [],
+    goal_state: {},
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +342,11 @@ export default function PDDL() {
   const [execution, setExecution] = useState<PlanExecution | null>(null)
   const [resourceAllocations, setResourceAllocations] = useState<ResourceAllocation[]>([])
   const [agentRuntimeMap, setAgentRuntimeMap] = useState<Record<string, RobotStateSnapshot>>({})
+  const [realtimeGoals, setRealtimeGoals] = useState<RealtimeGoalRule[]>([])
+  const [realtimeTickIntervalSec, setRealtimeTickIntervalSec] = useState(2)
+  const [realtimeSessionId, setRealtimeSessionId] = useState<string | null>(null)
+  const [realtimeSession, setRealtimeSession] = useState<RealtimeSession | null>(null)
+  const [isStartingRealtime, setIsStartingRealtime] = useState(false)
 
   // -----------------------------------------------------------------------
   // Inline TD creation state
@@ -508,6 +526,9 @@ export default function PDDL() {
         showInitialState?: boolean
         plan?: PlanResult | null
         executionId?: string | null
+        realtimeGoals?: RealtimeGoalRule[]
+        realtimeTickIntervalSec?: number
+        realtimeSessionId?: string | null
       }
 
       skipNextSelectionResetRef.current = true
@@ -520,6 +541,9 @@ export default function PDDL() {
       setShowInitialState(Boolean(draft.showInitialState))
       setPlan(draft.plan || null)
       setExecutionId(draft.executionId || null)
+      setRealtimeGoals(Array.isArray(draft.realtimeGoals) ? draft.realtimeGoals : [])
+      setRealtimeTickIntervalSec(typeof draft.realtimeTickIntervalSec === 'number' ? draft.realtimeTickIntervalSec : 2)
+      setRealtimeSessionId(draft.realtimeSessionId || null)
     } catch (err) {
       console.error('Failed to restore PDDL draft:', err)
     }
@@ -566,11 +590,14 @@ export default function PDDL() {
         showInitialState,
         plan,
         executionId,
+        realtimeGoals,
+        realtimeTickIntervalSec,
+        realtimeSessionId,
       }))
     } catch (err) {
       console.error('Failed to persist PDDL draft:', err)
     }
-  }, [selectedBTIds, selectedDistributorId, selectedAgentIds, goalState, initialState, showInitialState, plan, executionId])
+  }, [selectedBTIds, selectedDistributorId, selectedAgentIds, goalState, initialState, showInitialState, plan, executionId, realtimeGoals, realtimeTickIntervalSec, realtimeSessionId])
 
   // -----------------------------------------------------------------------
   // Effects
@@ -619,6 +646,57 @@ export default function PDDL() {
       clearInterval(interval)
     }
   }, [executionId])
+
+  useEffect(() => {
+    if (!realtimeSessionId) {
+      setRealtimeSession(null)
+      return
+    }
+
+    let cancelled = false
+
+    const pollRealtime = async () => {
+      try {
+        const session = await pddlApi.getRealtimeSession(realtimeSessionId)
+        if (cancelled) return
+        setRealtimeSession(session)
+      } catch (err) {
+        if (cancelled) return
+        console.error('Failed to poll realtime session:', err)
+      }
+    }
+
+    void pollRealtime()
+    const interval = setInterval(pollRealtime, 1000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [realtimeSessionId])
+
+  useEffect(() => {
+    if (!realtimeSession?.active_execution_id) return
+
+    let cancelled = false
+
+    const refreshRealtimeExecution = async () => {
+      try {
+        const exec = await pddlApi.getExecution(realtimeSession.active_execution_id!)
+        if (cancelled) return
+        setResourceAllocations(exec.resources || [])
+      } catch (err) {
+        if (cancelled) return
+        console.error('Failed to refresh realtime execution resources:', err)
+      }
+    }
+
+    void refreshRealtimeExecution()
+    const interval = setInterval(refreshRealtimeExecution, 1000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [realtimeSession?.active_execution_id])
 
   const runtimeAgentIds = useMemo(() => {
     const ids = new Set<string>()
@@ -1061,6 +1139,58 @@ export default function PDDL() {
     try { await pddlApi.cancelExecution(executionId) } catch (err) { console.error('Cancel failed:', err) }
   }
 
+  const handleImportCurrentGoalToRealtime = useCallback(() => {
+    const nextIndex = realtimeGoals.length
+    setRealtimeGoals(prev => [
+      ...prev,
+      {
+        ...createRealtimeGoalTemplate(nextIndex),
+        goal_state: { ...goalState },
+      },
+    ])
+  }, [goalState, realtimeGoals.length])
+
+  const handleStartRealtime = async () => {
+    if (selectedBTs.length === 0 || !selectedDistributor || selectedAgentIds.length === 0) return
+    const validGoals = realtimeGoals
+      .filter(goal => goal.enabled && Object.keys(goal.goal_state || {}).length > 0)
+      .map((goal, index) => ({
+        ...goal,
+        priority: goal.priority || index + 1,
+      }))
+    if (validGoals.length === 0) return
+
+    setIsStartingRealtime(true)
+    try {
+      const session = await pddlApi.startRealtimeSession({
+        name: `${selectedBehaviorTreeLabel} realtime`,
+        behavior_tree_id: selectedBehaviorTreeIds[0],
+        behavior_tree_ids: selectedBehaviorTreeIds,
+        task_distributor_id: selectedDistributor.id,
+        initial_state: Object.keys(initialState).length > 0 ? initialState : undefined,
+        agent_ids: selectedAgentIds,
+        tick_interval_sec: realtimeTickIntervalSec,
+        goals: validGoals,
+      })
+      setRealtimeSessionId(session.id)
+      setRealtimeSession(session)
+    } catch (err) {
+      console.error('Failed to start realtime PDDL session:', err)
+    } finally {
+      setIsStartingRealtime(false)
+    }
+  }
+
+  const handleStopRealtime = async () => {
+    if (!realtimeSessionId) return
+    try {
+      const session = await pddlApi.stopRealtimeSession(realtimeSessionId)
+      setRealtimeSession(session)
+    } catch (err) {
+      console.error('Failed to stop realtime PDDL session:', err)
+    }
+  }
+
   // -----------------------------------------------------------------------
   // Computed helpers
   // -----------------------------------------------------------------------
@@ -1203,6 +1333,13 @@ export default function PDDL() {
   }, [selectedDistributor, selectedBTs.length, plan, isExecuting, t])
   const canSolve = !!selectedDistributor && selectedBTs.length > 0 && selectedAgentIds.length > 0 && Object.keys(goalState).length > 0
   const canExecute = !!selectedDistributor && selectedBTs.length > 0 && !!plan?.is_valid && !isExecuting
+  const validRealtimeGoals = useMemo(
+    () => realtimeGoals.filter(goal => goal.enabled && Object.keys(goal.goal_state || {}).length > 0),
+    [realtimeGoals]
+  )
+  const hasRealtimeSession = Boolean(realtimeSessionId)
+  const isRealtimeActive = hasRealtimeSession && realtimeSession?.status !== 'stopped'
+  const canStartRealtime = !!selectedDistributor && selectedBTs.length > 0 && selectedAgentIds.length > 0 && validRealtimeGoals.length > 0 && !isStartingRealtime && !isRealtimeActive && !isExecuting
 
   const sortedAgents = useMemo(
     () => [...agents].sort((a, b) => {
@@ -1805,6 +1942,124 @@ export default function PDDL() {
             </ThemedSection>
 
             </div>{/* end grid top 4 */}
+
+            <ThemedSection
+              icon={Workflow}
+              title="Realtime PDDL Loop"
+              count={validRealtimeGoals.length}
+              theme={SECTION_THEME.plan}
+            >
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-base/40 p-4">
+                  <div className="min-w-[160px]">
+                    <div className="text-xs font-semibold text-primary">Loop tick (sec)</div>
+                    <div className="mt-1 text-[11px] text-secondary">
+                      우선순위 goal 후보를 주기적으로 다시 평가합니다.
+                    </div>
+                  </div>
+                  <input
+                    type="number"
+                    min={0.5}
+                    step={0.5}
+                    value={realtimeTickIntervalSec}
+                    onChange={(e) => setRealtimeTickIntervalSec(Math.max(0.5, Number(e.target.value) || 2))}
+                    className="w-28 rounded-xl border border-border bg-surface px-3 py-2 text-sm text-primary outline-none"
+                  />
+                  <button
+                    onClick={handleImportCurrentGoalToRealtime}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-surface px-3 py-2 text-xs font-medium text-secondary transition hover:border-accent/20 hover:text-primary"
+                  >
+                    <Plus size={14} />
+                    현재 Goal 복사
+                  </button>
+                  <button
+                    onClick={handleStartRealtime}
+                    disabled={!canStartRealtime}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-accent px-3 py-2 text-xs font-medium text-white transition hover:bg-accent/80 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <Play size={14} />
+                    Start realtime
+                  </button>
+                  {isRealtimeActive && realtimeSessionId && (
+                    <button
+                      onClick={handleStopRealtime}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-red-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-red-500"
+                    >
+                      <Square size={14} />
+                      Stop realtime
+                    </button>
+                  )}
+                  {realtimeSession && (
+                    <div className="ml-auto flex flex-wrap items-center gap-2 text-[11px] text-secondary">
+                      <span className="rounded-full bg-surface px-3 py-1">
+                        session · {realtimeSession.id}
+                      </span>
+                      <span className={`rounded-full px-3 py-1 ${
+                        realtimeSession.status === 'running' ? 'bg-emerald-500/10 text-emerald-300'
+                          : realtimeSession.status === 'error' ? 'bg-red-500/10 text-red-300'
+                          : 'bg-surface text-secondary'
+                      }`}>
+                        {realtimeSession.status}
+                      </span>
+                      {realtimeSession.selected_goal_name && (
+                        <span className="rounded-full bg-sky-500/10 px-3 py-1 text-sky-300">
+                          goal · {realtimeSession.selected_goal_name}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {realtimeSession?.last_error && (
+                  <div className="flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-xs text-red-300">
+                    <AlertTriangle size={14} />
+                    {realtimeSession.last_error}
+                  </div>
+                )}
+
+                <RealtimeGoalEditor
+                  stateVars={stateVars}
+                  goals={realtimeGoals}
+                  onChange={setRealtimeGoals}
+                />
+
+                {realtimeSession && (
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <div className="rounded-2xl border border-border bg-base/50 p-4">
+                      <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-secondary">
+                        Session state
+                      </div>
+                      <div className="space-y-2">
+                        {Object.entries(realtimeSession.current_state || {}).length === 0 ? (
+                          <div className="text-sm text-muted">저장된 planner state 없음</div>
+                        ) : Object.entries(realtimeSession.current_state || {}).map(([key, value]) => (
+                          <div key={`rt-current:${key}`} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface/60 px-3 py-2 text-sm">
+                            <span className="font-mono text-primary">{key}</span>
+                            <span className="font-mono text-secondary">{value}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-border bg-base/50 p-4">
+                      <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-secondary">
+                        Live state
+                      </div>
+                      <div className="space-y-2">
+                        {Object.entries(realtimeSession.live_state || {}).length === 0 ? (
+                          <div className="text-sm text-muted">실행 중인 planner state 없음</div>
+                        ) : Object.entries(realtimeSession.live_state || {}).map(([key, value]) => (
+                          <div key={`rt-live:${key}`} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface/60 px-3 py-2 text-sm">
+                            <span className="font-mono text-primary">{key}</span>
+                            <span className="font-mono text-secondary">{value}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </ThemedSection>
 
             {/* ========================================================== */}
             {/* PLAN & EXECUTION — rose (prominent)                        */}

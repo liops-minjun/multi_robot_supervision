@@ -21,6 +21,7 @@ type Server struct {
 	stateManager    *state.GlobalStateManager
 	scheduler       *executor.Scheduler
 	planExecutor    *executor.PlanExecutor
+	realtimePddl    *RealtimePddlManager
 	wsHub           *WebSocketHub
 	quicHandler     *fleetgrpc.RawQUICHandler
 	definitionsPath string
@@ -40,6 +41,7 @@ func NewServer(repo *db.Repository, stateManager *state.GlobalStateManager, sche
 	s.planExecutor = executor.NewPlanExecutor(scheduler, stateManager, repo, func(msg interface{}) {
 		wsHub.Broadcast(msg)
 	})
+	s.realtimePddl = NewRealtimePddlManager(s)
 
 	s.setupRouter()
 
@@ -264,6 +266,13 @@ func (s *Server) setupRouter() {
 				r.Get("/", s.ListPlanExecutions)
 				r.Get("/{executionID}", s.GetPlanExecution)
 				r.Post("/{executionID}/cancel", s.CancelPlanExecution)
+			})
+
+			r.Route("/realtime-sessions", func(r chi.Router) {
+				r.Get("/", s.ListRealtimeSessions)
+				r.Post("/", s.StartRealtimeSession)
+				r.Get("/{sessionID}", s.GetRealtimeSession)
+				r.Post("/{sessionID}/stop", s.StopRealtimeSession)
 			})
 
 			// Resource allocations
