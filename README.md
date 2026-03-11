@@ -973,3 +973,11 @@ Important regression test points:
 
 상세 메모:
 - `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`
+
+### 2026-03-11 Update (starter profile scope expanded)
+
+- `examples/task_distributor_profiles/realtime_cnc_starter.json` was expanded to include a fuller baseline:
+  - CNC resources: `cnc01`~`cnc06` (+ `cnc0` type)
+  - Charger resources: `charger01`, `charger02` (+ `charger` type)
+  - CNC/agent planning states expanded (including `at_cnc01`~`at_cnc06`, `cnc01_status`~`cnc06_status`, `agent01_battery_low`~`agent03_battery_low`, `pending_leave`)
+- This makes the starter profile closer to the real multi-CNC realtime test setup instead of a minimal single-CNC seed.
