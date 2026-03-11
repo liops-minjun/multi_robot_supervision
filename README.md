@@ -981,3 +981,12 @@ Important regression test points:
   - Charger resources: `charger01`, `charger02` (+ `charger` type)
   - CNC/agent planning states expanded (including `at_cnc01`~`at_cnc06`, `cnc01_status`~`cnc06_status`, `agent01_battery_low`~`agent03_battery_low`, `pending_leave`)
 - This makes the starter profile closer to the real multi-CNC realtime test setup instead of a minimal single-CNC seed.
+
+### 2026-03-11 Update (single-CNC quickstart profile)
+
+- Added a run-ready single CNC profile:
+  - `examples/task_distributor_profiles/realtime_cnc01_quickstart.json`
+- Purpose:
+  - immediate test with only `cnc01` without multi-CNC state/resource overhead
+  - includes task/realtime-goal defaults and a default selected agent name (`Task Manager-001`) for quicker bring-up
+- Recommended when you want to quickly validate realtime flow end-to-end before scaling to cnc01~cnc06.
