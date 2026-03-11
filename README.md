@@ -678,3 +678,219 @@ MIT License
 
 상세 메모:
 - `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`
+
+## 2026-03-10 - Generic resource-grounded PDDL task 지원
+
+- 목적:
+  - CNC/charger마다 behavior tree를 따로 만들지 않고, 하나의 generic task 템플릿을 여러 resource 인스턴스에 재사용할 수 있도록 확장
+- 백엔드 수정:
+  - planner solve 전에 `type:` resource를 가진 task를 concrete resource instance별 task로 grounding
+  - task-level planning metadata에서 다음 placeholder 지원
+    - `{{resource.name}}`
+    - `{{resource.id}}`
+    - `{{resource.kind}}`
+    - `{{resource.type_name}}`
+    - `{{resource.type_id}}`
+  - grounded task는 runtime params (`resource_name`, `resource.id` 등)를 함께 들고 실행 단계까지 전달
+  - reachability check가 task preconditions도 고려하도록 개선
+- 프론트 수정:
+  - ActionGraph `PDDL Config` 설명에 generic resource placeholder / runtime param 사용법 추가
+- 사용 예:
+  - Required States: `{{resource.name}}_empty == true`
+  - Result States: `{{resource.name}}_empty = false`
+  - Action goal param: `${resource_name}` 또는 `${resource.name}`
+- 효과:
+  - `go_to_cnc_and_park`, `run_cnc_service_cycle` 같은 task를 CNC 인스턴스별로 복제하지 않고도 planning 가능
+- 주의:
+  - generic task를 쓰려면 Task Distributor에 실제 state 변수(`cnc01_empty`, `cnc02_empty` 등)는 여전히 선언되어 있어야 함
+  - 기존 concrete task는 그대로 동작해야 하지만 single-task / multi-task solve/execute 회귀 테스트 필요
+
+상세 메모:
+- `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`
+
+## 2026-03-10 - Generic PDDL placeholder / action param UX 보완
+
+- 목적:
+  - generic resource task를 실제 UI에서 자연스럽게 설정할 수 있도록 placeholder 기반 state 입력과 action goal param runtime binding UX를 보완
+- 프론트 수정:
+  - `PDDL Config`의 Required States / Result States를 strict select-only 방식에서
+    **직접 입력 + datalist 추천** 방식으로 변경
+  - common placeholder 빠른 입력 버튼 추가
+    - `{{resource.name}}_empty`
+    - `at_{{resource.name}}`
+  - placeholder state(`{{resource.name}}_empty` 등)가 저장 시 필터링되어 사라지지 않도록 보완
+  - string goal param에서 `PDDL / 실행 변수 사용` 옵션 추가
+    - `${resource_name}`
+    - `${resource.name}`
+    - `${resource_id}`
+    - `${resource.id}`
+    - `${resource_type_name}`
+    - `${resource.type_name}`
+    - `${resource_type_id}`
+    - `${resource.type_id}`
+- 효과:
+  - generic task에서 `{{resource.name}}_empty == true` 같은 조건을 직접 입력 가능
+  - `navigate_and_park.marker_name` 같은 string goal param에 `${resource_name}`를 UI에서 바로 선택 가능
+- 주의:
+  - `[TYPE] CNC`는 여러 CNC에 재사용할 generic task일 때만 필요하고, 고정된 `cnc01` 전용 task면 instance resource만 선택해도 됨
+  - 영향 범위가 goal parameter binding UI에도 있으므로 기존 `이전 Step 결과 사용(step_result)` 흐름 회귀 테스트 필요
+- 추가 보완:
+  - primitive/string goal param에서 `PDDL / 실행 변수 사용`이 "사용 가능한 변수 없음"으로 뜨던 전달 누락 버그 수정
+  - GoalParametersSection의 runtime binding 목록이 실제 parameter editor까지 전달되도록 정리
+
+상세 메모:
+- `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`
+
+## 2026-03-10 - PDDL authoring/execution follow-up fixes
+
+- 목적:
+  - generic CNC PDDL 테스트 중 나온 3가지 문제를 보완
+    1. placeholder state 변수 선택 UX 개선
+    2. PDDL 실행 상태가 메뉴 이동 후에도 유지되도록 보완
+    3. PDDL 실행 시 agent가 최신 BT가 아니라 구버전 deployed graph를 쓰던 문제 수정
+- 프론트 수정:
+  - ActionGraph `PDDL Config`의 Required / Result state 변수 입력칸을 포커스하면 즉시 추천 목록이 뜨도록 변경
+  - 추천 목록은 실제 distributor state + instance state에서 추론한 generic placeholder를 함께 표시
+    - 예: `{{resource.name}}_empty`, `at_{{resource.name}}`, `{{resource.name}}_service_done`
+  - PDDL 페이지 draft persistence에 마지막 `plan`, `executionId`도 저장/복원하도록 확장
+  - 다른 메뉴로 갔다가 돌아와도 실행 polling을 다시 시작해서 BT 실행 제어 보드가 비워지지 않도록 수정
+- 백엔드 수정:
+  - 원인 확인: 선택 agent에 배포된 BT가 `deployment_status=outdated`, `deployed_version < server_version` 상태여서
+    최근 편집한 `${resource_name}` 바인딩이 실제 실행에 반영되지 않았음
+  - `Scheduler.StartTask()`에서 실행 직전 agent의 graph assignment를 확인하고, 구버전/미배포 상태면 최신 BT를 자동 deploy 하도록 수정
+- 효과:
+  - generic state placeholder를 더 자연스럽게 입력 가능
+  - PDDL 실행 중 메뉴 이동 후에도 진행 상태를 계속 확인 가능
+  - 최근 수정한 BT(goal param runtime binding 포함)가 PDDL 실행에서 실제 agent 쪽에도 반영됨
+- 주의 / 회귀 테스트:
+  - `PDDL Config` 입력칸 클릭 시 placeholder 추천이 바로 보이는지 확인
+  - PDDL 실행 후 다른 메뉴 갔다가 돌아와도 실행 보드가 그대로 유지되는지 확인
+  - 최근 수정한 BT를 수동 deploy 없이 실행했을 때 최신 버전이 반영되는지 확인
+- 기존 non-PDDL BT 실행도 task start 시 자동 deploy 경로를 타게 될 수 있으므로 함께 회귀 테스트 필요
+
+상세 메모:
+- `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`
+
+## 2026-03-10 - PDDL Config 저장 범위 / 최신 그래프 재배포 보강
+
+- 목적:
+  - `PDDL Config` 저장 버튼을 눌렀을 때 PDDL 메타데이터만이 아니라 현재 task 그래프 자체도 함께 안정적으로 저장되도록 보강
+  - 최근 편집된 BT가 마지막 deploy 시점보다 새로울 경우, 실행 전에 다시 deploy 되도록 판단 기준을 강화
+- 프론트 수정:
+  - `TaskPddlConfigModal` 저장 시 이제 아래를 한 번에 같이 저장
+    - `steps`
+    - `entry_point`
+    - `task_distributor_id`
+    - `planning_task`
+  - 즉 모달의 `저장` 버튼이 task 전체 스냅샷을 함께 저장하므로, action 블록을 편집한 뒤 모달에서 저장하고 다른 메뉴로 이동했다가 돌아와도 그래프가 사라질 가능성을 줄임
+- 백엔드 수정:
+  - `Scheduler.ensureGraphDeployed()`가 더 이상 단순히 `deployed_version == server_version`만으로 최신 배포라고 판단하지 않음
+  - 아래 조건을 모두 만족할 때만 deploy 생략:
+    - `deployment_status == deployed`
+    - `deployed_version == server_version`
+    - `deployed_at` 존재
+    - `behavior_tree.updated_at <= deployed_at`
+  - 따라서 BT를 수정한 뒤 agent 쪽에 이전 버전/동일 버전 그래프가 남아 있어도, 마지막 deploy 시점보다 서버 그래프가 새로우면 실행 전에 다시 deploy
+- 기대 효과:
+  - `PDDL Config` 저장 후 다른 메뉴로 이동했다 와도 action node / entry point / PDDL 설정이 함께 유지되어야 함
+  - generic binding `${resource_name}` 같은 최신 goal parameter 변경이 `CNC_01` 같은 과거 값 대신 실제 최신 그래프로 반영될 가능성이 높아짐
+- 주의 / 회귀 테스트:
+  - task graph를 수정한 뒤 `PDDL Config -> 저장`만 눌러도 그래프가 함께 유지되는지 확인
+  - generic CNC 테스트에서 `go_to_cnc_01_and_park`가 여전히 stale `CNC_01`이 아니라 실제 resource 이름으로 실행되는지 확인
+  - deploy 판단이 더 엄격해져서 기존 task start 시 첫 실행 지연이 약간 늘 수 있으므로 기존 BT 실행도 함께 점검 필요
+
+상세 메모:
+- `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`
+
+
+MCS-side concrete runtime graph binding
+======================================
+
+Date:
+- 2026-03-10
+
+Goal:
+- Stop relying on agent-side `${resource_name}` expression evaluation for PDDL-selected resources.
+- Make MCS/server concretize runtime bindings before execution so task-scoped values such as `cnc01` are baked into the graph that gets dispatched.
+
+What changed:
+- `Scheduler.StartTask()` now prepares an execution graph after runtime params are known.
+- If action goal params contain expression bindings that can be resolved from execution params (for example `${resource_name}`), the server materializes a concrete runtime graph before dispatch.
+- The materialized graph is deployed to the target agent with a task-scoped temporary graph ID like `<graph_id>__exec__<task>`.
+- Expression-based action params that are fully resolvable are converted to constant field sources on the server side.
+- Inline/data payload strings that include runtime placeholders are also substituted on the server side.
+- `SendStartTask` now uses the runtime graph ID when a concrete execution graph was prepared.
+- After task completion, the server invalidates the temporary deployed graph from its local graph cache.
+
+Main files changed:
+- central_server_go/internal/executor/scheduler.go
+- central_server_go/internal/executor/runtime_graph_materializer.go
+
+Expected effect:
+- Generic PDDL tasks such as `go_to_cnc_01_and_park` should now send the selected PDDL resource value (for example `cnc01`) to the ROS action instead of falling back to stale/default values like `CNC_01`.
+- This shifts the concrete binding responsibility to MCS/server, which matches the current task-template/PDDL design better.
+
+Important regression test points:
+- Re-run the generic CNC flow and confirm park action logs now show the bound resource name from PDDL (e.g. `cnc01`).
+- Re-test normal non-PDDL BT execution because execution now may deploy a task-scoped runtime graph when runtime expressions are present.
+- Expect first task start with runtime bindings to be a bit slower because the server deploys a concrete runtime graph right before dispatch.
+
+## 2026-03-10 - PDDL 취소/재실행/RTM stale BT 보강
+
+- 목적:
+  - 다음 단계 진행 전에 아래 3가지 막히는 문제를 먼저 보완
+    1. PDDL 실행 후 `실행 취소`를 눌러도 실제 runtime task/action이 계속 돌던 문제
+    2. 한 번 실행이 끝난 뒤 다시 `풀기 -> 실행`하면 wave 1에 들어가지만 실제 액션이 dispatch되지 않던 문제
+    3. RTM의 현재 할당 BT에서 이미 없어졌거나 stale한 BT를 누르면 패널이 검은 화면처럼 비던 문제
+- 백엔드 수정:
+  - `PlanExecutor.CancelExecution()`이 이제 plan context만 취소하는 것이 아니라, 이미 시작된 runtime task들도 `Scheduler.CancelTask(...)`로 함께 취소하도록 보강
+  - plan/group 실행 중 context 취소가 들어오면 실패가 아니라 `cancelled` 경로로 정리되도록 보완
+  - `Scheduler.StartTask()`가 task queue 등록 직후 `DispatchIdleAgents()`를 호출하도록 변경
+    - 이미 agent가 idle이면 다음 heartbeat를 기다리지 않고 즉시 dispatch 가능
+- 프론트 수정:
+  - Agent Dashboard / RTM current assigned BT 패널에서 stale/deleted BT fetch 실패 시
+    - retry를 멈추고
+    - 다른 유효한 BT로 fallback 하거나 선택을 해제
+    - 검은 패널 대신 안내 메시지를 표시
+- 기대 효과:
+  - `실행 취소`가 실제 action 중단까지 이어져야 함
+  - 같은 PDDL 문제를 연속 재실행해도 첫 wave가 바로 dispatch되어야 함
+  - RTM stale BT 선택 시 화면이 비지 않고 안내/복구가 되어야 함
+- 주의 / 회귀 테스트:
+  - 일반(non-PDDL) task 취소도 cancellation 전파 영향이 있을 수 있으므로 함께 확인 필요
+  - task queue 직후 즉시 dispatch가 들어가므로 기존 일반 BT 실행 타이밍도 함께 점검 필요
+
+상세 메모:
+- `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`
+
+## 2026-03-10 - 태스크 이름/ID 수정 기능 추가
+
+- 목적:
+  - Task Definitions에서 태스크 정체성(identity) 자체를 수정할 수 있도록 보완
+  - 기존에는 생성 시점에만 ID/이름을 정하고 이후 변경이 어려웠음
+- 추가 API:
+  - `PATCH /api/templates/{templateID}/identity`
+  - 요청 본문: `{ "new_id"?: string, "new_name"?: string }`
+- 백엔드 변경:
+  - `UpdateTemplateIdentity` 핸들러 추가
+  - `RenameBehaviorTreeIdentity(...)` 추가
+    - ID 변경 시 연관 참조를 함께 업데이트:
+      - `ActionGraph.id`, graph 구조 노드의 `graph_id`
+      - `AgentActionGraph.behavior_tree_id`
+      - `Task.behavior_tree_id`
+      - `Agent.current_graph_id`
+      - `PlanningProblem.behavior_tree_id`, `behavior_tree_ids`
+  - ID 변경 시 기존 할당은 재배포가 필요하므로 `outdated` 상태로 강등
+- 프론트 변경:
+  - ActionGraph 툴바(편집 모드)에 `이름/ID` 버튼 추가
+  - `RenameTemplateIdentityModal` 추가
+  - 수정 성공 시 새 ID로 선택 전환 + 관련 캐시 갱신
+- 기대 효과:
+  - 태스크 생성 후에도 이름/ID를 안전하게 정리 가능
+  - ID 변경 후에도 주요 참조(할당/작업/계획)가 깨지지 않도록 보호
+- 주의 / 회귀 테스트:
+  - ID 변경 직후 첫 실행은 재배포(outdated→deployed) 경로를 탈 수 있어 시작이 약간 느릴 수 있음
+  - 기존 PDDL 실행/취소 흐름도 함께 재검증 권장
+
+상세 메모:
+- `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`

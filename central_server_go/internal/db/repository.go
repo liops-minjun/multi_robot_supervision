@@ -1378,6 +1378,162 @@ func (r *Repository) UpdateBehaviorTree(graph *BehaviorTree) error {
 	return err
 }
 
+// RenameBehaviorTreeIdentity updates behavior tree ID and/or name.
+// When ID changes, related references are updated as well.
+func (r *Repository) RenameBehaviorTreeIdentity(oldID, newID, newName string) error {
+	oldID = strings.TrimSpace(oldID)
+	newID = strings.TrimSpace(newID)
+	newName = strings.TrimSpace(newName)
+
+	if oldID == "" {
+		return fmt.Errorf("old behavior tree id is empty")
+	}
+	if newID == "" {
+		newID = oldID
+	}
+	if newID == oldID && newName == "" {
+		return nil
+	}
+
+	ctx := context.Background()
+	updatedAtMs := time.Now().UTC().UnixMilli()
+
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		// Ensure source graph exists
+		checkRes, err := tx.Run(ctx, `
+			MATCH (g:ActionGraph {id: $old_id})
+			RETURN count(g) AS cnt
+		`, map[string]any{"old_id": oldID})
+		if err != nil {
+			return nil, err
+		}
+		if !checkRes.Next(ctx) || getInt64(checkRes.Record().AsMap(), "cnt") == 0 {
+			return nil, fmt.Errorf("behavior tree not found: %s", oldID)
+		}
+
+		// Ensure target ID is not already used by another graph
+		if newID != oldID {
+			dupRes, err := tx.Run(ctx, `
+				MATCH (g:ActionGraph {id: $new_id})
+				RETURN count(g) AS cnt
+			`, map[string]any{"new_id": newID})
+			if err != nil {
+				return nil, err
+			}
+			if dupRes.Next(ctx) && getInt64(dupRes.Record().AsMap(), "cnt") > 0 {
+				return nil, fmt.Errorf("behavior tree id already exists: %s", newID)
+			}
+		}
+
+		// Rename graph id and all references
+		if newID != oldID {
+			_, err = tx.Run(ctx, `
+				MATCH (g:ActionGraph {id: $old_id})
+				SET g.id = $new_id,
+				    g.updated_at_ms = $updated_at_ms
+			`, map[string]any{
+				"old_id":        oldID,
+				"new_id":        newID,
+				"updated_at_ms": updatedAtMs,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			_, err = tx.Run(ctx, `
+				MATCH (n {graph_id: $old_id})
+				SET n.graph_id = $new_id
+			`, map[string]any{
+				"old_id": oldID,
+				"new_id": newID,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			_, err = tx.Run(ctx, `
+				MATCH (aag:AgentActionGraph {behavior_tree_id: $old_id})
+				SET aag.behavior_tree_id = $new_id,
+				    aag.deployed_version = 0,
+				    aag.deployment_status = "outdated",
+				    aag.deployment_error = "behavior tree id changed",
+				    aag.updated_at_ms = $updated_at_ms
+			`, map[string]any{
+				"old_id":        oldID,
+				"new_id":        newID,
+				"updated_at_ms": updatedAtMs,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			_, err = tx.Run(ctx, `
+				MATCH (t:Task {behavior_tree_id: $old_id})
+				SET t.behavior_tree_id = $new_id
+			`, map[string]any{
+				"old_id": oldID,
+				"new_id": newID,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			_, err = tx.Run(ctx, `
+				MATCH (a:Agent {current_graph_id: $old_id})
+				SET a.current_graph_id = $new_id
+			`, map[string]any{
+				"old_id": oldID,
+				"new_id": newID,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			_, err = tx.Run(ctx, `
+				MATCH (p:PlanningProblem {behavior_tree_id: $old_id})
+				SET p.behavior_tree_id = $new_id
+			`, map[string]any{
+				"old_id": oldID,
+				"new_id": newID,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			_, err = tx.Run(ctx, `
+				MATCH (p:PlanningProblem)
+				WHERE p.behavior_tree_ids CONTAINS $old_marker
+				SET p.behavior_tree_ids = replace(p.behavior_tree_ids, $old_marker, $new_marker)
+			`, map[string]any{
+				"old_marker": fmt.Sprintf(`"%s"`, oldID),
+				"new_marker": fmt.Sprintf(`"%s"`, newID),
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		// Rename display name
+		if newName != "" {
+			_, err = tx.Run(ctx, `
+				MATCH (g:ActionGraph {id: $target_id})
+				SET g.name = $new_name,
+				    g.updated_at_ms = $updated_at_ms
+			`, map[string]any{
+				"target_id":     newID,
+				"new_name":      newName,
+				"updated_at_ms": updatedAtMs,
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		return nil, nil
+	})
+	return err
+}
+
 func (r *Repository) DeleteBehaviorTree(id string) error {
 	ctx := context.Background()
 	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {

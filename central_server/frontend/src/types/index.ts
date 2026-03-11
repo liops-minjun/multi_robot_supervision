@@ -670,6 +670,13 @@ export interface ParameterFieldSource {
   conversion?: TypeConversionConfig  // Optional conversion config
 }
 
+export interface RuntimeBindingOption {
+  key: string
+  expression: string
+  label: string
+  description?: string
+}
+
 // Type conversion configuration
 export interface TypeConversionConfig {
   enabled: boolean

@@ -221,6 +221,7 @@ func (s *Server) setupRouter() {
 			r.Get("/agents/{agentID}/available-templates", s.GetAvailableTemplatesForAgent)
 			r.Get("/{templateID}", s.GetTemplate)
 			r.Put("/{templateID}", s.UpdateTemplate)
+			r.Patch("/{templateID}/identity", s.UpdateTemplateIdentity)
 			r.Delete("/{templateID}", s.DeleteTemplate)
 			r.Get("/{templateID}/assignments", s.GetTemplateAssignments)
 			r.Get("/{templateID}/compatible-agents", s.GetTemplateCompatibleAgents)

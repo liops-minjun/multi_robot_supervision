@@ -1,9 +1,10 @@
 import { useMemo } from 'react'
-import { Link2, Hash, Check, AlertTriangle, X } from 'lucide-react'
+import { Link2, Hash, Check, AlertTriangle, X, Code } from 'lucide-react'
 import type {
   ParameterFieldSource,
   DataTypeInfo,
-  TypeCompatibilityResult
+  TypeCompatibilityResult,
+  RuntimeBindingOption,
 } from '../types'
 import {
   rosTypeToCanonical,
@@ -19,6 +20,7 @@ interface StepInfo {
 interface ParameterSourceSelectorProps {
   fieldSource?: ParameterFieldSource
   availableSteps: StepInfo[]
+  runtimeBindings?: RuntimeBindingOption[]
   onChange: (source: ParameterFieldSource | undefined) => void
   targetFieldType?: string  // Expected type of the target parameter field
   targetFieldName?: string  // Name of the target field (for display)
@@ -64,6 +66,7 @@ function getCompatibilityIndicator(result: TypeCompatibilityResult | null): {
 export default function ParameterSourceSelector({
   fieldSource,
   availableSteps,
+  runtimeBindings = [],
   onChange,
   targetFieldType,
   constantValue,
@@ -76,8 +79,9 @@ export default function ParameterSourceSelector({
     return Math.min(1.0, Math.max(0.1, parsed))
   }
 
-  // Determine current mode: 'constant' or 'binding'
   const isBinding = fieldSource?.source === 'step_result'
+  const isRuntimeBinding = fieldSource?.source === 'expression'
+  const selectedRuntimeBinding = runtimeBindings.find(binding => binding.expression === fieldSource?.expression)
 
   // Parse target type for compatibility checking
   const targetTypeInfo = useMemo<DataTypeInfo | null>(() => {
@@ -114,6 +118,14 @@ export default function ParameterSourceSelector({
     }
   }
 
+  const switchToRuntimeBinding = () => {
+    if (runtimeBindings.length === 0) return
+    onChange({
+      source: 'expression',
+      expression: runtimeBindings[0].expression,
+    })
+  }
+
   // Select a specific field from a step
   const selectField = (stepId: string, fieldName: string) => {
     onChange({
@@ -133,7 +145,7 @@ export default function ParameterSourceSelector({
         {/* Option 1: Fixed Value */}
         <div
           className={`rounded border transition-all cursor-pointer ${
-            !isBinding
+            !isBinding && !isRuntimeBinding
               ? 'border-amber-500/40 bg-amber-500/10'
               : 'border-gray-700 bg-surface hover:border-gray-600'
           }`}
@@ -144,18 +156,18 @@ export default function ParameterSourceSelector({
         >
           <div className="flex items-center gap-1.5 px-2 py-1.5">
             <div className={`w-3 h-3 rounded-full border-[1.5px] flex items-center justify-center ${
-              !isBinding ? 'border-amber-500 bg-amber-500' : 'border-gray-500'
+              !isBinding && !isRuntimeBinding ? 'border-amber-500 bg-amber-500' : 'border-gray-500'
             }`}>
-              {!isBinding && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+              {!isBinding && !isRuntimeBinding && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
             </div>
-            <Hash className={`w-3 h-3 ${!isBinding ? 'text-amber-400' : 'text-muted'}`} />
-            <span className={`text-[11px] font-medium ${!isBinding ? 'text-amber-400' : 'text-secondary'}`}>
+            <Hash className={`w-3 h-3 ${!isBinding && !isRuntimeBinding ? 'text-amber-400' : 'text-muted'}`} />
+            <span className={`text-[11px] font-medium ${!isBinding && !isRuntimeBinding ? 'text-amber-400' : 'text-secondary'}`}>
               고정값 입력
             </span>
           </div>
 
           {/* Constant value input - only when selected */}
-          {!isBinding && onConstantChange && (
+          {!isBinding && !isRuntimeBinding && onConstantChange && (
             <div className="px-2 pb-2">
               {inputType === 'checkbox' ? (
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -371,6 +383,112 @@ export default function ParameterSourceSelector({
                     )
                   })}
                 </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Option 3: Bind from planner/runtime variable */}
+        <div
+          className={`rounded border transition-all ${
+            isRuntimeBinding
+              ? 'border-sky-500/40 bg-sky-500/10'
+              : runtimeBindings.length > 0
+                ? 'border-gray-700 bg-surface hover:border-gray-600 cursor-pointer'
+                : 'border-gray-800 bg-sunken opacity-50 cursor-not-allowed'
+          }`}
+          onClick={(e) => {
+            e.stopPropagation()
+            if (runtimeBindings.length > 0 && !isRuntimeBinding) {
+              switchToRuntimeBinding()
+            }
+          }}
+        >
+          <div className="flex items-center gap-1.5 px-2 py-1.5">
+            <div className={`w-3 h-3 rounded-full border-[1.5px] flex items-center justify-center ${
+              isRuntimeBinding ? 'border-sky-500 bg-sky-500' : 'border-gray-500'
+            }`}>
+              {isRuntimeBinding && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+            </div>
+            <Code className={`w-3 h-3 ${isRuntimeBinding ? 'text-sky-400' : 'text-muted'}`} />
+            <span className={`text-[11px] font-medium ${isRuntimeBinding ? 'text-sky-400' : 'text-secondary'}`}>
+              PDDL / 실행 변수 사용
+            </span>
+            {runtimeBindings.length === 0 && (
+              <span className="text-[9px] text-muted ml-auto">사용 가능한 변수 없음</span>
+            )}
+          </div>
+
+          {isRuntimeBinding && (
+            <div className="px-2 pb-2 space-y-1.5">
+              {fieldSource?.expression && (
+                <div className="flex items-center gap-1.5 px-2 py-1.5 bg-sky-900/30 rounded border border-sky-500/30">
+                  <span className="text-[9px] text-secondary">바인딩:</span>
+                  <code className="text-[11px] text-sky-300 font-mono">
+                    {fieldSource.expression}
+                  </code>
+                  {selectedRuntimeBinding?.label && (
+                    <span className="text-[9px] text-muted ml-auto">
+                      {selectedRuntimeBinding.label}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              <div className="space-y-1">
+                <div className="text-[9px] text-muted">사용할 실행 변수 선택:</div>
+                <div className="max-h-[140px] overflow-y-auto space-y-1">
+                  {runtimeBindings.map((binding) => {
+                    const isSelected = fieldSource?.expression === binding.expression
+                    return (
+                      <button
+                        key={binding.key}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onChange({
+                            source: 'expression',
+                            expression: binding.expression,
+                          })
+                        }}
+                        className={`w-full rounded border px-2 py-1.5 text-left transition-all ${
+                          isSelected
+                            ? 'border-sky-500/50 bg-sky-500/20'
+                            : 'border-gray-700 bg-sunken hover:border-sky-500/30 hover:bg-sky-500/5'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <code className={`text-[11px] font-mono ${isSelected ? 'text-sky-300' : 'text-primary'}`}>
+                            {binding.expression}
+                          </code>
+                          <span className="text-[9px] text-muted">{binding.label}</span>
+                        </div>
+                        {binding.description && (
+                          <div className="mt-1 text-[9px] text-muted">
+                            {binding.description}
+                          </div>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <div className="text-[9px] text-muted">직접 입력</div>
+                <input
+                  type="text"
+                  value={fieldSource?.expression || ''}
+                  onChange={(e) => {
+                    e.stopPropagation()
+                    onChange({
+                      source: 'expression',
+                      expression: e.target.value,
+                    })
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  placeholder="${resource_name}"
+                  className="w-full rounded border border-sky-500/30 bg-sunken px-2 py-1.5 text-[11px] text-primary font-mono focus:outline-none focus:border-sky-400"
+                />
               </div>
             </div>
           )}

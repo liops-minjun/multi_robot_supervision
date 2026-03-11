@@ -876,11 +876,22 @@ export default function AgentDashboard() {
     return sortedActionGraphs.find(g => g.id === selectedGraphId) || null
   }, [sortedActionGraphs, selectedGraphId])
 
-  const { data: fleetGraph } = useQuery({
+  const { data: fleetGraph, error: fleetGraphError } = useQuery({
     queryKey: ['action-graph', fleetGraphMeta?.id],
     queryFn: () => actionGraphApi.get(fleetGraphMeta!.id),
     enabled: !!fleetGraphMeta,
+    retry: false,
   })
+
+  useEffect(() => {
+    if (!fleetGraphMeta || !fleetGraphError) return
+    const fallback = sortedActionGraphs.find(g => g.id !== fleetGraphMeta.id)
+    if (fallback) {
+      setSelectedGraphId(fallback.id)
+    } else {
+      setSelectedGraphId(null)
+    }
+  }, [fleetGraphMeta, fleetGraphError, sortedActionGraphs])
 
   const { data: stateDefinitions = [] } = useQuery({
     queryKey: ['state-definitions'],
@@ -2004,14 +2015,26 @@ export default function AgentDashboard() {
                     )}
 
                     <div className="h-[380px] rounded-lg border border-primary overflow-hidden bg-base">
-                      <ActionGraphViewer
-                        actionGraph={fleetGraph}
-                        stateDef={selectedStateDef}
-                        currentStepId={currentStepId}
-                        className="h-full"
-                        showControls={true}
-                        showMiniMap={false}
-                      />
+                      {fleetGraphMeta && fleetGraphError && !fleetGraph ? (
+                        <div className="h-full flex items-center justify-center text-center px-6">
+                          <div className="space-y-2">
+                            <AlertTriangle className="w-8 h-8 text-yellow-400 mx-auto" />
+                            <div className="text-sm text-primary">선택한 BT를 불러올 수 없습니다.</div>
+                            <div className="text-xs text-muted">
+                              이미 삭제되었거나 현재 RTM에 더 이상 유효하지 않은 할당일 수 있습니다.
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <ActionGraphViewer
+                          actionGraph={fleetGraph}
+                          stateDef={selectedStateDef}
+                          currentStepId={currentStepId}
+                          className="h-full"
+                          showControls={true}
+                          showMiniMap={false}
+                        />
+                      )}
                     </div>
                   </div>
                 )}

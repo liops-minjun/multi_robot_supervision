@@ -20,6 +20,7 @@ type PlanTask struct {
 	RequiredResources   []string
 	ResultStates        []db.PlanningEffect
 	DuringState         []db.PlanningEffect
+	RuntimeParams       map[string]string
 }
 
 // AgentInfo describes an agent available for task assignment.
@@ -52,6 +53,8 @@ type TaskAssignment struct {
 	AgentName      string `json:"agent_name"`
 	Order          int    `json:"order"`
 	Reason         string `json:"reason"`
+	RuntimeParams  map[string]string `json:"runtime_params,omitempty"`
+	ResultStates   []db.PlanningEffect `json:"result_states,omitempty"`
 }
 
 // StepAssignment is kept as an internal compatibility alias during the refactor.

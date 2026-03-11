@@ -46,6 +46,129 @@ type Scheduler struct {
 	wg     sync.WaitGroup
 }
 
+func (s *Scheduler) ensureGraphDeployed(ctx context.Context, agentID string, dbGraph *db.BehaviorTree) error {
+	if dbGraph == nil {
+		return fmt.Errorf("behavior tree is nil")
+	}
+
+	assignment, err := s.repo.GetAgentBehaviorTree(agentID, dbGraph.ID)
+	if err != nil {
+		return fmt.Errorf("load agent behavior tree assignment: %w", err)
+	}
+
+	if assignment != nil &&
+		assignment.DeployedVersion == dbGraph.Version &&
+		assignment.DeploymentStatus == "deployed" &&
+		assignment.DeployedAt.Valid &&
+		!dbGraph.UpdatedAt.After(assignment.DeployedAt.Time) {
+		return nil
+	}
+
+	if s.quicHandler == nil {
+		return fmt.Errorf("raw QUIC handler is not configured")
+	}
+
+	reason := "missing assignment"
+	if assignment != nil {
+		switch {
+		case assignment.DeploymentStatus != "deployed":
+			reason = "assignment status=" + assignment.DeploymentStatus
+		case assignment.DeployedVersion != dbGraph.Version:
+			reason = fmt.Sprintf("deployed_version=%d server_version=%d", assignment.DeployedVersion, dbGraph.Version)
+		case !assignment.DeployedAt.Valid:
+			reason = "missing deployed_at"
+		case dbGraph.UpdatedAt.After(assignment.DeployedAt.Time):
+			reason = fmt.Sprintf("graph updated_at=%s is newer than deployed_at=%s", dbGraph.UpdatedAt.Format(time.RFC3339), assignment.DeployedAt.Time.Format(time.RFC3339))
+		default:
+			reason = "stale deployment metadata"
+		}
+	}
+	log.Printf("[Scheduler] Ensuring latest graph %s for agent %s (%s)", dbGraph.ID, agentID, reason)
+
+	canonicalGraph, err := graph.FromDBModel(dbGraph)
+	if err != nil {
+		return fmt.Errorf("convert graph to canonical: %w", err)
+	}
+	if err := canonicalGraph.Validate(); err != nil {
+		return fmt.Errorf("graph validation failed before deploy: %w", err)
+	}
+	if canonicalGraph.HasCycle() {
+		return fmt.Errorf("cannot deploy graph with cycles")
+	}
+
+	canonicalGraph.BehaviorTree.AgentID = agentID
+	canonicalGraph.SubstituteServerPatterns("")
+
+	graphJSON, err := json.Marshal(canonicalGraph)
+	if err != nil {
+		return fmt.Errorf("serialize canonical graph: %w", err)
+	}
+
+	now := time.Now()
+	if assignment == nil {
+		assignment = &db.AgentBehaviorTree{
+			ID:               uuid.New().String(),
+			AgentID:          agentID,
+			BehaviorTreeID:   dbGraph.ID,
+			ServerVersion:    dbGraph.Version,
+			DeployedVersion:  0,
+			DeploymentStatus: "deploying",
+			Enabled:          true,
+			Priority:         0,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+		}
+		if err := s.repo.CreateAgentBehaviorTree(assignment); err != nil {
+			return fmt.Errorf("create agent behavior tree assignment: %w", err)
+		}
+	} else {
+		assignment.ServerVersion = dbGraph.Version
+		assignment.DeploymentStatus = "deploying"
+		assignment.DeploymentError = sql.NullString{}
+		assignment.UpdatedAt = now
+		if err := s.repo.UpdateAgentBehaviorTree(assignment); err != nil {
+			return fmt.Errorf("mark graph deployment in progress: %w", err)
+		}
+	}
+
+	deployCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	result, err := s.quicHandler.DeployCanonicalGraph(deployCtx, agentID, graphJSON)
+	if err != nil {
+		assignment.DeploymentStatus = "failed"
+		assignment.DeploymentError = sql.NullString{String: err.Error(), Valid: true}
+		assignment.UpdatedAt = time.Now()
+		_ = s.repo.UpdateAgentBehaviorTree(assignment)
+		return fmt.Errorf("deploy latest graph to agent: %w", err)
+	}
+	if !result.Success {
+		deployErr := strings.TrimSpace(result.Error)
+		if deployErr == "" {
+			deployErr = "unknown deploy error"
+		}
+		assignment.DeploymentStatus = "failed"
+		assignment.DeploymentError = sql.NullString{String: deployErr, Valid: true}
+		assignment.UpdatedAt = time.Now()
+		_ = s.repo.UpdateAgentBehaviorTree(assignment)
+		return fmt.Errorf("deploy latest graph to agent failed: %s", deployErr)
+	}
+
+	assignment.ServerVersion = dbGraph.Version
+	assignment.DeployedVersion = dbGraph.Version
+	assignment.DeploymentStatus = "deployed"
+	assignment.DeploymentError = sql.NullString{}
+	assignment.DeployedAt = sql.NullTime{Time: time.Now(), Valid: true}
+	assignment.UpdatedAt = time.Now()
+	if err := s.repo.UpdateAgentBehaviorTree(assignment); err != nil {
+		return fmt.Errorf("update deployed graph version: %w", err)
+	}
+
+	s.stateManager.GraphCache().SetDeployed(agentID, dbGraph.ID, canonicalGraph)
+	log.Printf("[Scheduler] Auto-deployed latest graph %s v%d to agent %s before execution", dbGraph.ID, dbGraph.Version, agentID)
+	return nil
+}
+
 // TaskCompletionResult represents the result of a completed task
 type TaskCompletionResult struct {
 	TaskID string
@@ -79,6 +202,7 @@ const (
 type RunningTask struct {
 	ID                 string
 	BehaviorTreeID     string
+	RuntimeGraphID     string
 	AgentID            string
 	TaskDistributorID  string
 	PlanProblemID      string
@@ -439,7 +563,12 @@ func (s *Scheduler) dispatchQueuedTaskLocked(task *RunningTask, now time.Time) e
 		sendParams[taskParamResourceBindings] = string(bindingJSON)
 	}
 
-	if err := s.quicHandler.SendStartTask(task.AgentID, task.ID, task.BehaviorTreeID, task.AgentID, sendParams); err != nil {
+	graphID := task.RuntimeGraphID
+	if strings.TrimSpace(graphID) == "" {
+		graphID = task.BehaviorTreeID
+	}
+
+	if err := s.quicHandler.SendStartTask(task.AgentID, task.ID, graphID, task.AgentID, sendParams); err != nil {
 		s.stateManager.ReleaseTaskResources(task.ID, task.AgentID)
 		s.stateManager.UnregisterTaskRuntime(task.ID)
 		s.stateManager.CompleteExecution(task.AgentID, task.ReservedZones)
@@ -642,6 +771,11 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 		taskDistributorID = dbGraph.TaskDistributorID.String
 	}
 
+	runtimeGraphID, err := s.prepareExecutionGraph(ctx, agentID, taskID, dbGraph, paramStrings)
+	if err != nil {
+		return "", fmt.Errorf("failed to prepare execution graph: %w", err)
+	}
+
 	planningTask, err := db.DecodePlanningTaskSpec(dbGraph.PlanningTask)
 	if err != nil {
 		return "", fmt.Errorf("failed to decode task planning metadata: %w", err)
@@ -759,6 +893,7 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 	task := &RunningTask{
 		ID:                taskID,
 		BehaviorTreeID:    actionGraphID,
+		RuntimeGraphID:    runtimeGraphID,
 		AgentID:           agentID,
 		TaskDistributorID: taskDistributorID,
 		PlanProblemID:     planProblemID,
@@ -791,6 +926,7 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 
 	// Start lifecycle watcher in background. Actual dispatch happens on heartbeat.
 	go s.runTask(taskCtx, task)
+	s.DispatchIdleAgents()
 
 	log.Printf("Task queued: %s (graph=%s, agent=%s, entry=%s)", taskID, actionGraphID, agentID, entryStepID)
 
@@ -835,6 +971,10 @@ func (s *Scheduler) runTask(ctx context.Context, task *RunningTask) {
 		s.removeQueuedTaskLocked(task.AgentID, task.ID)
 		delete(s.tasks, task.ID)
 		s.tasksMu.Unlock()
+
+		if task.RuntimeGraphID != "" && task.RuntimeGraphID != task.BehaviorTreeID {
+			s.stateManager.GraphCache().InvalidateDeployed(task.AgentID, task.RuntimeGraphID)
+		}
 
 		s.DispatchIdleAgents()
 

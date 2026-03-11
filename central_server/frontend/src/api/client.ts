@@ -576,6 +576,15 @@ export const templateApi = {
     return data
   },
 
+  // Update template identity (id/name)
+  updateIdentity: async (
+    id: string,
+    payload: { new_id?: string; new_name?: string }
+  ): Promise<ActionGraph> => {
+    const { data } = await api.patch(`/templates/${id}/identity`, payload)
+    return data
+  },
+
   // Delete a template
   delete: async (id: string): Promise<void> => {
     await api.delete(`/templates/${id}`)

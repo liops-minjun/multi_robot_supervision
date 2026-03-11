@@ -115,17 +115,72 @@ function buildPlanningResourceTokenSet(resources: TaskDistributorResource[]): Se
   return new Set(resources.map(resource => `${resource.kind === 'type' ? 'type' : 'instance'}:${resource.id}`))
 }
 
+function containsPlanningResourcePlaceholder(value: string): boolean {
+  return value.includes('{{resource.')
+}
+
+function inferPlanningStateVar(
+  variable: string,
+  states: TaskDistributorState[],
+  resources: TaskDistributorResource[]
+): TaskDistributorState | undefined {
+  const exact = states.find(state => state.name === variable)
+  if (exact) return exact
+  if (!containsPlanningResourcePlaceholder(variable)) return undefined
+
+  const instanceResources = resources.filter(resource => resource.kind !== 'type')
+  const matches = instanceResources
+    .map(resource => states.find(state => state.name === variable.split('{{resource.name}}').join(resource.name)))
+    .filter((state): state is TaskDistributorState => Boolean(state))
+
+  if (matches.length === 0) return undefined
+  const [first] = matches
+  return matches.every(state => state.type === first.type) ? first : undefined
+}
+
+function buildPlanningVariableSuggestions(
+  states: TaskDistributorState[],
+  resources: TaskDistributorResource[]
+): string[] {
+  const suggestions = new Set<string>()
+  const instanceResources = resources.filter(resource => resource.kind !== 'type' && resource.name)
+
+  for (const state of states) {
+    if (state.name) suggestions.add(state.name)
+  }
+
+  for (const state of states) {
+    for (const resource of instanceResources) {
+      if (!resource.name || !state.name.includes(resource.name)) continue
+      suggestions.add(state.name.split(resource.name).join('{{resource.name}}'))
+    }
+  }
+
+  const priority = (value: string) => (value.includes('{{resource.name}}') ? 0 : 1)
+  return Array.from(suggestions).sort((left, right) => {
+    const byPriority = priority(left) - priority(right)
+    if (byPriority !== 0) return byPriority
+    return left.localeCompare(right)
+  })
+}
+
+function isPlanningStateReferenceAllowed(
+  variable: string,
+  states: TaskDistributorState[]
+): boolean {
+  return states.some(state => state.name === variable) || containsPlanningResourcePlaceholder(variable)
+}
+
 function filterPlanningTaskForDistributor(
   spec: PlanningTaskSpec,
   states: TaskDistributorState[],
   resources: TaskDistributorResource[]
 ): PlanningTaskSpec {
-  const validStateNames = new Set(states.map(state => state.name))
   const validResourceTokens = buildPlanningResourceTokenSet(resources)
 
   return {
     preconditions: (spec.preconditions || [])
-      .filter(condition => validStateNames.has(condition.variable))
+      .filter(condition => isPlanningStateReferenceAllowed(condition.variable, states))
       .map(condition => ({
         variable: condition.variable,
         operator: condition.operator || '==',
@@ -135,11 +190,70 @@ function filterPlanningTaskForDistributor(
       validResourceTokens.size === 0 ? false : validResourceTokens.has(token)
     ),
     during_state: (spec.during_state || [])
-      .filter(effect => validStateNames.has(effect.variable))
+      .filter(effect => isPlanningStateReferenceAllowed(effect.variable, states))
       .slice(0, 1),
     result_states: (spec.result_states || [])
-      .filter(effect => validStateNames.has(effect.variable)),
+      .filter(effect => isPlanningStateReferenceAllowed(effect.variable, states)),
   }
+}
+
+function PlanningVariableInput({
+  value,
+  onChange,
+  suggestions,
+  placeholder,
+}: {
+  value: string
+  onChange: (value: string) => void
+  suggestions: string[]
+  placeholder: string
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+
+  const filteredSuggestions = useMemo(() => {
+    const keyword = value.trim().toLowerCase()
+    if (!keyword) return suggestions
+    return suggestions.filter(option => option.toLowerCase().includes(keyword))
+  }, [suggestions, value])
+
+  return (
+    <div className="relative min-w-0 flex-[1_1_180px]">
+      <input
+        className="w-full rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value)
+          setIsOpen(true)
+        }}
+        onFocus={() => setIsOpen(true)}
+        onBlur={() => window.setTimeout(() => setIsOpen(false), 120)}
+        placeholder={placeholder}
+      />
+      {isOpen && filteredSuggestions.length > 0 && (
+        <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-30 max-h-56 overflow-y-auto rounded-lg border border-violet-500/20 bg-surface shadow-xl">
+          {filteredSuggestions.map((option) => (
+            <button
+              key={option}
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault()
+                onChange(option)
+                setIsOpen(false)
+              }}
+              className="flex w-full items-center justify-between gap-3 border-b border-border/60 px-3 py-2 text-left text-xs text-primary transition last:border-b-0 hover:bg-violet-500/10"
+            >
+              <span className="truncate font-mono">{option}</span>
+              {option.includes('{{resource.name}}') && (
+                <span className="shrink-0 rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] text-violet-200">
+                  placeholder
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 const OUTCOME_EDGE_COLORS: Record<ActionOutcome, string> = {
@@ -498,6 +612,7 @@ function ActionGraphEditor() {
   // Modal state
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showAssignModal, setShowAssignModal] = useState(false)
+  const [showRenameModal, setShowRenameModal] = useState(false)
   const [showAddStateModal, setShowAddStateModal] = useState(false)
   const [showTaskPddlConfigModal, setShowTaskPddlConfigModal] = useState(false)
 
@@ -2791,6 +2906,16 @@ function ActionGraphEditor() {
                   )}
                 </button>
               )}
+              {isEditing && (
+                <button
+                  onClick={() => setShowRenameModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border bg-elevated text-secondary border-primary hover:bg-surface hover:text-primary transition-colors"
+                  title="태스크 이름/ID 수정"
+                >
+                  <Edit size={14} />
+                  <span>이름/ID</span>
+                </button>
+              )}
               <button
                 onClick={() => {
                   if (!selectedTemplateId) return
@@ -3049,6 +3174,28 @@ function ActionGraphEditor() {
         />
       )}
 
+      {showRenameModal && selectedTemplate && (
+        <RenameTemplateIdentityModal
+          template={selectedTemplate}
+          onClose={() => setShowRenameModal(false)}
+          onRenamed={(newId) => {
+            setShowRenameModal(false)
+            if (newId !== selectedTemplateId) {
+              setSelectedTemplateId(newId)
+            }
+            queryClient.invalidateQueries({ queryKey: ['templates'] })
+            queryClient.invalidateQueries({ queryKey: ['templates-all'] })
+            if (selectedTemplateId) {
+              queryClient.invalidateQueries({ queryKey: ['template', selectedTemplateId] })
+              queryClient.invalidateQueries({ queryKey: ['template-assignments', selectedTemplateId] })
+            }
+            queryClient.invalidateQueries({ queryKey: ['template', newId] })
+            queryClient.invalidateQueries({ queryKey: ['template-assignments', newId] })
+            queryClient.invalidateQueries({ queryKey: ['agents'] })
+          }}
+        />
+      )}
+
       {/* Assign Template Modal */}
       {showAssignModal && (
         selectedTemplate ? (
@@ -3093,6 +3240,7 @@ function ActionGraphEditor() {
         <TaskPddlConfigModal
           template={selectedTemplate}
           taskDistributors={taskDistributors}
+          currentGraphSnapshot={convertGraphToSteps()}
           sessionId={sessionId}
           onClose={() => setShowTaskPddlConfigModal(false)}
         />
@@ -3327,11 +3475,16 @@ function convertActionGraphToGraph(
 function TaskPddlConfigModal({
   template,
   taskDistributors,
+  currentGraphSnapshot,
   sessionId,
   onClose,
 }: {
   template: ActionGraph
   taskDistributors: Omit<TaskDistributor, 'states' | 'resources'>[]
+  currentGraphSnapshot: {
+    steps: ActionGraph['steps']
+    entryPoint?: string
+  }
   sessionId?: string
   onClose: () => void
 }) {
@@ -3357,6 +3510,18 @@ function TaskPddlConfigModal({
 
   const distributorStates = selectedDistributorFull?.states || []
   const distributorResources = selectedDistributorFull?.resources || []
+  const planningVariableSuggestions = useMemo(
+    () => buildPlanningVariableSuggestions(distributorStates, distributorResources),
+    [distributorResources, distributorStates]
+  )
+  const pendingPreconditionStateVar = useMemo(
+    () => inferPlanningStateVar(pendingPreconditionVariable, distributorStates, distributorResources),
+    [distributorResources, distributorStates, pendingPreconditionVariable]
+  )
+  const pendingResultStateVar = useMemo(
+    () => inferPlanningStateVar(pendingResultVariable, distributorStates, distributorResources),
+    [distributorResources, distributorStates, pendingResultVariable]
+  )
 
   useEffect(() => {
     if (!selectedDistributorId) {
@@ -3381,13 +3546,24 @@ function TaskPddlConfigModal({
     })
   }, [distributorResources, distributorStates, selectedDistributorFull, selectedDistributorId])
 
+  const applyPendingPreconditionVariable = useCallback((variable: string) => {
+    setPendingPreconditionVariable(variable)
+    const stateVar = inferPlanningStateVar(variable, distributorStates, distributorResources)
+    setPendingPreconditionValue(getStateDefaultValue(stateVar))
+  }, [distributorResources, distributorStates])
+
+  const applyPendingResultVariable = useCallback((variable: string) => {
+    setPendingResultVariable(variable)
+    const stateVar = inferPlanningStateVar(variable, distributorStates, distributorResources)
+    setPendingResultValue(getStateDefaultValue(stateVar))
+  }, [distributorResources, distributorStates])
+
   const handleAddPrecondition = useCallback(() => {
     if (!pendingPreconditionVariable) return
-    const stateVar = distributorStates.find(item => item.name === pendingPreconditionVariable)
     const nextCondition = {
       variable: pendingPreconditionVariable,
       operator: pendingPreconditionOperator,
-      value: pendingPreconditionValue || getStateDefaultValue(stateVar),
+      value: pendingPreconditionValue || getStateDefaultValue(pendingPreconditionStateVar),
     }
     setLocalPlanningTask((current) => ({
       ...current,
@@ -3399,7 +3575,7 @@ function TaskPddlConfigModal({
     setPendingPreconditionVariable('')
     setPendingPreconditionOperator('==')
     setPendingPreconditionValue('')
-  }, [distributorStates, pendingPreconditionOperator, pendingPreconditionValue, pendingPreconditionVariable])
+  }, [pendingPreconditionOperator, pendingPreconditionStateVar, pendingPreconditionValue, pendingPreconditionVariable])
 
   const handleDeletePrecondition = useCallback((variable: string) => {
     setLocalPlanningTask((current) => ({
@@ -3410,10 +3586,9 @@ function TaskPddlConfigModal({
 
   const handleAddResultState = useCallback(() => {
     if (!pendingResultVariable) return
-    const stateVar = distributorStates.find(item => item.name === pendingResultVariable)
     const nextEffect: PlanningEffect = {
       variable: pendingResultVariable,
-      value: pendingResultValue || getStateDefaultValue(stateVar),
+      value: pendingResultValue || getStateDefaultValue(pendingResultStateVar),
     }
     setLocalPlanningTask((current) => ({
       ...current,
@@ -3424,7 +3599,7 @@ function TaskPddlConfigModal({
     }))
     setPendingResultVariable('')
     setPendingResultValue('')
-  }, [distributorStates, pendingResultValue, pendingResultVariable])
+  }, [pendingResultStateVar, pendingResultValue, pendingResultVariable])
 
   const handleDeleteResultState = useCallback((variable: string) => {
     setLocalPlanningTask((current) => ({
@@ -3456,18 +3631,24 @@ function TaskPddlConfigModal({
     const nextPlanningTask = normalizedDistributorId
       ? filterPlanningTaskForDistributor(localPlanningTask, distributorStates, distributorResources)
       : emptyPlanningTask()
+    const normalizedSteps = currentGraphSnapshot.steps || []
+    const entryPoint = currentGraphSnapshot.entryPoint
 
     try {
       setIsSaving(true)
       if (previousTemplate) {
         queryClient.setQueryData<ActionGraph>(queryKey, {
           ...previousTemplate,
+          steps: normalizedSteps,
+          entry_point: entryPoint,
           task_distributor_id: normalizedDistributorId,
           planning_task: nextPlanningTask,
         })
       }
 
       await templateApi.update(template.id, {
+        steps: normalizedSteps,
+        entry_point: entryPoint,
         task_distributor_id: normalizedDistributorId,
         planning_task: nextPlanningTask,
       } as Partial<ActionGraph>, sessionId)
@@ -3490,6 +3671,8 @@ function TaskPddlConfigModal({
     distributorResources,
     distributorStates,
     localPlanningTask,
+    currentGraphSnapshot.entryPoint,
+    currentGraphSnapshot.steps,
     onClose,
     queryClient,
     selectedDistributorId,
@@ -3561,6 +3744,8 @@ function TaskPddlConfigModal({
               <p className="mb-3 text-xs leading-5 text-secondary">
                 <strong className="text-violet-200">Required States</strong>는 이 태스크가 시작되기 전에 만족해야 하는 값이고,
                 <strong className="ml-1 text-violet-200">Result States</strong>는 이 태스크가 성공 종료된 뒤 planner가 반영할 값입니다.
+                <br />
+                generic resource task를 만들 때는 변수명/값에 <span className="font-mono text-violet-200">{'{{resource.name}}'}</span> 같은 placeholder를 사용할 수 있습니다.
               </p>
 
               {!selectedDistributorId ? (
@@ -3572,21 +3757,12 @@ function TaskPddlConfigModal({
                   <div>
                     <div className="mb-1 text-xs font-medium text-violet-200">Required States</div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <select
-                        className="min-w-0 flex-[1_1_180px] rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+                      <PlanningVariableInput
                         value={pendingPreconditionVariable}
-                        onChange={(e) => {
-                          const variable = e.target.value
-                          setPendingPreconditionVariable(variable)
-                          const stateVar = distributorStates.find(item => item.name === variable)
-                          setPendingPreconditionValue(getStateDefaultValue(stateVar))
-                        }}
-                      >
-                        <option value="">state 선택</option>
-                        {distributorStates.map((stateVar) => (
-                          <option key={stateVar.id} value={stateVar.name}>{stateVar.name}</option>
-                        ))}
-                      </select>
+                        onChange={applyPendingPreconditionVariable}
+                        suggestions={planningVariableSuggestions}
+                        placeholder="state 변수 또는 {{resource.name}}_empty"
+                      />
                       <select
                         className="w-[88px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
                         value={pendingPreconditionOperator}
@@ -3597,8 +3773,7 @@ function TaskPddlConfigModal({
                         <option value="!=">!=</option>
                       </select>
                       {(() => {
-                        const currentVar = distributorStates.find(item => item.name === pendingPreconditionVariable)
-                        if (currentVar?.type === 'bool') {
+                        if (pendingPreconditionStateVar?.type === 'bool') {
                           return (
                             <select
                               className="w-[90px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
@@ -3613,7 +3788,7 @@ function TaskPddlConfigModal({
                         }
                         return (
                           <input
-                            type={currentVar?.type === 'int' ? 'number' : 'text'}
+                            type={pendingPreconditionStateVar?.type === 'int' ? 'number' : 'text'}
                             className="w-[120px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none disabled:opacity-40"
                             value={pendingPreconditionValue}
                             onChange={(e) => setPendingPreconditionValue(e.target.value)}
@@ -3649,24 +3824,14 @@ function TaskPddlConfigModal({
                   <div>
                     <div className="mb-1 text-xs font-medium text-violet-200">Result States</div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <select
-                        className="min-w-0 flex-[1_1_180px] rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+                      <PlanningVariableInput
                         value={pendingResultVariable}
-                        onChange={(e) => {
-                          const variable = e.target.value
-                          setPendingResultVariable(variable)
-                          const stateVar = distributorStates.find(item => item.name === variable)
-                          setPendingResultValue(getStateDefaultValue(stateVar))
-                        }}
-                      >
-                        <option value="">state 선택</option>
-                        {distributorStates.map((stateVar) => (
-                          <option key={stateVar.id} value={stateVar.name}>{stateVar.name}</option>
-                        ))}
-                      </select>
+                        onChange={applyPendingResultVariable}
+                        suggestions={planningVariableSuggestions}
+                        placeholder="state 변수 또는 at_{{resource.name}}"
+                      />
                       {(() => {
-                        const currentVar = distributorStates.find(item => item.name === pendingResultVariable)
-                        if (currentVar?.type === 'bool') {
+                        if (pendingResultStateVar?.type === 'bool') {
                           return (
                             <select
                               className="w-[90px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
@@ -3681,7 +3846,7 @@ function TaskPddlConfigModal({
                         }
                         return (
                           <input
-                            type={currentVar?.type === 'int' ? 'number' : 'text'}
+                            type={pendingResultStateVar?.type === 'int' ? 'number' : 'text'}
                             className="w-[120px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none disabled:opacity-40"
                             value={pendingResultValue}
                             onChange={(e) => setPendingResultValue(e.target.value)}
@@ -3724,6 +3889,10 @@ function TaskPddlConfigModal({
               </div>
               <p className="mb-3 text-xs leading-5 text-secondary">
                 이 태스크가 실행될 때 planner가 점유 충돌을 피해야 하는 resource입니다. 지금은 step별 acquire/release 대신 <strong className="text-amber-200">task 전체 단위</strong>로 간단하게 설정합니다.
+                <br />
+                고정 태스크면 특정 instance를 바로 선택해도 되고, 여러 CNC/충전기에 재사용할 generic 태스크를 만들 때만 <strong className="text-amber-200">[TYPE]</strong> resource를 선택하면 됩니다.
+                <br />
+                실행 시 Action goal 파라미터에서는 <span className="font-mono text-amber-200">{'${resource_name}'}</span> 또는 <span className="font-mono text-amber-200">{'${resource.name}'}</span> 로 선택된 resource 이름을 사용할 수 있습니다.
               </p>
 
               {!selectedDistributorId ? (
@@ -3949,6 +4118,126 @@ function CreateTemplateModal({
               className="px-6 py-2 bg-blue-600 text-primary rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
               {createTemplate.isPending ? '생성 중...' : '태스크 생성'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function RenameTemplateIdentityModal({
+  template,
+  onClose,
+  onRenamed,
+}: {
+  template: ActionGraph
+  onClose: () => void
+  onRenamed: (newId: string) => void
+}) {
+  const [formData, setFormData] = useState({
+    id: template.id,
+    name: template.name || '',
+  })
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    setFormData({
+      id: template.id,
+      name: template.name || '',
+    })
+    setError('')
+  }, [template.id, template.name])
+
+  const renameTemplate = useMutation({
+    mutationFn: (data: { id: string; name: string }) =>
+      templateApi.updateIdentity(template.id, {
+        new_id: data.id,
+        new_name: data.name,
+      }),
+    onSuccess: (updated) => {
+      onRenamed(updated.id)
+    },
+    onError: (err: any) => {
+      setError(
+        err?.response?.data?.detail ||
+        err?.response?.data?.error ||
+        '태스크 이름/ID 수정에 실패했습니다'
+      )
+    },
+  })
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+      <div className="bg-surface rounded-xl shadow-2xl w-full max-w-md border border-primary">
+        <div className="px-6 py-4 border-b border-primary flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-primary">태스크 이름/ID 수정</h2>
+          <button onClick={onClose} className="text-muted hover:text-primary">
+            <X size={20} />
+          </button>
+        </div>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            const trimmedID = formData.id.trim()
+            const trimmedName = formData.name.trim()
+            if (!trimmedID || !trimmedName) {
+              setError('태스크 ID와 이름은 필수입니다')
+              return
+            }
+            if (trimmedID === template.id && trimmedName === template.name) {
+              onClose()
+              return
+            }
+            renameTemplate.mutate({ id: trimmedID, name: trimmedName })
+          }}
+          className="p-6 space-y-4"
+        >
+          {error && (
+            <div className="p-3 bg-red-500/20 border border-red-500/50 rounded-lg text-red-400 text-sm">
+              {error}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium text-primary mb-1">태스크 ID</label>
+            <input
+              type="text"
+              value={formData.id}
+              onChange={(e) => setFormData(prev => ({ ...prev, id: e.target.value }))}
+              className="w-full px-3 py-2 bg-elevated border border-primary rounded-lg text-primary placeholder-gray-600"
+              placeholder="예: go_to_cnc_and_park"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-primary mb-1">태스크 이름</label>
+            <input
+              type="text"
+              value={formData.name}
+              onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+              className="w-full px-3 py-2 bg-elevated border border-primary rounded-lg text-primary placeholder-gray-600"
+              placeholder="예: Go to CNC and Park"
+              required
+            />
+          </div>
+
+          <div className="text-xs text-muted p-2 bg-elevated/60 rounded border border-primary/60">
+            ID를 변경하면 기존 할당/실행 참조도 함께 업데이트됩니다. 이미 배포된 그래프는
+            다시 배포(outdated) 상태가 될 수 있습니다.
+          </div>
+
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-secondary hover:text-primary">
+              취소
+            </button>
+            <button
+              type="submit"
+              disabled={renameTemplate.isPending}
+              className="px-6 py-2 bg-blue-600 text-primary rounded-lg hover:bg-blue-700 disabled:opacity-50"
+            >
+              {renameTemplate.isPending ? '수정 중...' : '저장'}
             </button>
           </div>
         </form>

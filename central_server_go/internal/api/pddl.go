@@ -535,6 +535,11 @@ func (s *Server) solveProblem(pp *db.PlanningProblem) (*pddl.Plan, error) {
 		})
 	}
 
+	groundedTasks, err := pddl.GroundTasks(tasks, resources)
+	if err != nil {
+		return nil, fmt.Errorf("failed to ground planning tasks: %w", err)
+	}
+
 	// Parse initial and goal states
 	var initialState, goalState map[string]string
 	if pp.InitialState != nil {
@@ -548,7 +553,7 @@ func (s *Server) solveProblem(pp *db.PlanningProblem) (*pddl.Plan, error) {
 		StateVars:    stateVars,
 		InitialState: initialState,
 		GoalState:    goalState,
-		Tasks:        tasks,
+		Tasks:        groundedTasks,
 		Agents:       agents,
 		Resources:    resources,
 	}

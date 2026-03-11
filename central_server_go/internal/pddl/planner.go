@@ -110,6 +110,8 @@ func Solve(problem *PlanProblem) *Plan {
 			AgentID:        agentID,
 			AgentName:      agentName,
 			Reason:         reason,
+			RuntimeParams:  cloneStringMap(task.RuntimeParams),
+			ResultStates:   cloneEffects(task.ResultStates),
 		})
 		agentLoad[agentID]++
 	}
@@ -151,6 +153,9 @@ func checkReachability(problem *PlanProblem) error {
 	for changed {
 		changed = false
 		for _, task := range problem.Tasks {
+			if !relaxedPreconditionsMet(reachable, task.Preconditions) {
+				continue
+			}
 			for _, effect := range task.ResultStates {
 				if reachable[effect.Variable] == nil {
 					reachable[effect.Variable] = map[string]bool{}
@@ -169,6 +174,17 @@ func checkReachability(problem *PlanProblem) error {
 		}
 	}
 	return nil
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func goalSatisfied(current, goal map[string]string) bool {

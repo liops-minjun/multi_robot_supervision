@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo } from 'react'
 import { ChevronDown, ChevronUp, Upload, Loader2, Radio } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
-import type { ActionField, ParameterFieldSource, RobotTelemetry } from '../../../../types'
+import type { ActionField, ParameterFieldSource, RobotTelemetry, RuntimeBindingOption } from '../../../../types'
 import type { AvailableStep } from '../types'
 import { ParameterEditorFactory, type RobotTelemetryData } from './parameter-editors'
 import { useTelemetryOptional } from '../../../../contexts/TelemetryContext'
@@ -165,6 +165,53 @@ const GoalParametersSection = memo(({
     [params]
   )
 
+  const runtimeBindings = useMemo<RuntimeBindingOption[]>(() => ([
+    {
+      key: 'resource_name',
+      expression: '${resource_name}',
+      label: '선택된 resource 이름',
+      description: '예: cnc01, charger01. PDDL planner가 바인딩한 resource 이름입니다.',
+    },
+    {
+      key: 'resource.name',
+      expression: '${resource.name}',
+      label: '선택된 resource 이름 (dot 표기)',
+      description: 'resource_name 과 동일하지만 dot 경로 표기입니다.',
+    },
+    {
+      key: 'resource_id',
+      expression: '${resource_id}',
+      label: '선택된 resource id',
+      description: 'Task Distributor resource instance의 내부 ID입니다.',
+    },
+    {
+      key: 'resource.id',
+      expression: '${resource.id}',
+      label: '선택된 resource id (dot 표기)',
+    },
+    {
+      key: 'resource_type_name',
+      expression: '${resource_type_name}',
+      label: 'resource type 이름',
+      description: '예: CNC, Charger',
+    },
+    {
+      key: 'resource.type_name',
+      expression: '${resource.type_name}',
+      label: 'resource type 이름 (dot 표기)',
+    },
+    {
+      key: 'resource_type_id',
+      expression: '${resource_type_id}',
+      label: 'resource type ID',
+    },
+    {
+      key: 'resource.type_id',
+      expression: '${resource.type_id}',
+      label: 'resource type ID (dot 표기)',
+    },
+  ]), [])
+
   return (
     <div className="border-b border-primary">
       <button
@@ -240,6 +287,10 @@ const GoalParametersSection = memo(({
             </div>
           ) : (
             <div className="space-y-2">
+              <div className="rounded border border-sky-500/20 bg-sky-500/5 px-2.5 py-2 text-[10px] leading-5 text-secondary">
+                PDDL planner로 실행될 때 goal 파라미터에서 <span className="font-mono text-sky-300">${'{resource_name}'}</span>,
+                <span className="ml-1 font-mono text-sky-300">${'{resource.name}'}</span> 같은 실행 변수를 선택해 사용할 수 있습니다.
+              </div>
               {goalFields.map((field) => (
                 <div key={field.name} className="p-2 bg-surface rounded border border-primary/50">
                   {/* Field header */}
@@ -262,6 +313,7 @@ const GoalParametersSection = memo(({
                     selectedToolFrame={selectedToolFrame}
                     fieldSource={fieldSources[field.name]}
                     availableSteps={availableSteps}
+                    runtimeBindings={runtimeBindings}
                     onFieldSourceChange={(source) => onUpdateFieldSource(field.name, source)}
                   />
                 </div>

@@ -506,6 +506,8 @@ export default function PDDL() {
         goalState?: Record<string, string>
         initialState?: Record<string, string>
         showInitialState?: boolean
+        plan?: PlanResult | null
+        executionId?: string | null
       }
 
       skipNextSelectionResetRef.current = true
@@ -516,6 +518,8 @@ export default function PDDL() {
       setGoalState(draft.goalState || {})
       setInitialState(draft.initialState || {})
       setShowInitialState(Boolean(draft.showInitialState))
+      setPlan(draft.plan || null)
+      setExecutionId(draft.executionId || null)
     } catch (err) {
       console.error('Failed to restore PDDL draft:', err)
     }
@@ -560,11 +564,13 @@ export default function PDDL() {
         goalState,
         initialState,
         showInitialState,
+        plan,
+        executionId,
       }))
     } catch (err) {
       console.error('Failed to persist PDDL draft:', err)
     }
-  }, [selectedBTIds, selectedDistributorId, selectedAgentIds, goalState, initialState, showInitialState])
+  }, [selectedBTIds, selectedDistributorId, selectedAgentIds, goalState, initialState, showInitialState, plan, executionId])
 
   // -----------------------------------------------------------------------
   // Effects
@@ -572,12 +578,15 @@ export default function PDDL() {
 
   useEffect(() => {
     if (!executionId) return
-    const interval = setInterval(async () => {
+    let cancelled = false
+
+    const pollExecution = async (): Promise<string | null> => {
       try {
         const [exec, agentList] = await Promise.all([
           pddlApi.getExecution(executionId),
           agentApi.list(),
         ])
+        if (cancelled) return null
         setExecution(exec)
         setResourceAllocations(exec.resources || [])
         setAgents(prev =>
@@ -590,15 +599,25 @@ export default function PDDL() {
             }
           })
         )
-        if (exec.status === 'completed' || exec.status === 'failed' || exec.status === 'cancelled') {
-          clearInterval(interval)
-        }
+        return exec.status || null
       } catch (err) {
         console.error('Failed to poll execution:', err)
+        return null
+      }
+    }
+
+    void pollExecution()
+    const interval = setInterval(async () => {
+      const status = await pollExecution()
+      if (cancelled) return
+      if (status === 'completed' || status === 'failed' || status === 'cancelled') {
         clearInterval(interval)
       }
     }, 1000)
-    return () => clearInterval(interval)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
   }, [executionId])
 
   const runtimeAgentIds = useMemo(() => {

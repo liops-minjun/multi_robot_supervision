@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"central_server_go/internal/db"
@@ -50,6 +51,11 @@ type AssignTemplateRequest struct {
 	AgentID  string `json:"agent_id"`
 	Enabled  bool   `json:"enabled"`
 	Priority int    `json:"priority"`
+}
+
+type UpdateTemplateIdentityRequest struct {
+	NewID   string `json:"new_id,omitempty"`
+	NewName string `json:"new_name,omitempty"`
 }
 
 // ============================================
@@ -292,6 +298,73 @@ func (s *Server) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
 	s.repo.MarkTemplateAssignmentsOutdated(templateID, template.Version)
 
 	writeJSON(w, http.StatusOK, behaviorTreeToResponse(template, s.repo))
+}
+
+// UpdateTemplateIdentity updates template id and/or name.
+func (s *Server) UpdateTemplateIdentity(w http.ResponseWriter, r *http.Request) {
+	templateID := chi.URLParam(r, "templateID")
+
+	template, err := s.repo.GetTemplate(templateID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if template == nil {
+		writeError(w, http.StatusNotFound, "Template not found: "+templateID)
+		return
+	}
+
+	var req UpdateTemplateIdentityRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	newID := strings.TrimSpace(req.NewID)
+	newName := strings.TrimSpace(req.NewName)
+
+	if newID == "" {
+		newID = templateID
+	}
+	if newName == "" {
+		newName = template.Name
+	}
+
+	if newID == templateID && newName == template.Name {
+		writeJSON(w, http.StatusOK, behaviorTreeToResponse(template, s.repo))
+		return
+	}
+
+	if err := s.repo.RenameBehaviorTreeIdentity(templateID, newID, newName); err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Refresh graph cache entries
+	s.stateManager.GraphCache().InvalidateTemplate(templateID)
+	s.stateManager.GraphCache().InvalidateTemplate(newID)
+	s.stateManager.GraphCache().InvalidateAllDeployments(templateID)
+	s.stateManager.GraphCache().InvalidateAllDeployments(newID)
+
+	updated, err := s.repo.GetTemplate(newID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if updated == nil {
+		writeError(w, http.StatusNotFound, "Template not found after update: "+newID)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, behaviorTreeToResponse(updated, s.repo))
 }
 
 // DeleteTemplate deletes a template and all its assignments
