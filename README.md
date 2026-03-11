@@ -940,3 +940,36 @@ Important regression test points:
 
 상세 메모:
 - `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`
+
+## 2026-03-11 - Task Distributor Profile JSON (Control-room Save/Load)
+
+- 목적:
+  - PDDL 메뉴의 Task Distributor 컨트롤룸 설정(태스크 편집 내부가 아닌 운영 설정)을 파일로 저장/복원할 수 있도록 개선
+  - 환경 재구성 시 매번 수동 입력하는 부담 감소
+- 프론트(PDDL 페이지) 추가:
+  - `Export JSON` 버튼
+    - 현재 선택된 distributor 기준으로 설정을 JSON 파일로 다운로드
+  - `Import JSON` 버튼
+    - JSON 파일을 읽어 distributor 설정을 복원
+- Import 시 적용 범위(컨트롤룸 설정):
+  - distributor 이름/설명
+  - 상태(State) 목록
+  - 리소스(Resource) 목록 (type/instance + parent 관계)
+  - 선택 태스크(가능한 경우 name/id 매칭)
+  - 선택 에이전트(가능한 경우 name/id 매칭)
+  - initial_state / goal_state
+  - realtime goals / tick interval
+- 동작 정책:
+  - 같은 distributor를 찾으면(우선 id, 없으면 name) 해당 distributor를 profile 기준으로 동기화
+  - 없으면 새 distributor 생성 후 profile 적용
+  - import 직후 선택 상태/계획 상태를 갱신하고 realtime 세션은 초기화
+- 샘플 프로필 파일 추가:
+  - `examples/task_distributor_profiles/realtime_cnc_starter.json`
+  - CNC realtime loop 시작용 기본 예시(요청한 task 이름 포함)
+- 회귀 테스트 포인트:
+  - 기존 one-shot PDDL solve/execute와 realtime start/stop이 그대로 동작하는지
+  - profile import 후 resource parent(type-instance) 관계가 정확히 복원되는지
+  - profile import 후 task/agent selection이 정상 매핑되는지(name/id 불일치 시 무시되는지)
+
+상세 메모:
+- `~/mcs_dev/PDDL_EXECUTION_FIX_NOTES.txt`

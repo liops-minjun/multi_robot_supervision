@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { type ChangeEvent, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   RefreshCw, Play, Eye, Square, ChevronDown, ChevronRight, Info, Target,
   Database, Workflow, AlertTriangle, Link2, Plus, Trash2, Check, X, Layers,
-  Circle, Edit, Gem, ToggleLeft, Bot,
+  Circle, Edit, Gem, ToggleLeft, Bot, Download, Upload,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { behaviorTreeApi, agentApi, capabilityApi, pddlApi, taskDistributorApi, fleetApi } from '../../api/client'
@@ -24,6 +24,50 @@ interface AgentWithCaps {
   agent: Agent
   capabilities: string[]
   isOnline: boolean
+}
+
+interface DistributorProfileState {
+  name: string
+  type?: string
+  initial_value?: string
+  description?: string
+}
+
+interface DistributorProfileResource {
+  name: string
+  kind?: 'type' | 'instance' | string
+  parent_name?: string
+  description?: string
+}
+
+interface DistributorProfileTaskRef {
+  id?: string
+  name?: string
+}
+
+interface DistributorProfileAgentRef {
+  id?: string
+  name?: string
+}
+
+interface TaskDistributorProfile {
+  version: number
+  exported_at?: string
+  distributor: {
+    id?: string
+    name: string
+    description?: string
+  }
+  states: DistributorProfileState[]
+  resources: DistributorProfileResource[]
+  selected_tasks?: DistributorProfileTaskRef[]
+  selected_agents?: DistributorProfileAgentRef[]
+  initial_state?: Record<string, string>
+  goal_state?: Record<string, string>
+  realtime?: {
+    tick_interval_sec?: number
+    goals?: RealtimeGoalRule[]
+  }
 }
 
 
@@ -81,6 +125,29 @@ const TYPE_BADGE: Record<string, { bg: string; text: string }> = {
 }
 
 const PDDL_DRAFT_STORAGE_KEY = 'mcs.pddl.draft.v2'
+
+function slugifyFileName(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9가-힣]+/gi, '_')
+    .replace(/^_+|_+$/g, '') || 'task_distributor_profile'
+}
+
+function toStringValue(value: unknown): string {
+  if (value == null) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return JSON.stringify(value)
+}
+
+function toStringRecord(value?: Record<string, unknown> | null): Record<string, string> {
+  if (!value) return {}
+  return Object.entries(value).reduce<Record<string, string>>((acc, [key, raw]) => {
+    acc[key] = toStringValue(raw)
+    return acc
+  }, {})
+}
 
 function buildInstanceNames(typeName: string, count: number) {
   const normalized = typeName.trim().replace(/\s+/g, ' ')
@@ -377,9 +444,12 @@ export default function PDDL() {
   const [newStateInitialValue, setNewStateInitialValue] = useState('')
   const [editingStateId, setEditingStateId] = useState<string | null>(null)
   const [editStateInitialValue, setEditStateInitialValue] = useState('')
+  const [profileNotice, setProfileNotice] = useState<string | null>(null)
+  const [isApplyingProfile, setIsApplyingProfile] = useState(false)
   const didRestoreDraftRef = useRef(false)
   const skipNextSelectionResetRef = useRef(false)
   const restoredSelectionKeyRef = useRef<string | null>(null)
+  const profileFileInputRef = useRef<HTMLInputElement | null>(null)
 
   // -----------------------------------------------------------------------
   // Derived values
@@ -1067,6 +1137,258 @@ export default function PDDL() {
   }, [selectedDistributor, editStateInitialValue, loadDistributors])
 
   // -----------------------------------------------------------------------
+  // Task Distributor profile import/export (JSON)
+  // -----------------------------------------------------------------------
+
+  const handleExportDistributorProfile = useCallback(() => {
+    if (!selectedDistributor) return
+
+    const resourceById = new Map((selectedDistributor.resources || []).map(resource => [resource.id, resource]))
+
+    const profile: TaskDistributorProfile = {
+      version: 1,
+      exported_at: new Date().toISOString(),
+      distributor: {
+        id: selectedDistributor.id,
+        name: selectedDistributor.name,
+        description: selectedDistributor.description,
+      },
+      states: (selectedDistributor.states || []).map(state => ({
+        name: state.name,
+        type: state.type,
+        initial_value: state.initial_value,
+        description: state.description,
+      })),
+      resources: (selectedDistributor.resources || []).map(resource => ({
+        name: resource.name,
+        kind: resource.kind || 'instance',
+        parent_name: resource.parent_resource_id
+          ? resourceById.get(resource.parent_resource_id)?.name
+          : undefined,
+        description: resource.description,
+      })),
+      selected_tasks: selectedBTs.map(bt => ({ id: bt.id, name: bt.name })),
+      selected_agents: selectedAgentIds
+        .map(agentId => agents.find(item => item.agent.id === agentId)?.agent)
+        .filter((agent): agent is Agent => Boolean(agent))
+        .map(agent => ({ id: agent.id, name: agent.name })),
+      initial_state: { ...initialState },
+      goal_state: { ...goalState },
+      realtime: {
+        tick_interval_sec: realtimeTickIntervalSec,
+        goals: realtimeGoals,
+      },
+    }
+
+    const safeName = slugifyFileName(selectedDistributor.name || 'task_distributor_profile')
+    const fileName = `${safeName}.json`
+    const blob = new Blob([JSON.stringify(profile, null, 2)], { type: 'application/json' })
+    const url = window.URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = fileName
+    anchor.click()
+    window.URL.revokeObjectURL(url)
+
+    setProfileNotice(`Exported profile: ${fileName}`)
+    setTimeout(() => setProfileNotice(null), 4000)
+  }, [
+    agents,
+    goalState,
+    initialState,
+    realtimeGoals,
+    realtimeTickIntervalSec,
+    selectedAgentIds,
+    selectedBTs,
+    selectedDistributor,
+  ])
+
+  const handleOpenProfileImport = useCallback(() => {
+    profileFileInputRef.current?.click()
+  }, [])
+
+  const handleImportDistributorProfile = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+
+    setIsApplyingProfile(true)
+    setProfileNotice(null)
+
+    try {
+      const raw = await file.text()
+      const parsed = JSON.parse(raw) as TaskDistributorProfile
+      const distributorName = parsed?.distributor?.name?.trim()
+
+      if (!distributorName) {
+        throw new Error('Invalid profile: distributor.name is required')
+      }
+
+      let distributor =
+        (parsed.distributor.id ? distributors.find(item => item.id === parsed.distributor.id) : undefined) ||
+        distributors.find(item => item.name === distributorName)
+
+      if (!distributor) {
+        const created = await taskDistributorApi.create({
+          name: distributorName,
+          description: parsed.distributor.description?.trim() || undefined,
+        })
+        distributor = await taskDistributorApi.getFull(created.id)
+      } else {
+        await taskDistributorApi.update(distributor.id, {
+          name: distributorName,
+          description: parsed.distributor.description?.trim() || undefined,
+        })
+        distributor = await taskDistributorApi.getFull(distributor.id)
+      }
+
+      const distributorId = distributor.id
+
+      // Reset current distributor states/resources, then recreate from profile
+      await Promise.all((distributor.states || []).map(state =>
+        taskDistributorApi.deleteState(distributorId, state.id)
+      ))
+      await Promise.all((distributor.resources || []).map(resource =>
+        taskDistributorApi.deleteResource(distributorId, resource.id)
+      ))
+
+      for (const state of parsed.states || []) {
+        if (!state?.name?.trim()) continue
+        await taskDistributorApi.createState(distributorId, {
+          name: state.name.trim(),
+          type: (state.type || 'string').trim(),
+          initial_value: state.initial_value != null ? toStringValue(state.initial_value) : undefined,
+          description: state.description?.trim() || undefined,
+        })
+      }
+
+      const profileResources = (parsed.resources || [])
+        .filter(resource => resource?.name?.trim())
+        .map(resource => ({
+          name: resource.name.trim(),
+          kind: (resource.kind || 'instance').trim().toLowerCase(),
+          parent_name: resource.parent_name?.trim(),
+          description: resource.description?.trim(),
+        }))
+
+      const typeResourceByName = new Map<string, string>()
+
+      const typeResources = profileResources.filter(resource => resource.kind === 'type')
+      for (const typeResource of typeResources) {
+        const created = await taskDistributorApi.createResource(distributorId, {
+          name: typeResource.name,
+          kind: 'type',
+          description: typeResource.description || undefined,
+        })
+        typeResourceByName.set(typeResource.name, created.id)
+      }
+
+      const instanceResources = profileResources.filter(resource => resource.kind !== 'type')
+      for (const instanceResource of instanceResources) {
+        let parentResourceId: string | undefined
+
+        if (instanceResource.parent_name) {
+          parentResourceId = typeResourceByName.get(instanceResource.parent_name)
+          if (!parentResourceId) {
+            const createdType = await taskDistributorApi.createResource(distributorId, {
+              name: instanceResource.parent_name,
+              kind: 'type',
+            })
+            typeResourceByName.set(instanceResource.parent_name, createdType.id)
+            parentResourceId = createdType.id
+          }
+        }
+
+        await taskDistributorApi.createResource(distributorId, {
+          name: instanceResource.name,
+          kind: 'instance',
+          parent_resource_id: parentResourceId,
+          description: instanceResource.description || undefined,
+        })
+      }
+
+      await loadDistributors()
+
+      const selectedTaskIds = Array.from(new Set((parsed.selected_tasks || [])
+        .map(taskRef => {
+          if (taskRef.id && treeList.some(tree => tree.id === taskRef.id)) return taskRef.id
+          if (taskRef.name) {
+            const matched = treeList.find(tree => tree.name === taskRef.name)
+            if (matched) return matched.id
+          }
+          return null
+        })
+        .filter((value): value is string => Boolean(value))))
+
+      const selectedImportedAgentIds = Array.from(new Set((parsed.selected_agents || [])
+        .map(agentRef => {
+          if (agentRef.id && agents.some(item => item.agent.id === agentRef.id)) return agentRef.id
+          if (agentRef.name) {
+            const matched = agents.find(item => item.agent.name === agentRef.name)
+            if (matched) return matched.agent.id
+          }
+          return null
+        })
+        .filter((value): value is string => Boolean(value))))
+
+      if (selectedTaskIds.length > 0) {
+        try {
+          const updatedTrees = await Promise.all(selectedTaskIds.map(taskId =>
+            behaviorTreeApi.update(taskId, { task_distributor_id: distributorId })
+          ))
+          setBtCache(prev => {
+            const next = new Map(prev)
+            for (const tree of updatedTrees) {
+              next.set(tree.id, tree)
+            }
+            return next
+          })
+        } catch (err) {
+          console.error('Failed to bind imported tasks to distributor:', err)
+        }
+      }
+
+      skipNextSelectionResetRef.current = true
+      restoredSelectionKeyRef.current = `${[...selectedTaskIds].sort().join(',')}|${distributorId}`
+      setSelectedDistributorId(distributorId)
+      setSelectedBTIds(selectedTaskIds)
+      setSelectedAgentIds(selectedImportedAgentIds)
+      setInitialState(toStringRecord(parsed.initial_state))
+      setGoalState(toStringRecord(parsed.goal_state))
+      setShowInitialState(Object.keys(parsed.initial_state || {}).length > 0)
+      setPlan(null)
+      setExecutionId(null)
+      setExecution(null)
+      setResourceAllocations([])
+
+      const importedGoals = (parsed.realtime?.goals || []).map((goal, index) => ({
+        ...goal,
+        id: goal.id || `goal_${Date.now()}_${index}`,
+        name: goal.name || `Goal ${index + 1}`,
+        priority: Number.isFinite(goal.priority) ? goal.priority : (index + 1) * 10,
+        enabled: goal.enabled !== false,
+        goal_state: toStringRecord(goal.goal_state),
+      }))
+      setRealtimeGoals(importedGoals)
+      if (typeof parsed.realtime?.tick_interval_sec === 'number' && parsed.realtime.tick_interval_sec > 0) {
+        setRealtimeTickIntervalSec(parsed.realtime.tick_interval_sec)
+      }
+      setRealtimeSessionId(null)
+      setRealtimeSession(null)
+
+      setProfileNotice(`Imported profile: ${file.name}`)
+      setTimeout(() => setProfileNotice(null), 5000)
+    } catch (err) {
+      console.error('Failed to import distributor profile:', err)
+      const message = err instanceof Error ? err.message : 'Unknown import error'
+      setProfileNotice(`Import failed: ${message}`)
+      setTimeout(() => setProfileNotice(null), 6000)
+    } finally {
+      setIsApplyingProfile(false)
+    }
+  }, [agents, distributors, loadDistributors, treeList])
+
+  // -----------------------------------------------------------------------
   // Plan handlers
   // -----------------------------------------------------------------------
 
@@ -1397,6 +1719,39 @@ export default function PDDL() {
         <div className="flex-1 overflow-y-auto">
           {/* ---- Distributors ---- */}
           <SidebarSection icon={Database} title={t('pddl.taskDistributor')} count={distributors.length}>
+            <input
+              ref={profileFileInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={handleImportDistributorProfile}
+            />
+            <div className="mb-2 grid grid-cols-2 gap-1.5">
+              <button
+                onClick={handleExportDistributorProfile}
+                disabled={!selectedDistributor || isApplyingProfile}
+                className="inline-flex items-center justify-center gap-1 rounded-lg border border-border bg-base/70 px-2 py-1.5 text-[11px] text-secondary transition hover:border-accent/30 hover:bg-accent/10 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                title={selectedDistributor ? 'Export selected distributor profile as JSON' : 'Select a distributor first'}
+              >
+                <Download size={12} />
+                Export JSON
+              </button>
+              <button
+                onClick={handleOpenProfileImport}
+                disabled={isApplyingProfile}
+                className="inline-flex items-center justify-center gap-1 rounded-lg border border-border bg-base/70 px-2 py-1.5 text-[11px] text-secondary transition hover:border-accent/30 hover:bg-accent/10 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                title="Import distributor profile JSON"
+              >
+                <Upload size={12} />
+                {isApplyingProfile ? 'Importing...' : 'Import JSON'}
+              </button>
+            </div>
+            {profileNotice && (
+              <div className="mb-2 rounded-lg border border-accent/20 bg-accent/10 px-2.5 py-2 text-[10px] text-accent">
+                {profileNotice}
+              </div>
+            )}
+
             {/* Inline create */}
             <div className="mb-2 flex gap-1.5">
               <input
