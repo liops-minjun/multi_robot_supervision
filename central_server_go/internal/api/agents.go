@@ -1,7 +1,6 @@
 package api
 
 import (
-	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -415,63 +414,40 @@ func (s *Server) DeployBehaviorTree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get behavior tree
-	graph, err := s.repo.GetBehaviorTree(graphID)
-	if err != nil || graph == nil {
-		writeError(w, http.StatusNotFound, "Behavior Tree not found")
-		return
+	result := s.deployBehaviorTreeToAgentSync(r.Context(), abt.ID)
+	status, _ := result["status"].(string)
+	errorMessage, _ := result["error"].(string)
+
+	if status == "failed" && errorMessage == "" {
+		errorMessage = "Behavior Tree deployment failed"
+	}
+	if status == "" {
+		status = "failed"
 	}
 
-	// Check if agent is online
-	if !s.stateManager.IsAgentOnline(agentID) {
-		// Mark as pending for when agent comes online
-		abt.DeploymentStatus = "pending"
-		abt.UpdatedAt = time.Now()
-		s.repo.UpdateAgentBehaviorTree(abt)
-
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"status":  "pending",
-			"message": "Agent is offline, deployment queued",
-		})
-		return
+	response := map[string]interface{}{
+		"status":           status,
+		"behavior_tree_id": graphID,
+		"agent_id":         agentID,
+	}
+	if version, ok := result["version"]; ok {
+		response["deployed_version"] = version
+	}
+	if errorMessage != "" {
+		response["error"] = errorMessage
+		response["message"] = errorMessage
+	} else {
+		switch status {
+		case "queued":
+			response["message"] = "Agent is offline, deployment queued"
+		case "deployed":
+			response["message"] = "Behavior Tree deployed successfully"
+		default:
+			response["message"] = "Behavior Tree deployment requested"
+		}
 	}
 
-	// Update status to deploying
-	abt.DeploymentStatus = "deploying"
-	abt.UpdatedAt = time.Now()
-	s.repo.UpdateAgentBehaviorTree(abt)
-
-	// Create deployment log
-	logID := uuid.New().String()
-	deployLog := &db.BehaviorTreeDeploymentLog{
-		ID:                  logID,
-		AgentBehaviorTreeID: abt.ID,
-		Action:              "deploy",
-		Version:             graph.Version,
-		Status:              "pending",
-		InitiatedAt:         time.Now(),
-	}
-	s.repo.CreateDeploymentLog(deployLog)
-
-	// TODO: Send deploy message via QUIC
-	// For now, simulate immediate deployment success
-	abt.DeploymentStatus = "deployed"
-	abt.DeployedVersion = graph.Version
-	abt.DeployedAt = sql.NullTime{Time: time.Now(), Valid: true}
-	abt.UpdatedAt = time.Now()
-	s.repo.UpdateAgentBehaviorTree(abt)
-
-	// Update deployment log
-	deployLog.Status = "success"
-	completedAt := time.Now()
-	deployLog.CompletedAt = sql.NullTime{Time: completedAt, Valid: true}
-	s.repo.UpdateDeploymentLog(deployLog)
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":           "deployed",
-		"deployed_version": graph.Version,
-		"message":          "Behavior Tree deployed successfully",
-	})
+	writeJSON(w, http.StatusOK, response)
 }
 
 // GetDeploymentLogs returns deployment logs for an agent-behavior tree

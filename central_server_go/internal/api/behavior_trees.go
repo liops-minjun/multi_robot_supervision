@@ -446,10 +446,24 @@ func (s *Server) ExecuteBehaviorTree(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("behavior tree '%s' is not assigned to agent '%s'. Please assign the graph first.", graphID, req.AgentID))
 		return
 	}
-	// NOTE:
-	// Do not hard-block execution on deployment_status.
-	// Scheduler.StartTask() already auto-deploys the latest graph before dispatch.
-	// This prevents RTM from getting stuck when UI status is "deploying/pending/failed".
+	// Ensure the latest graph is deployed before execution.
+	// Scheduler.StartTask() also has deploy-on-dispatch safeguards, but we surface
+	// deployment errors here so RTM users get immediate feedback.
+	deployResult := s.deployBehaviorTreeToAgentSync(r.Context(), abt.ID)
+	deployStatus, _ := deployResult["status"].(string)
+	if deployStatus != "deployed" {
+		errorMessage, _ := deployResult["error"].(string)
+		if errorMessage == "" {
+			switch deployStatus {
+			case "queued":
+				errorMessage = fmt.Sprintf("behavior tree '%s' deployment is queued because agent '%s' is offline", graphID, req.AgentID)
+			default:
+				errorMessage = fmt.Sprintf("failed to ensure behavior tree '%s' is deployed to agent '%s'", graphID, req.AgentID)
+			}
+		}
+		writeError(w, http.StatusServiceUnavailable, errorMessage)
+		return
+	}
 
 	taskID, err := s.scheduler.StartTask(r.Context(), graphID, req.AgentID, req.Params)
 	if err != nil {
@@ -494,6 +508,50 @@ func (s *Server) ExecuteMultiBehaviorTree(w http.ResponseWriter, r *http.Request
 	// Validate sync mode
 	if req.SyncMode != "barrier" && req.SyncMode != "best_effort" {
 		writeError(w, http.StatusBadRequest, "sync_mode must be 'barrier' or 'best_effort'")
+		return
+	}
+
+	failedAgents := make([]MultiAgentFailedAgent, 0)
+	for _, agentID := range req.AgentIDs {
+		abt, err := s.repo.GetAgentBehaviorTree(agentID, graphID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to check graph assignment: "+err.Error())
+			return
+		}
+		if abt == nil {
+			failedAgents = append(failedAgents, MultiAgentFailedAgent{
+				AgentID: agentID,
+				Reason:  fmt.Sprintf("behavior tree '%s' is not assigned to agent '%s'. Please assign the graph first.", graphID, agentID),
+			})
+			continue
+		}
+
+		deployResult := s.deployBehaviorTreeToAgentSync(r.Context(), abt.ID)
+		deployStatus, _ := deployResult["status"].(string)
+		if deployStatus == "deployed" {
+			continue
+		}
+
+		errorMessage, _ := deployResult["error"].(string)
+		if errorMessage == "" {
+			switch deployStatus {
+			case "queued":
+				errorMessage = fmt.Sprintf("behavior tree '%s' deployment is queued because agent '%s' is offline", graphID, agentID)
+			default:
+				errorMessage = fmt.Sprintf("failed to ensure behavior tree '%s' is deployed to agent '%s'", graphID, agentID)
+			}
+		}
+		failedAgents = append(failedAgents, MultiAgentFailedAgent{
+			AgentID: agentID,
+			Reason:  errorMessage,
+		})
+	}
+	if len(failedAgents) > 0 {
+		writeJSON(w, http.StatusServiceUnavailable, MultiAgentExecuteErrorResponse{
+			Error:        "deployment_failed",
+			Message:      "One or more agents do not have the latest graph deployed",
+			FailedAgents: failedAgents,
+		})
 		return
 	}
 

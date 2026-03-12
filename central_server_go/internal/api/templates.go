@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -932,18 +933,60 @@ func (s *Server) deployBehaviorTreeToAgentSync(ctx context.Context, assignmentID
 		}
 	}
 
+	var requiredTypes []string
+	if graph.RequiredActionTypes != nil {
+		_ = json.Unmarshal(graph.RequiredActionTypes, &requiredTypes)
+	}
+	if len(requiredTypes) > 0 {
+		agentCaps, err := s.repo.GetAgentCapabilities(assignment.AgentID)
+		if err != nil {
+			return map[string]interface{}{
+				"status": "failed",
+				"error":  "Failed to get agent capabilities: " + err.Error(),
+			}
+		}
+
+		agentActionTypes := make(map[string]bool, len(agentCaps))
+		for _, cap := range agentCaps {
+			agentActionTypes[cap.ActionType] = true
+		}
+
+		missingTypes := make([]string, 0)
+		for _, reqType := range requiredTypes {
+			if !agentActionTypes[reqType] {
+				missingTypes = append(missingTypes, reqType)
+			}
+		}
+		if len(missingTypes) > 0 {
+			errorMessage := fmt.Sprintf("Agent does not support required action types: %v", missingTypes)
+			assignment.DeploymentStatus = "failed"
+			assignment.DeploymentError = sql.NullString{String: errorMessage, Valid: true}
+			s.repo.UpdateAgentBehaviorTree(assignment)
+			return map[string]interface{}{
+				"status": "failed",
+				"error":  errorMessage,
+			}
+		}
+	}
+
 	// Check if agent is online
 	if agent.Status != "online" {
 		assignment.DeploymentStatus = "pending"
+		assignment.ServerVersion = graph.Version
+		assignment.DeploymentError = sql.NullString{}
+		assignment.UpdatedAt = time.Now()
 		s.repo.UpdateAgentBehaviorTree(assignment)
 		return map[string]interface{}{
 			"status": "queued",
+			"version": graph.Version,
 		}
 	}
 
 	// Update status to deploying
 	assignment.DeploymentStatus = "deploying"
 	assignment.ServerVersion = graph.Version
+	assignment.DeploymentError = sql.NullString{}
+	assignment.UpdatedAt = time.Now()
 	s.repo.UpdateAgentBehaviorTree(assignment)
 
 	// Create deployment log
@@ -1019,7 +1062,9 @@ func (s *Server) deployBehaviorTreeToAgentSync(ctx context.Context, assignmentID
 			assignment.DeployedVersion = graph.Version
 			assignment.DeployedAt.Time = time.Now()
 			assignment.DeployedAt.Valid = true
+			assignment.DeploymentError = sql.NullString{}
 			deployLog.Status = "success"
+			s.stateManager.GraphCache().SetDeployed(assignment.AgentID, assignment.BehaviorTreeID, canonicalGraph)
 		} else {
 			assignment.DeploymentStatus = "failed"
 			assignment.DeploymentError.String = result.Error
@@ -1029,16 +1074,21 @@ func (s *Server) deployBehaviorTreeToAgentSync(ctx context.Context, assignmentID
 			deployLog.ErrorMessage.Valid = true
 		}
 
+		assignment.UpdatedAt = time.Now()
 		deployLog.CompletedAt.Time = time.Now()
 		deployLog.CompletedAt.Valid = true
 		s.repo.UpdateAgentBehaviorTree(assignment)
 		s.repo.UpdateDeploymentLog(deployLog)
 
-		return map[string]interface{}{
+		response := map[string]interface{}{
 			"correlation_id": correlationID,
 			"status":         assignment.DeploymentStatus,
 			"version":        graph.Version,
 		}
+		if assignment.DeploymentError.Valid {
+			response["error"] = assignment.DeploymentError.String
+		}
+		return response
 	}
 
 	// Fallback: simulate success if no QUIC handler
@@ -1046,6 +1096,8 @@ func (s *Server) deployBehaviorTreeToAgentSync(ctx context.Context, assignmentID
 	assignment.DeployedVersion = graph.Version
 	assignment.DeployedAt.Time = time.Now()
 	assignment.DeployedAt.Valid = true
+	assignment.DeploymentError = sql.NullString{}
+	assignment.UpdatedAt = time.Now()
 	deployLog.Status = "success"
 	deployLog.CompletedAt.Time = time.Now()
 	deployLog.CompletedAt.Valid = true
