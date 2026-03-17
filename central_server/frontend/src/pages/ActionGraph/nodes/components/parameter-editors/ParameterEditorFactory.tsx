@@ -1346,7 +1346,7 @@ const JointStateEditor = memo(({
               <span />
             </div>
             {jointNames.map((name, idx) => (
-              <div key={`${name}-${idx}`} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center py-0.5">
+              <div key={`joint-row-${idx}`} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center py-0.5">
                 <input
                   type="text"
                   value={name}
