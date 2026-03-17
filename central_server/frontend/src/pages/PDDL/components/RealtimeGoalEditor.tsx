@@ -42,6 +42,15 @@ export default function RealtimeGoalEditor({ stateVars, goals, onChange }: Props
     () => new Map(stateVars.map(stateVar => [stateVar.name, stateVar])),
     [stateVars],
   )
+  const activationVariableSuggestions = useMemo(() => {
+    const names = stateVars.map(stateVar => stateVar.name)
+    const placeholders = [
+      '{{agent.name}}_status',
+      '{{agent.name}}_location',
+      '{{resource.name}}_status',
+    ]
+    return Array.from(new Set([...names, ...placeholders]))
+  }, [stateVars])
 
   const updateGoal = (goalID: string, updater: (goal: RealtimeGoalRule) => RealtimeGoalRule) => {
     onChange(goals.map(goal => (goal.id === goalID ? updater(goal) : goal)))
@@ -137,21 +146,29 @@ export default function RealtimeGoalEditor({ stateVars, goals, onChange }: Props
                 <div className="text-[11px] text-muted">활성 조건이 없으면 goal 미충족 시 항상 후보가 됩니다.</div>
               ) : (goal.activation_conditions || []).map((condition, conditionIndex) => {
                 const stateVar = stateVarMap.get(condition.variable)
+                const datalistID = `${goal.id}-activation-variable-${conditionIndex}`
                 return (
                   <div key={`${goal.id}:condition:${conditionIndex}`} className="flex flex-wrap items-center gap-2">
-                    <select
+                    <input
+                      list={datalistID}
                       className="min-w-[180px] flex-1 rounded-xl border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
                       value={condition.variable}
                       onChange={(e) => updateCondition(goal.id, conditionIndex, current => ({
                         ...current,
                         variable: e.target.value,
-                        value: stateVarMap.get(e.target.value)?.type === 'bool' ? 'true' : (stateVarMap.get(e.target.value)?.initial_value || ''),
+                        value: stateVarMap.has(e.target.value)
+                          ? (stateVarMap.get(e.target.value)?.type === 'bool'
+                            ? 'true'
+                            : (stateVarMap.get(e.target.value)?.initial_value || ''))
+                          : current.value,
                       }))}
-                    >
-                      {stateVars.map((state) => (
-                        <option key={state.id} value={state.name}>{state.name}</option>
+                      placeholder="state 변수 또는 {{agent.name}}_status"
+                    />
+                    <datalist id={datalistID}>
+                      {activationVariableSuggestions.map((name) => (
+                        <option key={name} value={name} />
                       ))}
-                    </select>
+                    </datalist>
 
                     <select
                       className="w-24 rounded-xl border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
@@ -198,6 +215,9 @@ export default function RealtimeGoalEditor({ stateVars, goals, onChange }: Props
                   </div>
                 )
               })}
+              <div className="text-[11px] text-muted">
+                예: <code>{'{{agent.name}}_status'}</code>, <code>{'{{agent.name}}_location'}</code>, <code>{'{{resource.name}}_status'}</code>
+              </div>
             </div>
           </div>
 

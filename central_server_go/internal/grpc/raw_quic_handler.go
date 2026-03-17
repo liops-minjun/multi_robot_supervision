@@ -68,6 +68,7 @@ type RawQUICHandler struct {
 	taskCompleteCallback TaskCompleteCallback
 	taskObserveCallback  TaskObserveCallback
 	resourceChangeCallback func()
+	planningStateCallback func(agentID string, values map[string]string)
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -179,6 +180,11 @@ func (h *RawQUICHandler) SetTaskObserveCallback(cb TaskObserveCallback) {
 
 func (h *RawQUICHandler) SetResourceChangeCallback(cb func()) {
 	h.resourceChangeCallback = cb
+}
+
+// SetPlanningStateCallback wires agent-reported runtime planning variables.
+func (h *RawQUICHandler) SetPlanningStateCallback(cb func(agentID string, values map[string]string)) {
+	h.planningStateCallback = cb
 }
 
 // Start starts listening for raw QUIC connections
@@ -2022,6 +2028,7 @@ func (h *RawQUICHandler) handleDisconnect(agentConn *agentConnection) {
 
 	// Update state manager (mark agent as offline by unregistering)
 	h.stateManager.UnregisterAgent(agentConn.agentID)
+	h.stateManager.GraphCache().InvalidateAgentDeployments(agentConn.agentID)
 
 	// Update database
 	h.repo.UpdateAgentStatus(agentConn.agentID, "offline", "")
@@ -2236,6 +2243,9 @@ func (h *RawQUICHandler) buildDeployGraphMessage(correlationID string, graphJSON
 			To        string `json:"to"`
 			Type      string `json:"type"`
 			Condition string `json:"condition"`
+			Config    *struct {
+				Condition string `json:"condition"`
+			} `json:"config"`
 		} `json:"edges"`
 		EntryPoint string `json:"entry_point"`
 		Checksum   string `json:"checksum"`
@@ -2289,7 +2299,11 @@ func (h *RawQUICHandler) buildDeployGraphMessage(correlationID string, graphJSON
 
 	// Field 4: edges (repeated)
 	for _, e := range canonical.Edges {
-		edgeMsg := h.buildEdgeMessage(e.From, e.To, e.Type, e.Condition)
+		condition := strings.TrimSpace(e.Condition)
+		if condition == "" && e.Config != nil {
+			condition = strings.TrimSpace(e.Config.Condition)
+		}
+		edgeMsg := h.buildEdgeMessage(e.From, e.To, e.Type, condition)
 		graphMsg = protowire.AppendTag(graphMsg, 4, protowire.BytesType)
 		graphMsg = protowire.AppendBytes(graphMsg, edgeMsg)
 	}
@@ -4433,7 +4447,18 @@ func (h *RawQUICHandler) handleTaskLog(agentConn *agentConnection, taskLog *Task
 // handleTaskStateUpdate processes agent-driven task state updates
 // This is the primary state update mechanism for agent-driven execution
 func (h *RawQUICHandler) handleTaskStateUpdate(agentConn *agentConnection, update *TaskStateUpdateMsg) {
-	if update == nil || update.TaskID == "" {
+	if update == nil {
+		return
+	}
+	// Special channel for agent->server runtime planning state telemetry.
+	if update.TaskID == "__planning_state__" {
+		if h.planningStateCallback != nil && len(update.Variables) > 0 {
+			h.planningStateCallback(agentConn.agentID, update.Variables)
+		}
+		return
+	}
+
+	if update.TaskID == "" {
 		return
 	}
 
@@ -4443,9 +4468,20 @@ func (h *RawQUICHandler) handleTaskStateUpdate(agentConn *agentConnection, updat
 	// Convert TaskState enum to status string
 	taskStatus := taskStateToString(update.State)
 
+	errorMsg := ""
+	if update.StepResult != nil {
+		errorMsg = strings.TrimSpace(update.StepResult.Error)
+	}
+	if errorMsg == "" {
+		errorMsg = strings.TrimSpace(update.BlockingReason)
+	}
+	if errorMsg == "" && (taskStatus == "failed" || taskStatus == "cancelled") {
+		errorMsg = "agent reported terminal task state"
+	}
+
 	// Update task state in database
 	// stepIndex is not tracked for agent-driven execution, use 0
-	if err := h.repo.UpdateTaskStatus(update.TaskID, taskStatus, update.CurrentStepID, 0, ""); err != nil {
+	if err := h.repo.UpdateTaskStatus(update.TaskID, taskStatus, update.CurrentStepID, 0, errorMsg); err != nil {
 		log.Printf("[RawQUIC] Failed to update task state: %v", err)
 	}
 
@@ -4475,10 +4511,6 @@ func (h *RawQUICHandler) handleTaskStateUpdate(agentConn *agentConnection, updat
 
 		// Notify scheduler of task completion (for agent-driven execution)
 		if h.taskCompleteCallback != nil {
-			errorMsg := ""
-			if update.StepResult != nil {
-				errorMsg = update.StepResult.Error
-			}
 			h.taskCompleteCallback(update.TaskID, taskStatus, errorMsg)
 		}
 	}
@@ -5009,7 +5041,17 @@ func (h *RawQUICHandler) SendPing(agentID, pingID string) error {
 	}
 
 	msgData := h.buildPingMessage(pingID)
-	return h.sendToAgent(conn, msgData)
+	if err := h.sendToAgent(conn, msgData); err != nil {
+		if isStaleSendError(err) {
+			log.Printf("[RawQUIC] SendPing stream failure for agent %s, forcing reconnect: %v", agentID, err)
+			if closeErr := conn.quicConn.CloseWithError(0, "ping stream open timeout"); closeErr != nil {
+				log.Printf("[RawQUIC] Failed to close stale ping connection for agent %s: %v", agentID, closeErr)
+			}
+			h.handleDisconnect(conn)
+		}
+		return err
+	}
+	return nil
 }
 
 // SendCommandAndWait sends a command and waits for result
@@ -5064,12 +5106,19 @@ func (h *RawQUICHandler) RegisterResultCallback(commandID string, callback Comma
 
 // sendToAgent sends raw data to an agent via QUIC
 func (h *RawQUICHandler) sendToAgent(conn *agentConnection, data []byte) error {
+	const sendTimeout = 5 * time.Second
+
+	sendCtx, cancel := context.WithTimeout(h.ctx, sendTimeout)
+	defer cancel()
+
 	// Open a new stream for this message
-	stream, err := conn.quicConn.OpenStreamSync(h.ctx)
+	stream, err := conn.quicConn.OpenStreamSync(sendCtx)
 	if err != nil {
 		return fmt.Errorf("failed to open stream: %w", err)
 	}
 	defer stream.Close()
+	_ = stream.SetWriteDeadline(time.Now().Add(sendTimeout))
+	defer stream.SetWriteDeadline(time.Time{})
 
 	// Write length-prefixed message
 	lenBuf := make([]byte, 4)
@@ -5084,6 +5133,23 @@ func (h *RawQUICHandler) sendToAgent(conn *agentConnection, data []byte) error {
 	}
 
 	return nil
+}
+
+func isStaleSendError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errLower := strings.ToLower(err.Error())
+	if strings.Contains(errLower, "failed to open stream") {
+		return true
+	}
+	if strings.Contains(errLower, "context deadline exceeded") {
+		return true
+	}
+	if strings.Contains(errLower, "timeout") && strings.Contains(errLower, "stream") {
+		return true
+	}
+	return false
 }
 
 // buildExecuteCommandMessage builds a ServerMessage with ExecuteCommand
@@ -5294,7 +5360,17 @@ func (h *RawQUICHandler) SendStartTask(agentID, taskID, graphID, robotID string,
 	}
 
 	msgData := h.buildStartTaskMessage(taskID, graphID, robotID, params)
-	return h.sendToAgent(conn, msgData)
+	if err := h.sendToAgent(conn, msgData); err != nil {
+		if isStaleSendError(err) {
+			log.Printf("[RawQUIC] SendStartTask stream failure for agent %s (task=%s), forcing reconnect: %v", agentID, taskID, err)
+			if closeErr := conn.quicConn.CloseWithError(0, "start_task stream open timeout"); closeErr != nil {
+				log.Printf("[RawQUIC] Failed to close stale connection for agent %s: %v", agentID, closeErr)
+			}
+			h.handleDisconnect(conn)
+		}
+		return err
+	}
+	return nil
 }
 
 // buildStartTaskMessage builds a ServerMessage with StartTaskCommand
@@ -5553,6 +5629,13 @@ func (h *RawQUICHandler) broadcastFleetState() {
 	for _, conn := range conns {
 		if err := h.sendToAgent(conn, serverMsg); err != nil {
 			log.Printf("[RawQUIC] Failed to broadcast fleet state to %s: %v", conn.agentID, err)
+			if isStaleSendError(err) {
+				log.Printf("[RawQUIC] FleetState stream failure for agent %s, forcing reconnect", conn.agentID)
+				if closeErr := conn.quicConn.CloseWithError(0, "fleet_state stream open timeout"); closeErr != nil {
+					log.Printf("[RawQUIC] Failed to close stale fleet-state connection for agent %s: %v", conn.agentID, closeErr)
+				}
+				h.handleDisconnect(conn)
+			}
 		}
 	}
 }

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import React, { type ChangeEvent, useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import ReactFlow, {
   Node,
@@ -22,7 +22,7 @@ import 'reactflow/dist/style.css'
 import {
   Trash2, Zap, ChevronDown, ChevronRight, Server, Activity, Plus, PlusCircle, X,
   Cpu, FileCode, Users, Link2, Unlink, Check, AlertCircle, Clock, Layout, Save, Radio,
-  Edit, Lock, Unlock, Eye, EyeOff, Search
+  Edit, Lock, Unlock, Eye, EyeOff, Search, Download, Upload
 } from 'lucide-react'
 import { templateApi, stateDefinitionApi, agentApi, capabilityApi, behaviorTreeLockApi, taskDistributorApi } from '../../api/client'
 import { useWebSocket, BehaviorTreeLockMessage, GraphSyncMessage } from '../../contexts/WebSocketContext'
@@ -56,6 +56,7 @@ const edgeTypes = {
 const START_NODE_ID = '__behavior_tree_start__'
 const START_NODE_COLOR = '#22c55e'
 const ACTION_NODE_DRAG_HANDLE_SELECTOR = '.action-node-drag-handle'
+type TerminalEventSubtype = 'End' | 'Error' | 'Warning'
 
 // Color palette for different action types
 const ACTION_COLORS: Record<string, string> = {
@@ -92,6 +93,11 @@ const emptyPlanningTask = (): PlanningTaskSpec => ({
   result_states: [],
 })
 
+interface PlanningAgentOption {
+  id: string
+  name: string
+}
+
 function getStateDefaultValue(stateVar?: TaskDistributorState): string {
   if (!stateVar) return ''
   if (stateVar.type === 'bool') return 'true'
@@ -115,22 +121,113 @@ function buildPlanningResourceTokenSet(resources: TaskDistributorResource[]): Se
   return new Set(resources.map(resource => `${resource.kind === 'type' ? 'type' : 'instance'}:${resource.id}`))
 }
 
-function containsPlanningResourcePlaceholder(value: string): boolean {
-  return value.includes('{{resource.')
+function containsPlanningPlaceholder(value: string): boolean {
+  return (
+    value.includes('{{resource.') ||
+    value.includes('{{agent.') ||
+    value.includes('{{agent}}')
+  )
+}
+
+function buildPlanningPlaceholderCandidates(
+  variable: string,
+  resources: TaskDistributorResource[],
+  agents: PlanningAgentOption[]
+): string[] {
+  const resourceNames = resources
+    .filter(resource => resource.kind !== 'type' && resource.name)
+    .map(resource => resource.name)
+  const agentNames = Array.from(new Set(agents
+    .map(agent => (agent.name || '').trim())
+    .filter(Boolean)))
+  const agentIDs = Array.from(new Set(agents
+    .map(agent => (agent.id || '').trim())
+    .filter(Boolean)))
+
+  let candidates = [variable]
+  const apply = (placeholder: string, values: string[]) => {
+    if (values.length === 0) return
+    const next = new Set<string>()
+    for (const candidate of candidates) {
+      if (!candidate.includes(placeholder)) {
+        next.add(candidate)
+        continue
+      }
+      for (const value of values) {
+        next.add(candidate.split(placeholder).join(value))
+      }
+    }
+    candidates = Array.from(next)
+  }
+
+  apply('{{resource.name}}', resourceNames)
+  apply('{{agent.name}}', agentNames)
+  apply('{{agent.id}}', agentIDs)
+  apply('{{agent}}', agentNames)
+
+  return candidates
+}
+
+function buildTemplateLoadSignature(template: ActionGraph): string {
+  return [
+    template.id,
+    template.version,
+    template.updated_at || '',
+    template.created_at || '',
+    template.entry_point || '',
+    template.steps?.length || 0,
+  ].join('|')
+}
+
+function eventSubtypeToTerminalPayload(
+  subtype: TerminalEventSubtype,
+  debugMessage?: string
+): {
+  terminal_type: 'success' | 'failure'
+  alert: boolean
+  message?: string
+} {
+  const message = (debugMessage || '').trim()
+  if (subtype === 'Error') {
+    return {
+      terminal_type: 'failure',
+      alert: true,
+      message: message || undefined,
+    }
+  }
+  if (subtype === 'Warning') {
+    return {
+      terminal_type: 'success',
+      alert: true,
+      message: message || undefined,
+    }
+  }
+  return {
+    terminal_type: 'success',
+    alert: false,
+    message: message || undefined,
+  }
+}
+
+function terminalStepToEventSubtype(step: ActionGraph['steps'][number]): TerminalEventSubtype {
+  const terminalType = (step.terminal_type || '').toLowerCase()
+  if (terminalType === 'failure') return 'Error'
+  if (terminalType === 'warning' || (!!step.alert && terminalType !== 'failure')) return 'Warning'
+  return 'End'
 }
 
 function inferPlanningStateVar(
   variable: string,
   states: TaskDistributorState[],
-  resources: TaskDistributorResource[]
+  resources: TaskDistributorResource[],
+  agents: PlanningAgentOption[]
 ): TaskDistributorState | undefined {
   const exact = states.find(state => state.name === variable)
   if (exact) return exact
-  if (!containsPlanningResourcePlaceholder(variable)) return undefined
+  if (!containsPlanningPlaceholder(variable)) return undefined
 
-  const instanceResources = resources.filter(resource => resource.kind !== 'type')
-  const matches = instanceResources
-    .map(resource => states.find(state => state.name === variable.split('{{resource.name}}').join(resource.name)))
+  const matches = buildPlanningPlaceholderCandidates(variable, resources, agents)
+    .map(candidate => states.find(state => state.name === candidate))
     .filter((state): state is TaskDistributorState => Boolean(state))
 
   if (matches.length === 0) return undefined
@@ -140,10 +237,14 @@ function inferPlanningStateVar(
 
 function buildPlanningVariableSuggestions(
   states: TaskDistributorState[],
-  resources: TaskDistributorResource[]
+  resources: TaskDistributorResource[],
+  agents: PlanningAgentOption[]
 ): string[] {
   const suggestions = new Set<string>()
   const instanceResources = resources.filter(resource => resource.kind !== 'type' && resource.name)
+  const namedAgents = agents
+    .map(agent => ({ id: (agent.id || '').trim(), name: (agent.name || '').trim() }))
+    .filter(agent => agent.id || agent.name)
 
   for (const state of states) {
     if (state.name) suggestions.add(state.name)
@@ -156,7 +257,23 @@ function buildPlanningVariableSuggestions(
     }
   }
 
-  const priority = (value: string) => (value.includes('{{resource.name}}') ? 0 : 1)
+  for (const state of states) {
+    for (const agent of namedAgents) {
+      if (agent.name && state.name.includes(agent.name)) {
+        suggestions.add(state.name.split(agent.name).join('{{agent.name}}'))
+        suggestions.add(state.name.split(agent.name).join('{{agent}}'))
+      }
+      if (agent.id && state.name.includes(agent.id)) {
+        suggestions.add(state.name.split(agent.id).join('{{agent.id}}'))
+      }
+    }
+  }
+
+  const priority = (value: string) => {
+    if (value.includes('{{resource.name}}')) return 0
+    if (value.includes('{{agent.name}}') || value.includes('{{agent.id}}') || value.includes('{{agent}}')) return 1
+    return 2
+  }
   return Array.from(suggestions).sort((left, right) => {
     const byPriority = priority(left) - priority(right)
     if (byPriority !== 0) return byPriority
@@ -168,7 +285,7 @@ function isPlanningStateReferenceAllowed(
   variable: string,
   states: TaskDistributorState[]
 ): boolean {
-  return states.some(state => state.name === variable) || containsPlanningResourcePlaceholder(variable)
+  return states.some(state => state.name === variable) || containsPlanningPlaceholder(variable)
 }
 
 function filterPlanningTaskForDistributor(
@@ -301,6 +418,36 @@ type PaletteCategory = {
   category: string
   icon: React.ReactNode
   items: PaletteItem[]
+}
+
+type TaskSetAssignmentSnapshot = {
+  agent_id?: string
+  agent_name?: string
+  enabled?: boolean
+  priority?: number
+}
+
+type TaskSetTemplateSnapshot = {
+  id: string
+  name: string
+  description?: string
+  entry_point?: string
+  preconditions?: unknown[]
+  steps: ActionGraph['steps']
+  states?: ActionGraph['states']
+  planning_states?: ActionGraph['planning_states']
+  planning_task?: ActionGraph['planning_task']
+  task_distributor_id?: string
+}
+
+type TaskSetBackup = {
+  version: number
+  exported_at: string
+  source: string
+  templates: Array<{
+    template: TaskSetTemplateSnapshot
+    assignments: TaskSetAssignmentSnapshot[]
+  }>
 }
 
 const inferCapabilityKindFromActionType = (actionType?: string): 'action' | 'service' => {
@@ -445,6 +592,24 @@ const extractApiErrorMessage = (error: any, fallback: string): string => {
     fallback
   )
 }
+
+const toOptionalString = (value?: string | null): string | undefined => {
+  const trimmed = (value || '').trim()
+  return trimmed.length > 0 ? trimmed : undefined
+}
+
+const buildTaskSetTemplateSnapshot = (template: ActionGraph): TaskSetTemplateSnapshot => ({
+  id: template.id,
+  name: template.name || template.id,
+  description: toOptionalString(template.description),
+  entry_point: toOptionalString(template.entry_point),
+  preconditions: (template.preconditions || undefined) as unknown[] | undefined,
+  steps: template.steps || [],
+  states: template.states || undefined,
+  planning_states: template.planning_states || undefined,
+  planning_task: template.planning_task || undefined,
+  task_distributor_id: toOptionalString(template.task_distributor_id),
+})
 
 const matchesPaletteSearch = (item: PaletteItem, query: string): boolean => {
   if (!query) return true
@@ -615,8 +780,12 @@ function ActionGraphEditor() {
   const [showRenameModal, setShowRenameModal] = useState(false)
   const [showAddStateModal, setShowAddStateModal] = useState(false)
   const [showTaskPddlConfigModal, setShowTaskPddlConfigModal] = useState(false)
+  const [taskSetNotice, setTaskSetNotice] = useState<string | null>(null)
+  const [isTaskSetProcessing, setIsTaskSetProcessing] = useState(false)
+  const taskSetImportInputRef = useRef<HTMLInputElement | null>(null)
 
   const [expandedCategories, setExpandedCategories] = useState<string[]>([
+    'Start Nodes',
     'Discovered Actions',
     'Discovered Services',
     'Configured Actions',
@@ -638,7 +807,8 @@ function ActionGraphEditor() {
   // Save state
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const lastSavedStateRef = useRef<{ nodes: string; edges: string } | null>(null)
-  const loadedTemplateIdRef = useRef<string | null>(null)  // Track which template's data is currently loaded on canvas
+  const loadedTemplateRef = useRef<{ id: string; signature: string } | null>(null)  // Track currently loaded template identity
+  const pendingCreatedTemplateIdRef = useRef<string | null>(null)
 
   // Edit lock state (persistent session from user store)
   const { username, sessionId: storeSessionId } = useUserStore()
@@ -826,22 +996,43 @@ function ActionGraphEditor() {
     queryFn: () => templateApi.list(),
   })
 
+  const sortedTemplates = useMemo(
+    () => [...allTemplates].sort((left, right) => {
+      const leftTime = new Date(left.updated_at || left.created_at).getTime()
+      const rightTime = new Date(right.updated_at || right.created_at).getTime()
+      if (leftTime !== rightTime) return rightTime - leftTime
+      return left.id.localeCompare(right.id)
+    }),
+    [allTemplates]
+  )
+
   useEffect(() => {
     if (templatesLoading) return
-    if (allTemplates.length === 0) {
+    if (sortedTemplates.length === 0) {
       if (selectedTemplateId !== null) {
         setSelectedTemplateId(null)
+      }
+      pendingCreatedTemplateIdRef.current = null
+      return
+    }
+
+    const pendingTemplateId = pendingCreatedTemplateIdRef.current
+    if (pendingTemplateId) {
+      const pendingExists = sortedTemplates.some(template => template.id === pendingTemplateId)
+      if (pendingExists) {
+        setSelectedTemplateId(pendingTemplateId)
+        pendingCreatedTemplateIdRef.current = null
       }
       return
     }
 
     const isCurrentSelectionValid = !!selectedTemplateId &&
-      allTemplates.some(template => template.id === selectedTemplateId)
+      sortedTemplates.some(template => template.id === selectedTemplateId)
 
     if (!isCurrentSelectionValid) {
-      setSelectedTemplateId(allTemplates[0].id)
+      setSelectedTemplateId(sortedTemplates[0].id)
     }
-  }, [templatesLoading, allTemplates, selectedTemplateId])
+  }, [templatesLoading, sortedTemplates, selectedTemplateId])
 
 
   // Fetch selected template
@@ -1114,6 +1305,20 @@ function ActionGraphEditor() {
       })
     }
 
+    palette.push({
+      category: 'Start Nodes',
+      icon: <Radio className="w-3.5 h-3.5" />,
+      items: [
+        {
+          type: 'event',
+          subtype: 'Start',
+          label: 'Start',
+          color: START_NODE_COLOR,
+          isDraggable: true,
+        },
+      ],
+    })
+
     // End nodes (terminal nodes for behavior tree)
     palette.push({
       category: 'End Nodes',
@@ -1131,6 +1336,13 @@ function ActionGraphEditor() {
           subtype: 'Error',
           label: 'End (Error)',
           color: '#ef4444',
+          isDraggable: true,
+        },
+        {
+          type: 'event',
+          subtype: 'Warning',
+          label: 'End (Warning)',
+          color: '#f59e0b',
           isDraggable: true,
         },
       ],
@@ -1279,7 +1491,7 @@ function ActionGraphEditor() {
 
     const selectedNodeIds = new Set(
       nodes
-        .filter(node => node.selected && node.id !== START_NODE_ID)
+        .filter(node => node.selected)
         .map(node => node.id)
     )
     const selectedEdgeIds = new Set(
@@ -1313,7 +1525,7 @@ function ActionGraphEditor() {
         if (isTextInput) return
       }
 
-      const hasSelection = nodes.some((node) => node.selected && node.id !== START_NODE_ID) || edges.some((edge) => edge.selected)
+      const hasSelection = nodes.some((node) => node.selected) || edges.some((edge) => edge.selected)
       if (!hasSelection) return
 
       event.preventDefault()
@@ -1328,6 +1540,10 @@ function ActionGraphEditor() {
   // Using selectedTemplate?.id here can transiently become undefined during refetch/error
   // and inadvertently clear the canvas.
   const templateId = selectedTemplateId
+  const templateLoadSignature = useMemo(
+    () => (selectedTemplate ? buildTemplateLoadSignature(selectedTemplate) : null),
+    [selectedTemplate]
+  )
 
   // Keep editability flag inside node data for node-local controls (e.g. delete button).
   useEffect(() => {
@@ -1365,9 +1581,10 @@ function ActionGraphEditor() {
   // Clear canvas immediately when switching to a different template
   // This prevents showing stale data from the previous template
   useEffect(() => {
-    if (templateId !== loadedTemplateIdRef.current && loadedTemplateIdRef.current !== null) {
+    const loadedTemplateId = loadedTemplateRef.current?.id || null
+    if (templateId !== loadedTemplateId && loadedTemplateId !== null) {
       // Template ID changed - clear canvas to prevent showing old data
-      console.log('[Template] Switching from', loadedTemplateIdRef.current, 'to', templateId, '- clearing canvas')
+      console.log('[Template] Switching from', loadedTemplateId, 'to', templateId, '- clearing canvas')
       setNodes([])
       setEdges([])
       setSaveStatus('idle')
@@ -1379,8 +1596,11 @@ function ActionGraphEditor() {
   useEffect(() => {
     // IMPORTANT: Verify selectedTemplate.id matches selected template ID.
     if (selectedTemplate && templateId && selectedTemplate.id === templateId) {
-      // Skip if we already loaded this template
-      if (loadedTemplateIdRef.current === templateId) {
+      // Skip only if same template id + same data signature.
+      if (
+        loadedTemplateRef.current?.id === templateId &&
+        loadedTemplateRef.current?.signature === templateLoadSignature
+      ) {
         return
       }
 
@@ -1402,14 +1622,27 @@ function ActionGraphEditor() {
         })
       })
 
-      loadedTemplateIdRef.current = templateId
+      loadedTemplateRef.current = {
+        id: templateId,
+        signature: templateLoadSignature || '',
+      }
       lastSavedStateRef.current = {
         nodes: JSON.stringify(initialNodes),
         edges: JSON.stringify(initialEdges),
       }
       setSaveStatus('idle')
     }
-  }, [templateId, selectedTemplate, setNodes, setEdges, selectedStateDef, availableStates, availableAgents, fitView])
+  }, [
+    templateId,
+    templateLoadSignature,
+    selectedTemplate,
+    setNodes,
+    setEdges,
+    selectedStateDef,
+    availableStates,
+    availableAgents,
+    fitView,
+  ])
 
   // Track if there are unsaved changes (for UI indicator)
   const hasUnsavedChanges = useMemo(() => {
@@ -1509,12 +1742,15 @@ function ActionGraphEditor() {
     nodes.forEach((node) => {
       if (node.type === 'event') {
         // Event nodes (Start/End) are terminal steps
-        if (node.data.subtype === 'End' || node.data.subtype === 'Error') {
+        if (node.data.subtype === 'End' || node.data.subtype === 'Error' || node.data.subtype === 'Warning') {
+          const terminalPayload = eventSubtypeToTerminalPayload(node.data.subtype as TerminalEventSubtype, node.data.debugMessage)
           steps.push({
             id: node.id,
             name: node.data.label,
             type: 'terminal',
-            terminal_type: node.data.subtype === 'Error' ? 'failure' : 'success',
+            terminal_type: terminalPayload.terminal_type,
+            alert: terminalPayload.alert,
+            message: terminalPayload.message,
             ui: {
               x: node.position.x,
               y: node.position.y,
@@ -2080,6 +2316,7 @@ function ActionGraphEditor() {
       }
 
       const isActionLikeNode = data.type === 'action' || data.type === 'service'
+      const isStartEvent = data.type === 'event' && data.subtype === 'Start'
 
       const position = screenToFlowPosition({
         x: event.clientX,
@@ -2101,6 +2338,48 @@ function ActionGraphEditor() {
         ? getDefaultJobNameTemplate(data.server || data.subtype, data.label)
         : (data.label || data.subtype || '')
 
+      if (isStartEvent) {
+        const startNode: Node = {
+          id: START_NODE_ID,
+          type: 'event',
+          position,
+          data: {
+            label: 'Start',
+            subtype: 'Start',
+            color: START_NODE_COLOR,
+            initialState: defaultSuccessState,
+            availableStates,
+            availableAgents,
+            isEditing,
+          },
+          draggable: true,
+          selectable: true,
+          deletable: true,
+        }
+        setNodes((nds) => {
+          const withoutStart = nds.filter((node) => node.id !== START_NODE_ID)
+          return [...withoutStart, startNode]
+        })
+        setEdges((eds) => {
+          const existingEntry = eds.find((edge) => edge.source === START_NODE_ID && edge.target)
+          const filtered = eds.filter((edge) => edge.source !== START_NODE_ID && edge.target !== START_NODE_ID)
+          if (existingEntry?.target) {
+            filtered.push({
+              id: `${START_NODE_ID}->${existingEntry.target}`,
+              source: START_NODE_ID,
+              target: existingEntry.target,
+              sourceHandle: 'state-out',
+              targetHandle: 'state-in',
+              type: 'smoothstep',
+              markerEnd: { type: MarkerType.ArrowClosed, color: START_NODE_COLOR },
+              style: { stroke: START_NODE_COLOR, strokeWidth: 2 },
+            })
+          }
+          return filtered
+        })
+        return
+      }
+
       const newNode: Node = {
         id: getNodeId(),
         type: isActionLikeNode ? 'action' : 'event',
@@ -2120,12 +2399,15 @@ function ActionGraphEditor() {
           successState: defaultSuccessState,
           failureState: defaultFailureState,
           initialState: defaultSuccessState,
-          finalState: data.subtype === 'Error' ? defaultFailureState : defaultSuccessState,
+          finalState: data.subtype === 'Error'
+            ? defaultFailureState
+            : (data.subtype === 'Warning' && availableStates.includes('warning') ? 'warning' : defaultSuccessState),
           fromState: defaultSuccessState,
           toState: data.subtype,
           availableStates,
           availableAgents,
           params: {},
+          debugMessage: '',
           jobName: defaultJobName,
           endStates: defaultEndStates,
           // Task Distributor data
@@ -2152,6 +2434,7 @@ function ActionGraphEditor() {
       isEditing,
       screenToFlowPosition,
       setNodes,
+      setEdges,
       taskDistributorId,
       tdResources,
       tdStates,
@@ -2217,6 +2500,211 @@ function ActionGraphEditor() {
     setBottomPanelTab(null)
   }, [])
 
+  const handleExportTaskSet = useCallback(async () => {
+    setIsTaskSetProcessing(true)
+    setTaskSetNotice(null)
+    try {
+      const templates = await templateApi.list()
+      if (templates.length === 0) {
+        setTaskSetNotice('내보낼 태스크가 없습니다.')
+        return
+      }
+
+      const snapshotItems = await Promise.all(templates.map(async (item) => {
+        const [template, assignments] = await Promise.all([
+          templateApi.get(item.id),
+          templateApi.getAssignments(item.id),
+        ])
+        return {
+          template: buildTaskSetTemplateSnapshot(template),
+          assignments: assignments.map((assignment) => ({
+            agent_id: assignment.agent_id,
+            agent_name: assignment.agent_name,
+            enabled: assignment.enabled,
+            priority: 0,
+          })),
+        }
+      }))
+
+      const backup: TaskSetBackup = {
+        version: 1,
+        exported_at: new Date().toISOString(),
+        source: 'multi-robot-supervision/task-editor',
+        templates: snapshotItems,
+      }
+
+      const timeLabel = new Date().toISOString().replace(/[:.]/g, '-')
+      const fileName = `task_set_backup_${timeLabel}.json`
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' })
+      const url = window.URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = fileName
+      anchor.click()
+      window.URL.revokeObjectURL(url)
+
+      setTaskSetNotice(`태스크 세트 저장 완료: ${snapshotItems.length}개`)
+    } catch (error) {
+      console.error('Failed to export task set:', error)
+      setTaskSetNotice(`태스크 세트 저장 실패: ${extractApiErrorMessage(error, 'unknown error')}`)
+    } finally {
+      setIsTaskSetProcessing(false)
+    }
+  }, [])
+
+  const handleOpenTaskSetImport = useCallback(() => {
+    taskSetImportInputRef.current?.click()
+  }, [])
+
+  const handleImportTaskSet = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+
+    setIsTaskSetProcessing(true)
+    setTaskSetNotice(null)
+
+    try {
+      const raw = await file.text()
+      const parsed = JSON.parse(raw) as TaskSetBackup
+      const backupTemplates = Array.isArray(parsed?.templates) ? parsed.templates : []
+      if (backupTemplates.length === 0) {
+        throw new Error('유효한 templates 항목이 없습니다.')
+      }
+
+      const confirmed = window.confirm(
+        `태스크 세트 ${backupTemplates.length}개를 불러옵니다.\n` +
+          `동일 ID 태스크는 덮어씁니다. 계속할까요?`
+      )
+      if (!confirmed) {
+        setTaskSetNotice('태스크 세트 불러오기를 취소했습니다.')
+        return
+      }
+
+      const currentTemplates = await templateApi.list()
+      const existingTemplateIds = new Set(currentTemplates.map((template) => template.id))
+
+      const agentIdSet = new Set(agents.map((agent) => agent.id))
+      const agentIdByName = new Map<string, string>()
+      for (const agent of agents) {
+        const rawName = (agent.name || '').trim()
+        const formattedName = formatTaskManagerName(rawName)
+        if (rawName) agentIdByName.set(rawName, agent.id)
+        if (formattedName) agentIdByName.set(formattedName, agent.id)
+      }
+
+      let importedCount = 0
+      let assignmentAppliedCount = 0
+      let missingAgentCount = 0
+      const failedTemplates: string[] = []
+
+      for (const entry of backupTemplates) {
+        const snapshot = entry?.template
+        const templateID = snapshot?.id?.trim()
+        if (!templateID) {
+          continue
+        }
+
+        const steps = Array.isArray(snapshot.steps) ? snapshot.steps : []
+        const templateName = snapshot.name?.trim() || templateID
+
+        try {
+          if (!existingTemplateIds.has(templateID)) {
+            await templateApi.create({
+              id: templateID,
+              name: templateName,
+              description: snapshot.description || undefined,
+              entry_point: snapshot.entry_point || undefined,
+              preconditions: (snapshot.preconditions || undefined) as any,
+              steps: steps as any,
+              states: snapshot.states || undefined,
+              planning_task: snapshot.planning_task || undefined,
+            } as any)
+            existingTemplateIds.add(templateID)
+          }
+
+          await templateApi.update(templateID, {
+            name: templateName,
+            description: snapshot.description || '',
+            entry_point: snapshot.entry_point || '',
+            preconditions: (snapshot.preconditions || undefined) as any,
+            steps: steps as any,
+            states: snapshot.states || undefined,
+            planning_states: snapshot.planning_states || undefined,
+            planning_task: snapshot.planning_task || undefined,
+            task_distributor_id: snapshot.task_distributor_id || '',
+          } as any)
+
+          importedCount += 1
+        } catch (error) {
+          console.error(`Failed to upsert template ${templateID}:`, error)
+          failedTemplates.push(templateID)
+          continue
+        }
+
+        const assignments = Array.isArray(entry.assignments) ? entry.assignments : []
+        try {
+          const currentAssignments = await templateApi.getAssignments(templateID)
+          await Promise.all(
+            currentAssignments.map((assignment) =>
+              templateApi.unassign(templateID, assignment.agent_id)
+            )
+          )
+        } catch (error) {
+          console.error(`Failed to clear assignments for ${templateID}:`, error)
+        }
+
+        for (const assignment of assignments) {
+          const rawAgentID = (assignment.agent_id || '').trim()
+          const rawAgentName = (assignment.agent_name || '').trim()
+          const formattedAgentName = formatTaskManagerName(rawAgentName)
+          const resolvedAgentID = agentIdSet.has(rawAgentID)
+            ? rawAgentID
+            : (agentIdByName.get(rawAgentName) || agentIdByName.get(formattedAgentName) || '')
+
+          if (!resolvedAgentID) {
+            missingAgentCount += 1
+            continue
+          }
+
+          try {
+            await templateApi.assign(
+              templateID,
+              resolvedAgentID,
+              assignment.enabled !== false,
+              Number.isFinite(assignment.priority) ? Number(assignment.priority) : 0
+            )
+            assignmentAppliedCount += 1
+          } catch (error) {
+            console.error(`Failed to assign template ${templateID} to ${resolvedAgentID}:`, error)
+          }
+        }
+      }
+
+      queryClient.invalidateQueries({ queryKey: ['templates'] })
+      queryClient.invalidateQueries({ queryKey: ['templates-all'] })
+      queryClient.invalidateQueries({ queryKey: ['template', selectedTemplateId] })
+      queryClient.invalidateQueries({ queryKey: ['template-assignments'] })
+      queryClient.invalidateQueries({ queryKey: ['agents-overview'] })
+
+      const firstTemplateID = backupTemplates[0]?.template?.id
+      if (firstTemplateID) {
+        setSelectedTemplateId(firstTemplateID)
+      }
+
+      const summary =
+        `불러오기 완료: 태스크 ${importedCount}개, 할당 ${assignmentAppliedCount}개 적용` +
+        (missingAgentCount > 0 ? `, 누락 RTM ${missingAgentCount}개` : '') +
+        (failedTemplates.length > 0 ? `, 실패 태스크 ${failedTemplates.length}개` : '')
+      setTaskSetNotice(summary)
+    } catch (error) {
+      console.error('Failed to import task set:', error)
+      setTaskSetNotice(`태스크 세트 불러오기 실패: ${extractApiErrorMessage(error, 'invalid json')}`)
+    } finally {
+      setIsTaskSetProcessing(false)
+    }
+  }, [agents, queryClient, selectedTemplateId])
+
   const selectedTaskSummary = useMemo(
     () => allTemplates.find(template => template.id === selectedTemplateId) || null,
     [allTemplates, selectedTemplateId]
@@ -2231,6 +2719,13 @@ function ActionGraphEditor() {
         {/* Task list */}
         <div className="flex-1 overflow-y-auto">
           <div className="py-2">
+            <input
+              ref={taskSetImportInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={handleImportTaskSet}
+            />
             <div className="px-3 py-2 flex items-center justify-between">
               <span className="text-xs font-semibold text-secondary uppercase tracking-wider">
                 태스크
@@ -2243,19 +2738,44 @@ function ActionGraphEditor() {
                 <PlusCircle size={14} />
               </button>
             </div>
+            <div className="px-3 pb-2 grid grid-cols-2 gap-1">
+              <button
+                onClick={handleExportTaskSet}
+                disabled={isTaskSetProcessing}
+                className="inline-flex items-center justify-center gap-1 rounded border border-primary bg-elevated px-2 py-1 text-[10px] text-secondary hover:text-primary disabled:opacity-50"
+                title="현재 태스크 세트를 JSON으로 저장"
+              >
+                <Download size={11} />
+                저장
+              </button>
+              <button
+                onClick={handleOpenTaskSetImport}
+                disabled={isTaskSetProcessing}
+                className="inline-flex items-center justify-center gap-1 rounded border border-primary bg-elevated px-2 py-1 text-[10px] text-secondary hover:text-primary disabled:opacity-50"
+                title="JSON 파일에서 태스크 세트 불러오기"
+              >
+                <Upload size={11} />
+                불러오기
+              </button>
+            </div>
+            {taskSetNotice && (
+              <div className="mx-3 mb-2 rounded border border-blue-500/30 bg-blue-500/10 px-2 py-1.5 text-[10px] text-blue-200">
+                {taskSetNotice}
+              </div>
+            )}
             <div className="px-3 pb-2 text-[10px] text-muted">
               항목 클릭: 열기 · 상단 편집 버튼: 수정
             </div>
 
             {templatesLoading ? (
               <div className="px-3 py-4 text-center text-muted text-sm">로딩 중...</div>
-            ) : allTemplates.length === 0 ? (
+            ) : sortedTemplates.length === 0 ? (
               <div className="px-3 py-4 text-center text-muted text-sm">
                 태스크가 없습니다. 새로 생성하세요.
               </div>
             ) : (
               <div className="space-y-0.5">
-                {allTemplates.map((template: TemplateListItem) => (
+                {sortedTemplates.map((template: TemplateListItem) => (
                   <div
                     key={template.id}
                     onClick={() => handleOpenTask(template.id)}
@@ -3167,6 +3687,7 @@ function ActionGraphEditor() {
           onClose={() => setShowCreateModal(false)}
           onCreated={(id) => {
             setShowCreateModal(false)
+            pendingCreatedTemplateIdRef.current = id
             setSelectedTemplateId(id)
             queryClient.invalidateQueries({ queryKey: ['templates'] })
             queryClient.invalidateQueries({ queryKey: ['templates-all'] })
@@ -3280,9 +3801,9 @@ function convertActionGraphToGraph(
       availableAgents,
       isEditing: false,
     },
-    draggable: false,
-    selectable: false,
-    deletable: false,
+    draggable: true,
+    selectable: true,
+    deletable: true,
   })
 
   steps.forEach((step, index) => {
@@ -3343,6 +3864,18 @@ function convertActionGraphToGraph(
 
     const isTerminal = step.type === 'terminal'
     const nodeType = isTerminal ? 'event' : 'action'
+    const terminalSubtype = isTerminal ? terminalStepToEventSubtype(step) : undefined
+    const terminalFinalState = isTerminal
+      ? (
+        terminalSubtype === 'Error'
+          ? errorState
+          : (
+            terminalSubtype === 'Warning' && availableStates.includes('warning')
+              ? 'warning'
+              : defaultState
+          )
+      )
+      : undefined
 
     nodes.push({
       id: step.id,
@@ -3351,7 +3884,7 @@ function convertActionGraphToGraph(
       dragHandle: nodeType === 'action' ? ACTION_NODE_DRAG_HANDLE_SELECTOR : undefined,
       data: {
         label: step.name || step.id,
-        subtype: isTerminal ? (step.terminal_type === 'success' ? 'End' : 'Error') : subtype,
+        subtype: terminalSubtype || subtype,
         color,
         actionType,
         server: normalizedServer || step.action?.server,
@@ -3367,7 +3900,8 @@ function convertActionGraphToGraph(
         jobName: step.job_name || (isTerminal ? '' : getDefaultJobNameTemplate(normalizedServer || step.action?.server, step.name || step.id)),
         resourceAcquire: Array.from(new Set(step.resource_acquire || [])),
         resourceRelease: Array.from(new Set(step.resource_release || [])),
-        finalState: isTerminal ? (step.terminal_type === 'success' ? defaultState : errorState) : undefined,
+        finalState: terminalFinalState,
+        debugMessage: isTerminal ? (step.message || '') : undefined,
         availableStates,
         availableAgents,
         isEditing: false,
@@ -3507,20 +4041,32 @@ function TaskPddlConfigModal({
     queryFn: () => taskDistributorApi.getFull(selectedDistributorId),
     enabled: !!selectedDistributorId,
   })
+  const { data: planningAgentsRaw = [] } = useQuery({
+    queryKey: ['agents-list', 'pddl-config-modal'],
+    queryFn: () => agentApi.list({ offlineMode: 'all' }),
+    staleTime: 30000,
+  })
 
   const distributorStates = selectedDistributorFull?.states || []
   const distributorResources = selectedDistributorFull?.resources || []
+  const planningAgents = useMemo<PlanningAgentOption[]>(
+    () => planningAgentsRaw.map(agent => ({
+      id: agent.id,
+      name: (agent.name || '').trim() || agent.id,
+    })),
+    [planningAgentsRaw]
+  )
   const planningVariableSuggestions = useMemo(
-    () => buildPlanningVariableSuggestions(distributorStates, distributorResources),
-    [distributorResources, distributorStates]
+    () => buildPlanningVariableSuggestions(distributorStates, distributorResources, planningAgents),
+    [distributorResources, distributorStates, planningAgents]
   )
   const pendingPreconditionStateVar = useMemo(
-    () => inferPlanningStateVar(pendingPreconditionVariable, distributorStates, distributorResources),
-    [distributorResources, distributorStates, pendingPreconditionVariable]
+    () => inferPlanningStateVar(pendingPreconditionVariable, distributorStates, distributorResources, planningAgents),
+    [distributorResources, distributorStates, pendingPreconditionVariable, planningAgents]
   )
   const pendingResultStateVar = useMemo(
-    () => inferPlanningStateVar(pendingResultVariable, distributorStates, distributorResources),
-    [distributorResources, distributorStates, pendingResultVariable]
+    () => inferPlanningStateVar(pendingResultVariable, distributorStates, distributorResources, planningAgents),
+    [distributorResources, distributorStates, pendingResultVariable, planningAgents]
   )
 
   useEffect(() => {
@@ -3548,15 +4094,15 @@ function TaskPddlConfigModal({
 
   const applyPendingPreconditionVariable = useCallback((variable: string) => {
     setPendingPreconditionVariable(variable)
-    const stateVar = inferPlanningStateVar(variable, distributorStates, distributorResources)
+    const stateVar = inferPlanningStateVar(variable, distributorStates, distributorResources, planningAgents)
     setPendingPreconditionValue(getStateDefaultValue(stateVar))
-  }, [distributorResources, distributorStates])
+  }, [distributorResources, distributorStates, planningAgents])
 
   const applyPendingResultVariable = useCallback((variable: string) => {
     setPendingResultVariable(variable)
-    const stateVar = inferPlanningStateVar(variable, distributorStates, distributorResources)
+    const stateVar = inferPlanningStateVar(variable, distributorStates, distributorResources, planningAgents)
     setPendingResultValue(getStateDefaultValue(stateVar))
-  }, [distributorResources, distributorStates])
+  }, [distributorResources, distributorStates, planningAgents])
 
   const handleAddPrecondition = useCallback(() => {
     if (!pendingPreconditionVariable) return
@@ -3745,7 +4291,8 @@ function TaskPddlConfigModal({
                 <strong className="text-violet-200">Required States</strong>는 이 태스크가 시작되기 전에 만족해야 하는 값이고,
                 <strong className="ml-1 text-violet-200">Result States</strong>는 이 태스크가 성공 종료된 뒤 planner가 반영할 값입니다.
                 <br />
-                generic resource task를 만들 때는 변수명/값에 <span className="font-mono text-violet-200">{'{{resource.name}}'}</span> 같은 placeholder를 사용할 수 있습니다.
+                generic task를 만들 때는 변수명/값에 <span className="font-mono text-violet-200">{'{{resource.name}}'}</span>,
+                <span className="ml-1 font-mono text-violet-200">{'{{agent.name}}'}</span> 같은 placeholder를 사용할 수 있습니다.
               </p>
 
               {!selectedDistributorId ? (
@@ -3761,7 +4308,7 @@ function TaskPddlConfigModal({
                         value={pendingPreconditionVariable}
                         onChange={applyPendingPreconditionVariable}
                         suggestions={planningVariableSuggestions}
-                        placeholder="state 변수 또는 {{resource.name}}_empty"
+                        placeholder="state 변수 또는 {{resource.name}}_empty / {{agent.name}}_idle"
                       />
                       <select
                         className="w-[88px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
@@ -3828,7 +4375,7 @@ function TaskPddlConfigModal({
                         value={pendingResultVariable}
                         onChange={applyPendingResultVariable}
                         suggestions={planningVariableSuggestions}
-                        placeholder="state 변수 또는 at_{{resource.name}}"
+                        placeholder="state 변수 또는 at_{{resource.name}} / {{agent.name}}_mode"
                       />
                       {(() => {
                         if (pendingResultStateVar?.type === 'bool') {
@@ -3893,6 +4440,7 @@ function TaskPddlConfigModal({
                 고정 태스크면 특정 instance를 바로 선택해도 되고, 여러 CNC/충전기에 재사용할 generic 태스크를 만들 때만 <strong className="text-amber-200">[TYPE]</strong> resource를 선택하면 됩니다.
                 <br />
                 실행 시 Action goal 파라미터에서는 <span className="font-mono text-amber-200">{'${resource_name}'}</span> 또는 <span className="font-mono text-amber-200">{'${resource.name}'}</span> 로 선택된 resource 이름을 사용할 수 있습니다.
+                <span className="ml-1">agent 바인딩은 <span className="font-mono text-amber-200">{'${agent_name}'}</span>, <span className="font-mono text-amber-200">{'${agent.name}'}</span> 로 사용할 수 있습니다.</span>
               </p>
 
               {!selectedDistributorId ? (
@@ -3953,7 +4501,7 @@ function TaskPddlConfigModal({
                 아래 목록은 현재 선택한 Task Distributor가 제공하는 변수와 resource입니다. description이 있으면 함께 표시합니다.
               </p>
 
-              <div className="grid gap-3 lg:grid-cols-2">
+              <div className="grid gap-3 lg:grid-cols-3">
                 <div className="rounded-lg border border-violet-500/15 bg-violet-500/5 p-3">
                   <div className="mb-2 text-xs font-medium uppercase tracking-wider text-violet-300">States</div>
                   <div className="space-y-2">
@@ -3973,6 +4521,37 @@ function TaskPddlConfigModal({
                         )}
                       </div>
                     ))}
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-emerald-500/15 bg-emerald-500/5 p-3">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-wider text-emerald-300">Agents / Placeholders</div>
+                  <div className="space-y-2">
+                    <div className="rounded border border-emerald-500/20 bg-base/50 px-2 py-2">
+                      <div className="text-[11px] font-medium text-emerald-200">{'{{agent.name}}'}</div>
+                      <div className="mt-1 text-[10px] text-secondary">선택된 실행 agent의 이름으로 치환</div>
+                    </div>
+                    <div className="rounded border border-emerald-500/20 bg-base/50 px-2 py-2">
+                      <div className="text-[11px] font-medium text-emerald-200">{'{{agent.id}}'}</div>
+                      <div className="mt-1 text-[10px] text-secondary">선택된 실행 agent의 ID로 치환</div>
+                    </div>
+                    <div className="rounded border border-emerald-500/20 bg-base/50 px-2 py-2">
+                      <div className="text-[11px] font-medium text-emerald-200">{'{{agent}}'}</div>
+                      <div className="mt-1 text-[10px] text-secondary">{'{{agent.name}}'}와 동일</div>
+                    </div>
+                    <div className="pt-1">
+                      {planningAgents.length === 0 ? (
+                        <div className="text-xs text-muted">agent 없음</div>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {planningAgents.map(agent => (
+                            <span key={`pddl-agent-${agent.id}`} className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-200">
+                              {agent.name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -4043,7 +4622,7 @@ function CreateTemplateModal({
       description: data.description || undefined,
       steps: [],
     }),
-    onSuccess: () => onCreated(formData.id),
+    onSuccess: (created) => onCreated(created.id),
     onError: (err: any) => setError(err.response?.data?.detail || '태스크 생성에 실패했습니다'),
   })
 

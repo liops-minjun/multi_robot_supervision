@@ -46,7 +46,7 @@ type Scheduler struct {
 	wg     sync.WaitGroup
 }
 
-func (s *Scheduler) ensureGraphDeployed(ctx context.Context, agentID string, dbGraph *db.BehaviorTree) error {
+func (s *Scheduler) ensureGraphDeployed(ctx context.Context, agentID string, dbGraph *db.BehaviorTree, force bool) error {
 	if dbGraph == nil {
 		return fmt.Errorf("behavior tree is nil")
 	}
@@ -56,7 +56,14 @@ func (s *Scheduler) ensureGraphDeployed(ctx context.Context, agentID string, dbG
 		return fmt.Errorf("load agent behavior tree assignment: %w", err)
 	}
 
-	if assignment != nil &&
+	deployedInCache := false
+	if cached, ok := s.stateManager.GraphCache().GetDeployed(agentID, dbGraph.ID); ok {
+		deployedInCache = cached != nil && cached.Version == dbGraph.Version
+	}
+
+	if !force &&
+		assignment != nil &&
+		deployedInCache &&
 		assignment.DeployedVersion == dbGraph.Version &&
 		assignment.DeploymentStatus == "deployed" &&
 		assignment.DeployedAt.Valid &&
@@ -69,8 +76,13 @@ func (s *Scheduler) ensureGraphDeployed(ctx context.Context, agentID string, dbG
 	}
 
 	reason := "missing assignment"
+	if force {
+		reason = "forced redeploy for runtime execution"
+	}
 	if assignment != nil {
 		switch {
+		case force:
+			reason = "forced redeploy for runtime execution"
 		case assignment.DeploymentStatus != "deployed":
 			reason = "assignment status=" + assignment.DeploymentStatus
 		case assignment.DeployedVersion != dbGraph.Version:
@@ -188,7 +200,9 @@ const (
 	startConditionPollInterval = 250 * time.Millisecond
 	logRetentionInterval       = 24 * time.Hour
 	logRetentionWindow         = 30 * 24 * time.Hour
-	taskDispatchLease          = 5 * time.Second
+	taskDispatchLease          = 20 * time.Second
+	maxDispatchAttempts        = 3
+	maxDispatchErrorWindow     = 45 * time.Second
 
 	taskParamPlanProblemID     = "__fleet_plan_problem_id"
 	taskParamPlanExecutionID   = "__fleet_plan_execution_id"
@@ -226,6 +240,10 @@ type RunningTask struct {
 	DispatchSent       bool
 	DispatchLeaseUntil time.Time
 	DispatchAttempts   int
+	DispatchRetryAt    time.Time
+	DispatchFirstError time.Time
+	QueuedAt           time.Time
+	ErrorMessage       string
 
 	// Step results storage for field_sources resolution
 	// Maps step_id -> result data (e.g., {"success": true, "distance": 5.2})
@@ -421,6 +439,11 @@ func (s *Scheduler) dispatchNextQueuedTask(agentID string) error {
 			continue
 		}
 
+		if !task.DispatchRetryAt.IsZero() && now.Before(task.DispatchRetryAt) {
+			s.taskQueues[agentID] = queue
+			return nil
+		}
+
 		if !task.DispatchLeaseUntil.IsZero() && now.Before(task.DispatchLeaseUntil) {
 			s.taskQueues[agentID] = queue
 			return nil
@@ -437,8 +460,40 @@ func (s *Scheduler) dispatchNextQueuedTask(agentID string) error {
 		}
 
 		if err := s.dispatchQueuedTaskLocked(task, now); err != nil {
-			return err
+			task.ErrorMessage = err.Error()
+			if task.DispatchFirstError.IsZero() {
+				task.DispatchFirstError = now
+			}
+			task.DispatchRetryAt = now.Add(dispatchRetryBackoff(task.DispatchAttempts))
+
+			if task.DispatchAttempts >= maxDispatchAttempts && now.Sub(task.DispatchFirstError) >= maxDispatchErrorWindow {
+				failMsg := fmt.Sprintf(
+					"dispatch timeout after %d attempts (%s): %v",
+					task.DispatchAttempts,
+					time.Since(task.DispatchFirstError).Round(time.Second),
+					err,
+				)
+				log.Printf("[Scheduler] Marking task %s as failed: %s", task.ID, failMsg)
+				task.Status = TaskFailed
+				task.ErrorMessage = failMsg
+				queue = queue[1:]
+				s.taskQueues[agentID] = queue
+				if len(queue) == 0 {
+					delete(s.taskQueues, agentID)
+				}
+				go s.NotifyTaskComplete(task.ID, TaskFailed, failMsg)
+				continue
+			}
+			log.Printf(
+				"[Scheduler] Dispatch start failed for task %s on agent %s (attempt=%d): %v (retry at %s)",
+				task.ID, agentID, task.DispatchAttempts, err, task.DispatchRetryAt.Format(time.RFC3339),
+			)
+			s.taskQueues[agentID] = queue
+			return nil
 		}
+		task.DispatchRetryAt = time.Time{}
+		task.DispatchFirstError = time.Time{}
+		task.ErrorMessage = ""
 
 		s.taskQueues[agentID] = queue
 		return nil
@@ -446,6 +501,20 @@ func (s *Scheduler) dispatchNextQueuedTask(agentID string) error {
 
 	delete(s.taskQueues, agentID)
 	return nil
+}
+
+func dispatchRetryBackoff(attempt int) time.Duration {
+	if attempt < 1 {
+		return time.Second
+	}
+	if attempt > 6 {
+		attempt = 6
+	}
+	delay := time.Second << (attempt - 1) // 1s,2s,4s,8s,16s,32s
+	if delay > 15*time.Second {
+		return 15 * time.Second
+	}
+	return delay
 }
 
 func (s *Scheduler) reserveTaskResourcesForDispatch(task *RunningTask) (bool, error) {
@@ -771,7 +840,11 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 		taskDistributorID = dbGraph.TaskDistributorID.String
 	}
 
-	runtimeGraphID, err := s.prepareExecutionGraph(ctx, agentID, taskID, dbGraph, paramStrings)
+	// Realtime/PDDL tasks can be high-frequency. Forcing redeploy on every
+	// runtime execution causes deploy/start races and flaky immediate failures.
+	// Keep auto-redeploy only when assignment/version is actually stale.
+	forceGraphRedeploy := false
+	runtimeGraphID, err := s.prepareExecutionGraph(ctx, agentID, taskID, dbGraph, paramStrings, forceGraphRedeploy)
 	if err != nil {
 		return "", fmt.Errorf("failed to prepare execution graph: %w", err)
 	}
@@ -914,6 +987,7 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 		StepResults:       make(map[string]map[string]interface{}),
 		ResultChan:        make(chan *StepResult, 1),
 		CancelFunc:        taskCancel,
+		QueuedAt:          now,
 	}
 	// Initialize pause condition variable
 	task.pauseCond = sync.NewCond(&task.pauseMu)
@@ -964,7 +1038,7 @@ func (s *Scheduler) runTask(ctx context.Context, task *RunningTask) {
 		s.stateManager.UnregisterTaskRuntime(task.ID)
 
 		// Update database
-		s.repo.UpdateTaskStatus(task.ID, string(task.Status), "", task.CurrentStep, "")
+		s.repo.UpdateTaskStatus(task.ID, string(task.Status), "", task.CurrentStep, task.ErrorMessage)
 
 		// Remove from active tasks
 		s.tasksMu.Lock()
@@ -988,11 +1062,15 @@ func (s *Scheduler) runTask(ctx context.Context, task *RunningTask) {
 		task.Status = result.Status
 		if result.Error != "" {
 			log.Printf("[Scheduler] Task error: %s", result.Error)
+			task.ErrorMessage = result.Error
+		} else if result.Status == TaskCompleted {
+			task.ErrorMessage = ""
 		}
 
 	case <-ctx.Done():
 		log.Printf("[Scheduler] Task %s cancelled by context", task.ID)
 		task.Status = TaskCancelled
+		task.ErrorMessage = "task context cancelled"
 	}
 }
 

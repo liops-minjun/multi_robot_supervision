@@ -200,7 +200,9 @@ export interface GraphStep {
   job_name?: string                // User-defined job name for this step
   auto_generate_states?: boolean   // Whether to auto-generate states from this step
   type?: 'fallback' | 'terminal' | null
-  terminal_type?: 'success' | 'failure'
+  terminal_type?: 'success' | 'failure' | 'warning'
+  alert?: boolean
+  message?: string
   // Legacy preconditions (simple string-based)
   preconditions?: Precondition[]
   // New State BehaviorTree Configuration
@@ -1504,7 +1506,12 @@ export interface RealtimeSession {
   live_state?: Record<string, string>
   selected_goal_id?: string
   selected_goal_name?: string
+  selected_agent_id?: string
+  selected_agent_name?: string
+  selected_resource_id?: string
+  selected_resource_name?: string
   active_execution_id?: string
+  active_execution_ids?: string[]
   active_execution_status?: string
   last_error?: string
   last_plan?: PlanResult

@@ -4,6 +4,7 @@ import (
 	"central_server_go/internal/db"
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // Solve runs a task-level planner.
@@ -47,14 +48,16 @@ func Solve(problem *PlanProblem) *Plan {
 	used := make(map[string]bool)
 	var orderedTasks []PlanTask
 
-	maxIterations := len(problem.Tasks) * 2
+	maxIterations := len(problem.Tasks) * 4
 	for i := 0; i < maxIterations; i++ {
 		if goalSatisfied(currentState, problem.GoalState) {
 			break
 		}
 
+		unsatisfiedGoals := collectUnsatisfiedGoals(currentState, problem.GoalState)
 		bestIndex := -1
-		bestScore := 0
+		bestDirectScore := -1
+		bestEnableScore := -1
 		for idx, task := range problem.Tasks {
 			if used[task.TaskID] {
 				continue
@@ -62,10 +65,15 @@ func Solve(problem *PlanProblem) *Plan {
 			if !preconditionsMet(currentState, task.Preconditions) {
 				continue
 			}
-			score := taskGoalProgress(task, currentState, problem.GoalState)
-			if score > bestScore {
-				bestScore = score
+			directScore := taskGoalProgress(task, currentState, problem.GoalState)
+			enableScore := taskEnableProgress(task, currentState, problem.Tasks, unsatisfiedGoals, used)
+			if directScore <= 0 && enableScore <= 0 {
+				continue
+			}
+			if directScore > bestDirectScore || (directScore == bestDirectScore && enableScore > bestEnableScore) {
 				bestIndex = idx
+				bestDirectScore = directScore
+				bestEnableScore = enableScore
 			}
 		}
 
@@ -101,6 +109,18 @@ func Solve(problem *PlanProblem) *Plan {
 				ErrorMessage: fmt.Sprintf("no capable agent available for task %q", task.TaskName),
 			}
 		}
+		runtimeParams := cloneStringMap(task.RuntimeParams)
+		if runtimeParams == nil {
+			runtimeParams = make(map[string]string)
+		}
+		if strings.TrimSpace(agentName) == "" {
+			agentName = agentID
+		}
+		runtimeParams["agent"] = agentName
+		runtimeParams["agent_id"] = agentID
+		runtimeParams["agent_name"] = agentName
+		runtimeParams["agent.id"] = agentID
+		runtimeParams["agent.name"] = agentName
 		assignments = append(assignments, TaskAssignment{
 			TaskID:         task.TaskID,
 			TaskName:       task.TaskName,
@@ -110,7 +130,7 @@ func Solve(problem *PlanProblem) *Plan {
 			AgentID:        agentID,
 			AgentName:      agentName,
 			Reason:         reason,
-			RuntimeParams:  cloneStringMap(task.RuntimeParams),
+			RuntimeParams:  runtimeParams,
 			ResultStates:   cloneEffects(task.ResultStates),
 		})
 		agentLoad[agentID]++
@@ -213,7 +233,111 @@ func taskGoalProgress(task PlanTask, current, goal map[string]string) int {
 	return score
 }
 
+func collectUnsatisfiedGoals(current, goal map[string]string) map[string]string {
+	unsatisfied := make(map[string]string)
+	for key, value := range goal {
+		if current[key] != value {
+			unsatisfied[key] = value
+		}
+	}
+	return unsatisfied
+}
+
+func conditionMet(current map[string]string, cond db.PlanningCondition) bool {
+	op := cond.Operator
+	if op == "" {
+		op = "=="
+	}
+	currentValue := current[cond.Variable]
+	switch op {
+	case "!=":
+		return currentValue != cond.Value
+	case "==":
+		fallthrough
+	default:
+		return currentValue == cond.Value
+	}
+}
+
+func effectSatisfiesCondition(effect db.PlanningEffect, cond db.PlanningCondition) bool {
+	if effect.Variable != cond.Variable {
+		return false
+	}
+	op := cond.Operator
+	if op == "" {
+		op = "=="
+	}
+	switch op {
+	case "!=":
+		return effect.Value != cond.Value
+	case "==":
+		fallthrough
+	default:
+		return effect.Value == cond.Value
+	}
+}
+
+func taskCanProduceUnsatisfiedGoal(task PlanTask, unsatisfiedGoals map[string]string) bool {
+	for _, effect := range task.ResultStates {
+		goalValue, wanted := unsatisfiedGoals[effect.Variable]
+		if !wanted {
+			continue
+		}
+		if effect.Value == goalValue {
+			return true
+		}
+	}
+	return false
+}
+
+func taskEnableProgress(
+	task PlanTask,
+	current map[string]string,
+	allTasks []PlanTask,
+	unsatisfiedGoals map[string]string,
+	used map[string]bool,
+) int {
+	score := 0
+	for _, targetTask := range allTasks {
+		if used[targetTask.TaskID] {
+			continue
+		}
+		if !taskCanProduceUnsatisfiedGoal(targetTask, unsatisfiedGoals) {
+			continue
+		}
+		for _, cond := range targetTask.Preconditions {
+			if conditionMet(current, cond) {
+				continue
+			}
+			for _, effect := range task.ResultStates {
+				if effectSatisfiesCondition(effect, cond) {
+					score++
+					break
+				}
+			}
+		}
+	}
+	return score
+}
+
 func selectAgent(task PlanTask, agents []AgentInfo, agentNames map[string]string, agentLoad map[string]int) (string, string, string) {
+	if task.BoundAgentID != "" {
+		for _, agent := range agents {
+			if agent.ID != task.BoundAgentID {
+				continue
+			}
+			if !agentCanRunTask(agent, task) {
+				return "", "", "bound agent is offline or missing required capabilities"
+			}
+			name := strings.TrimSpace(agent.Name)
+			if name == "" {
+				name = agent.ID
+			}
+			return agent.ID, name, "task is bound by {{agent.*}} placeholder"
+		}
+		return "", "", "bound agent not found"
+	}
+
 	candidates := capableAgentIDs(task, agents)
 	if len(candidates) == 0 {
 		return "", "", "no capable agent"

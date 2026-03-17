@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -443,16 +445,10 @@ func (s *Server) ExecuteBehaviorTree(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("behavior tree '%s' is not assigned to agent '%s'. Please assign the graph first.", graphID, req.AgentID))
 		return
 	}
-	// Allow execution if deployed or outdated (server will use latest version)
-	// "outdated" means template was updated but agent has a previous deployment
-	if abt.DeploymentStatus != "deployed" && abt.DeploymentStatus != "outdated" {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("behavior tree '%s' is not deployed to agent '%s' (status: %s). Please deploy the graph first.", graphID, req.AgentID, abt.DeploymentStatus))
-		return
-	}
-	if abt.DeployedVersion == 0 {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("behavior tree '%s' has never been successfully deployed to agent '%s'", graphID, req.AgentID))
-		return
-	}
+	// NOTE:
+	// Do not hard-block execution on deployment_status.
+	// Scheduler.StartTask() already auto-deploys the latest graph before dispatch.
+	// This prevents RTM from getting stuck when UI status is "deploying/pending/failed".
 
 	taskID, err := s.scheduler.StartTask(r.Context(), graphID, req.AgentID, req.Params)
 	if err != nil {
@@ -1097,12 +1093,18 @@ func (s *Server) DeployBehaviorTreeToAgent(w http.ResponseWriter, r *http.Reques
 		s.repo.UpdateAgentBehaviorTree(abt)
 	}
 
-	// Deploy via QUIC
-	result, err := s.quicHandler.DeployCanonicalGraph(r.Context(), agentID, graphJSON)
+	// Deploy via QUIC (bounded timeout to avoid infinite "deploying" state)
+	deployCtx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	result, err := s.quicHandler.DeployCanonicalGraph(deployCtx, agentID, graphJSON)
 	if err != nil {
+		deployErr := err.Error()
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(deployCtx.Err(), context.DeadlineExceeded) {
+			deployErr = "deploy timeout: no response from RTM within 20s"
+		}
 		// Update database to reflect failed status
 		abt.DeploymentStatus = "failed"
-		abt.DeploymentError = sql.NullString{String: err.Error(), Valid: true}
+		abt.DeploymentError = sql.NullString{String: deployErr, Valid: true}
 		abt.UpdatedAt = time.Now()
 		s.repo.UpdateAgentBehaviorTree(abt)
 
@@ -1113,7 +1115,7 @@ func (s *Server) DeployBehaviorTreeToAgent(w http.ResponseWriter, r *http.Reques
 			Action:              "deploy",
 			Version:             dbGraph.Version,
 			Status:              "failed",
-			ErrorMessage:        sql.NullString{String: err.Error(), Valid: true},
+			ErrorMessage:        sql.NullString{String: deployErr, Valid: true},
 			InitiatedAt:         time.Now(),
 			CompletedAt:         sql.NullTime{Time: time.Now(), Valid: true},
 		}
@@ -1125,7 +1127,7 @@ func (s *Server) DeployBehaviorTreeToAgent(w http.ResponseWriter, r *http.Reques
 			"behavior_tree_id":  graphID,
 			"agent_id":          agentID,
 			"version":           dbGraph.Version,
-			"error":             err.Error(),
+			"error":             deployErr,
 			"deployment_status": "failed",
 		})
 		return

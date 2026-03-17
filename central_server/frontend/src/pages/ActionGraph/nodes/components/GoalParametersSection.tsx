@@ -167,6 +167,34 @@ const GoalParametersSection = memo(({
 
   const runtimeBindings = useMemo<RuntimeBindingOption[]>(() => ([
     {
+      key: 'agent_name',
+      expression: '${agent_name}',
+      label: '선택된 agent 이름',
+      description: '예: Task Manager-001. Planner가 최종 할당한 agent 이름입니다.',
+    },
+    {
+      key: 'agent.name',
+      expression: '${agent.name}',
+      label: '선택된 agent 이름 (dot 표기)',
+      description: 'agent_name 과 동일하지만 dot 경로 표기입니다.',
+    },
+    {
+      key: 'agent_id',
+      expression: '${agent_id}',
+      label: '선택된 agent ID',
+      description: 'Planner가 최종 할당한 agent ID입니다.',
+    },
+    {
+      key: 'agent.id',
+      expression: '${agent.id}',
+      label: '선택된 agent ID (dot 표기)',
+    },
+    {
+      key: 'agent',
+      expression: '${agent}',
+      label: '선택된 agent 이름 (alias)',
+    },
+    {
       key: 'resource_name',
       expression: '${resource_name}',
       label: '선택된 resource 이름',
@@ -288,7 +316,10 @@ const GoalParametersSection = memo(({
           ) : (
             <div className="space-y-2">
               <div className="rounded border border-sky-500/20 bg-sky-500/5 px-2.5 py-2 text-[10px] leading-5 text-secondary">
-                PDDL planner로 실행될 때 goal 파라미터에서 <span className="font-mono text-sky-300">${'{resource_name}'}</span>,
+                PDDL planner로 실행될 때 goal 파라미터에서
+                <span className="ml-1 font-mono text-sky-300">${'{agent_name}'}</span>,
+                <span className="ml-1 font-mono text-sky-300">${'{agent.name}'}</span>,
+                <span className="ml-1 font-mono text-sky-300">${'{resource_name}'}</span>,
                 <span className="ml-1 font-mono text-sky-300">${'{resource.name}'}</span> 같은 실행 변수를 선택해 사용할 수 있습니다.
               </div>
               {goalFields.map((field) => (

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"central_server_go/internal/db"
@@ -86,6 +87,124 @@ func decodeBehaviorTreeIDs(pp *db.PlanningProblem) []string {
 		_ = json.Unmarshal(pp.BehaviorTreeIDs, &ids)
 	}
 	return normalizeBehaviorTreeIDs(pp.BehaviorTreeID, ids)
+}
+
+func containsResourcePlaceholder(text string) bool {
+	return strings.Contains(text, "{{resource.")
+}
+
+func containsAgentPlaceholder(text string) bool {
+	return strings.Contains(text, "{{agent.")
+}
+
+func applyResourcePlaceholders(text string, resource pddl.ResourceInfo) string {
+	result := text
+	replacements := map[string]string{
+		"{{resource.id}}":                 resource.ID,
+		"{{resource.name}}":               resource.Name,
+		"{{resource.kind}}":               resource.Kind,
+		"{{resource.parent_id}}":          resource.ParentResourceID,
+		"{{resource.parent_resource_id}}": resource.ParentResourceID,
+	}
+	for placeholder, replacement := range replacements {
+		result = strings.ReplaceAll(result, placeholder, replacement)
+	}
+	return result
+}
+
+func applyAgentPlaceholders(text string, agent pddl.AgentInfo) string {
+	result := text
+	replacements := map[string]string{
+		"{{agent.id}}":   agent.ID,
+		"{{agent.name}}": agent.Name,
+	}
+	for placeholder, replacement := range replacements {
+		result = strings.ReplaceAll(result, placeholder, replacement)
+	}
+	return result
+}
+
+func resourceInstances(resources []pddl.ResourceInfo) []pddl.ResourceInfo {
+	instances := make([]pddl.ResourceInfo, 0, len(resources))
+	for _, resource := range resources {
+		kind := strings.ToLower(strings.TrimSpace(resource.Kind))
+		if kind == "type" {
+			continue
+		}
+		instances = append(instances, resource)
+	}
+	return instances
+}
+
+func expandGoalStatePlaceholders(goalState map[string]string, resources []pddl.ResourceInfo, agents []pddl.AgentInfo) (map[string]string, error) {
+	if len(goalState) == 0 {
+		return goalState, nil
+	}
+
+	instances := resourceInstances(resources)
+	expanded := make(map[string]string)
+
+	type goalEntry struct {
+		variable string
+		value    string
+	}
+
+	for variable, value := range goalState {
+		entries := []goalEntry{{variable: variable, value: value}}
+
+		needsResource := containsResourcePlaceholder(variable) || containsResourcePlaceholder(value)
+		if needsResource {
+			if len(instances) == 0 {
+				return nil, fmt.Errorf("goal %q uses {{resource.*}} placeholders but no resource instance is available", variable)
+			}
+			nextEntries := make([]goalEntry, 0, len(entries)*len(instances))
+			for _, entry := range entries {
+				for _, instance := range instances {
+					nextEntries = append(nextEntries, goalEntry{
+						variable: applyResourcePlaceholders(entry.variable, instance),
+						value:    applyResourcePlaceholders(entry.value, instance),
+					})
+				}
+			}
+			entries = nextEntries
+		}
+
+		needsAgent := containsAgentPlaceholder(variable) || containsAgentPlaceholder(value)
+		if needsAgent {
+			if len(agents) == 0 {
+				return nil, fmt.Errorf("goal %q uses {{agent.*}} placeholders but no agent is selected", variable)
+			}
+			nextEntries := make([]goalEntry, 0, len(entries)*len(agents))
+			for _, entry := range entries {
+				for _, agent := range agents {
+					nextEntries = append(nextEntries, goalEntry{
+						variable: applyAgentPlaceholders(entry.variable, agent),
+						value:    applyAgentPlaceholders(entry.value, agent),
+					})
+				}
+			}
+			entries = nextEntries
+		}
+
+		for _, entry := range entries {
+			if containsResourcePlaceholder(entry.variable) || containsAgentPlaceholder(entry.variable) {
+				return nil, fmt.Errorf("goal variable %q has unresolved placeholder", entry.variable)
+			}
+			if containsResourcePlaceholder(entry.value) || containsAgentPlaceholder(entry.value) {
+				return nil, fmt.Errorf("goal value %q has unresolved placeholder", entry.value)
+			}
+			goalKey := strings.TrimSpace(entry.variable)
+			if goalKey == "" {
+				continue
+			}
+			if existing, exists := expanded[goalKey]; exists && existing != entry.value {
+				return nil, fmt.Errorf("goal variable %q has conflicting values (%q vs %q)", goalKey, existing, entry.value)
+			}
+			expanded[goalKey] = entry.value
+		}
+	}
+
+	return expanded, nil
 }
 
 // ============================================================
@@ -535,7 +654,7 @@ func (s *Server) solveProblem(pp *db.PlanningProblem) (*pddl.Plan, error) {
 		})
 	}
 
-	groundedTasks, err := pddl.GroundTasks(tasks, resources)
+	groundedTasks, err := pddl.GroundTasks(tasks, resources, agents)
 	if err != nil {
 		return nil, fmt.Errorf("failed to ground planning tasks: %w", err)
 	}
@@ -547,6 +666,10 @@ func (s *Server) solveProblem(pp *db.PlanningProblem) (*pddl.Plan, error) {
 	}
 	if pp.GoalState != nil {
 		json.Unmarshal(pp.GoalState, &goalState)
+	}
+	goalState, err = expandGoalStatePlaceholders(goalState, resources, agents)
+	if err != nil {
+		return nil, fmt.Errorf("failed to expand goal state placeholders: %w", err)
 	}
 
 	problem := &pddl.PlanProblem{

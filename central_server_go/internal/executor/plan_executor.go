@@ -717,6 +717,7 @@ func (pe *PlanExecutor) resolveReleaseResourceToken(planID, agentID, token strin
 func (pe *PlanExecutor) waitForTask(ctx context.Context, taskID string) error {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+	missingCount := 0
 
 	for {
 		select {
@@ -731,8 +732,13 @@ func (pe *PlanExecutor) waitForTask(ctx context.Context, taskID string) error {
 					return fmt.Errorf("failed to check task status: %v", err)
 				}
 				if dbTask == nil {
-					return fmt.Errorf("task %s not found", taskID)
+					missingCount++
+					if missingCount >= 20 {
+						return fmt.Errorf("task %s not found", taskID)
+					}
+					continue
 				}
+				missingCount = 0
 				switch dbTask.Status {
 				case string(TaskCompleted):
 					return nil
@@ -743,17 +749,30 @@ func (pe *PlanExecutor) waitForTask(ctx context.Context, taskID string) error {
 					return fmt.Errorf("task failed")
 				case string(TaskCancelled):
 					return fmt.Errorf("task cancelled")
+				case string(TaskPending), string(TaskRunning), string(TaskPaused):
+					continue
 				default:
-					return nil // Assume completed if removed from active but not in DB as failed
+					continue
 				}
 			}
+			missingCount = 0
 			switch task.Status {
 			case TaskCompleted:
 				return nil
 			case TaskFailed:
+				if msg := strings.TrimSpace(task.ErrorMessage); msg != "" {
+					return fmt.Errorf("task failed: %s", msg)
+				}
 				return fmt.Errorf("task failed")
 			case TaskCancelled:
+				if msg := strings.TrimSpace(task.ErrorMessage); msg != "" {
+					return fmt.Errorf("task cancelled: %s", msg)
+				}
 				return fmt.Errorf("task cancelled")
+			case TaskPending, TaskRunning, TaskPaused:
+				continue
+			default:
+				continue
 			}
 		}
 	}

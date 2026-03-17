@@ -197,6 +197,65 @@ function isResourceInstance(resource: TaskDistributorResource) {
   return !resource.kind || resource.kind === 'instance'
 }
 
+function expandStateNameByTemplate(
+  template: string,
+  resources: TaskDistributorResource[],
+  agents: Array<{ id: string; name: string }>
+): string[] {
+  const trimmed = template.trim()
+  if (!trimmed) return []
+
+  const hasResourcePlaceholder =
+    trimmed.includes('{{resource.name}}')
+    || trimmed.includes('{{resource.id}}')
+    || trimmed.includes('{{resource}}')
+  const hasAgentPlaceholder =
+    trimmed.includes('{{agent.name}}')
+    || trimmed.includes('{{agent.id}}')
+    || trimmed.includes('{{agent}}')
+
+  if (!hasResourcePlaceholder && !hasAgentPlaceholder) {
+    return [trimmed]
+  }
+
+  let variants = [trimmed]
+
+  if (hasResourcePlaceholder) {
+    const instances = resources.filter(isResourceInstance)
+    if (instances.length === 0) return []
+
+    variants = instances
+      .flatMap(resource => variants.map(variant => variant
+        .split('{{resource.name}}').join(resource.name)
+        .split('{{resource.id}}').join(resource.id)
+        .split('{{resource}}').join(resource.name)))
+  }
+
+  if (hasAgentPlaceholder) {
+    const uniqueAgents = Array.from(new Map(
+      agents
+        .map(agent => ({
+          id: (agent.id || '').trim(),
+          name: (agent.name || '').trim() || (agent.id || '').trim(),
+        }))
+        .filter(agent => agent.id || agent.name)
+        .map(agent => [`${agent.id}::${agent.name}`, agent])
+    ).values())
+    if (uniqueAgents.length === 0) return []
+
+    variants = uniqueAgents
+      .flatMap(agent => variants.map(variant => variant
+        .split('{{agent.name}}').join(agent.name)
+        .split('{{agent.id}}').join(agent.id)
+        .split('{{agent}}').join(agent.name)))
+  }
+
+  return variants
+    .map(name => name.trim())
+    .filter(Boolean)
+    .filter((name, index, array) => array.indexOf(name) === index)
+}
+
 function resolveRuntimeStateLabel(runtime?: RobotStateSnapshot | null, fallback?: Agent | null) {
   return runtime?.current_state || runtime?.state_code || fallback?.current_state_code || fallback?.current_state || 'idle'
 }
@@ -254,6 +313,24 @@ function getApiErrorMessage(error: unknown): string {
     || String(error)
 }
 
+function isMissingRealtimeSessionError(error: unknown): boolean {
+  const err = error as {
+    response?: { status?: number; data?: { error?: string; message?: string } }
+    message?: string
+  }
+  const status = err?.response?.status
+  const detail = (
+    err?.response?.data?.error
+    || err?.response?.data?.message
+    || err?.message
+    || ''
+  ).toLowerCase()
+  if (status === 404) return true
+  if (status === 400 && detail.includes('not found')) return true
+  if (detail.includes('realtime session') && detail.includes('not found')) return true
+  return false
+}
+
 function createRealtimeGoalTemplate(index: number): RealtimeGoalRule {
   return {
     id: `realtime_goal_${index + 1}`,
@@ -262,6 +339,52 @@ function createRealtimeGoalTemplate(index: number): RealtimeGoalRule {
     enabled: true,
     activation_conditions: [],
     goal_state: {},
+  }
+}
+
+type SequenceTaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+
+interface SequenceTaskBlock {
+  taskId: string
+  taskName: string
+  behaviorTreeId?: string
+  order: number
+  status: SequenceTaskStatus
+}
+
+const sequenceStatusRank: Record<SequenceTaskStatus, number> = {
+  running: 5,
+  failed: 4,
+  cancelled: 3,
+  pending: 2,
+  completed: 1,
+}
+
+function normalizeSequenceStatus(status?: string): SequenceTaskStatus {
+  const normalized = (status || '').toLowerCase()
+  if (normalized === 'running') return 'running'
+  if (normalized === 'failed') return 'failed'
+  if (normalized === 'cancelled') return 'cancelled'
+  if (normalized === 'completed') return 'completed'
+  return 'pending'
+}
+
+function mergeSequenceStatus(current: SequenceTaskStatus, next: SequenceTaskStatus): SequenceTaskStatus {
+  return sequenceStatusRank[next] > sequenceStatusRank[current] ? next : current
+}
+
+function statusBadgeClass(status: SequenceTaskStatus) {
+  switch (status) {
+    case 'running':
+      return 'bg-cyan-500/15 text-cyan-300 border-cyan-400/20'
+    case 'completed':
+      return 'bg-emerald-500/15 text-emerald-300 border-emerald-400/20'
+    case 'failed':
+      return 'bg-red-500/15 text-red-300 border-red-400/20'
+    case 'cancelled':
+      return 'bg-amber-500/15 text-amber-300 border-amber-400/20'
+    default:
+      return 'bg-surface text-secondary border-border'
   }
 }
 
@@ -407,6 +530,7 @@ export default function PDDL() {
 
   const [executionId, setExecutionId] = useState<string | null>(null)
   const [execution, setExecution] = useState<PlanExecution | null>(null)
+  const [realtimeExecutionMap, setRealtimeExecutionMap] = useState<Record<string, PlanExecution>>({})
   const [resourceAllocations, setResourceAllocations] = useState<ResourceAllocation[]>([])
   const [agentRuntimeMap, setAgentRuntimeMap] = useState<Record<string, RobotStateSnapshot>>({})
   const [realtimeGoals, setRealtimeGoals] = useState<RealtimeGoalRule[]>([])
@@ -414,6 +538,13 @@ export default function PDDL() {
   const [realtimeSessionId, setRealtimeSessionId] = useState<string | null>(null)
   const [realtimeSession, setRealtimeSession] = useState<RealtimeSession | null>(null)
   const [isStartingRealtime, setIsStartingRealtime] = useState(false)
+  const [isStoppingRealtime, setIsStoppingRealtime] = useState(false)
+  const [realtimeNotice, setRealtimeNotice] = useState<string | null>(null)
+  const [showPlanningConfig, setShowPlanningConfig] = useState(true)
+  const [selectedFlowTree, setSelectedFlowTree] = useState<BehaviorTree | null>(null)
+  const [selectedFlowLabel, setSelectedFlowLabel] = useState<string>('Task flow')
+  const [isLoadingFlowTree, setIsLoadingFlowTree] = useState(false)
+  const autoSelectedTaskRef = useRef(false)
 
   // -----------------------------------------------------------------------
   // Inline TD creation state
@@ -442,6 +573,7 @@ export default function PDDL() {
   const [newStateName, setNewStateName] = useState('')
   const [newStateType, setNewStateType] = useState<'bool' | 'int' | 'string'>('string')
   const [newStateInitialValue, setNewStateInitialValue] = useState('')
+  const [stateBuilderMessage, setStateBuilderMessage] = useState<string | null>(null)
   const [editingStateId, setEditingStateId] = useState<string | null>(null)
   const [editStateInitialValue, setEditStateInitialValue] = useState('')
   const [profileNotice, setProfileNotice] = useState<string | null>(null)
@@ -459,6 +591,7 @@ export default function PDDL() {
     () => selectedBTIds.map(id => btCache.get(id)).filter((bt): bt is BehaviorTree => bt != null),
     [selectedBTIds, btCache]
   )
+  const selectedTaskIdSet = useMemo(() => new Set(treeList.map(item => item.id)), [treeList])
   const singleSelectedBT = selectedBTs.length === 1 ? selectedBTs[0] : null
 
   const selectedDistributor = distributors.find(d => d.id === selectedDistributorId) || null
@@ -538,6 +671,25 @@ export default function PDDL() {
     () => Array.from(new Set(Object.values(requiredActionTypesByTaskId).flat())),
     [requiredActionTypesByTaskId]
   )
+
+  useEffect(() => {
+    if (treeList.length === 0) return
+    setSelectedBTIds(prev => {
+      const filtered = prev.filter(id => selectedTaskIdSet.has(id))
+      return filtered.length === prev.length ? prev : filtered
+    })
+  }, [treeList, selectedTaskIdSet])
+
+  useEffect(() => {
+    if (autoSelectedTaskRef.current) return
+    if (selectedBTIds.length > 0) {
+      autoSelectedTaskRef.current = true
+      return
+    }
+    if (treeList.length === 0) return
+    autoSelectedTaskRef.current = true
+    setSelectedBTIds([treeList[0].id])
+  }, [selectedBTIds.length, treeList])
 
 
   // -----------------------------------------------------------------------
@@ -720,6 +872,7 @@ export default function PDDL() {
   useEffect(() => {
     if (!realtimeSessionId) {
       setRealtimeSession(null)
+      setRealtimeExecutionMap({})
       return
     }
 
@@ -733,6 +886,12 @@ export default function PDDL() {
       } catch (err) {
         if (cancelled) return
         console.error('Failed to poll realtime session:', err)
+        if (isMissingRealtimeSessionError(err)) {
+          setRealtimeSession(null)
+          setRealtimeSessionId(null)
+          setRealtimeExecutionMap({})
+          setRealtimeNotice('Realtime 세션이 서버에 없어 로컬 상태를 자동 정리했습니다.')
+        }
       }
     }
 
@@ -744,29 +903,86 @@ export default function PDDL() {
     }
   }, [realtimeSessionId])
 
+  const realtimeActiveExecutionIds = useMemo(() => {
+    const ids: string[] = []
+    for (const id of realtimeSession?.active_execution_ids || []) {
+      if (id) ids.push(id)
+    }
+    if (realtimeSession?.active_execution_id) {
+      ids.push(realtimeSession.active_execution_id)
+    }
+    return Array.from(new Set(ids))
+  }, [realtimeSession?.active_execution_id, realtimeSession?.active_execution_ids])
+
   useEffect(() => {
-    if (!realtimeSession?.active_execution_id) return
+    if (realtimeActiveExecutionIds.length === 0) {
+      setRealtimeExecutionMap({})
+      setResourceAllocations([])
+      return
+    }
 
     let cancelled = false
 
-    const refreshRealtimeExecution = async () => {
-      try {
-        const exec = await pddlApi.getExecution(realtimeSession.active_execution_id!)
-        if (cancelled) return
-        setResourceAllocations(exec.resources || [])
-      } catch (err) {
-        if (cancelled) return
-        console.error('Failed to refresh realtime execution resources:', err)
+    const refreshRealtimeExecutions = async () => {
+      const fetched = await Promise.all(
+        realtimeActiveExecutionIds.map(async (executionID) => {
+          try {
+            const exec = await pddlApi.getExecution(executionID)
+            return { executionID, exec }
+          } catch (err) {
+            console.error('Failed to refresh realtime execution:', executionID, err)
+            return null
+          }
+        })
+      )
+      if (cancelled) return
+
+      const nextMap: Record<string, PlanExecution> = {}
+      const mergedResources: ResourceAllocation[] = []
+      const seenResourceKeys = new Set<string>()
+      for (const item of fetched) {
+        if (!item) continue
+        const executionStatus = (item.exec.status || '').toLowerCase()
+        if (executionStatus === 'completed' || executionStatus === 'failed' || executionStatus === 'cancelled') {
+          continue
+        }
+        nextMap[item.executionID] = item.exec
+        for (const allocation of item.exec.resources || []) {
+          const resourceKey = allocation.resource || `${allocation.holder_agent_id}:${allocation.task_id}:${allocation.step_id}`
+          if (seenResourceKeys.has(resourceKey)) continue
+          seenResourceKeys.add(resourceKey)
+          mergedResources.push(allocation)
+        }
       }
+
+      setRealtimeExecutionMap(nextMap)
+      setResourceAllocations(mergedResources)
     }
 
-    void refreshRealtimeExecution()
-    const interval = setInterval(refreshRealtimeExecution, 1000)
+    void refreshRealtimeExecutions()
+    const interval = setInterval(refreshRealtimeExecutions, 1000)
     return () => {
       cancelled = true
       clearInterval(interval)
     }
-  }, [realtimeSession?.active_execution_id])
+  }, [realtimeActiveExecutionIds])
+
+  const realtimeExecutionSteps = useMemo(() => {
+    const merged: PlanExecution['steps'] = []
+    for (const executionID of realtimeActiveExecutionIds) {
+      const exec = realtimeExecutionMap[executionID]
+      if (!exec) continue
+      for (const step of exec.steps || []) {
+        merged.push(step)
+      }
+    }
+    return merged
+  }, [realtimeExecutionMap, realtimeActiveExecutionIds])
+
+  const effectiveExecutionSteps = useMemo(
+    () => (realtimeSessionId ? realtimeExecutionSteps : (execution?.steps || [])),
+    [realtimeSessionId, realtimeExecutionSteps, execution?.steps]
+  )
 
   const runtimeAgentIds = useMemo(() => {
     const ids = new Set<string>()
@@ -774,11 +990,11 @@ export default function PDDL() {
     for (const assignment of plan?.assignments || []) {
       if (assignment.agent_id) ids.add(assignment.agent_id)
     }
-    for (const step of execution?.steps || []) {
+    for (const step of effectiveExecutionSteps) {
       if (step.agent_id) ids.add(step.agent_id)
     }
     return Array.from(ids)
-  }, [selectedAgentIds, plan?.assignments, execution?.steps])
+  }, [selectedAgentIds, plan?.assignments, effectiveExecutionSteps])
 
   useEffect(() => {
     if (runtimeAgentIds.length === 0) {
@@ -840,8 +1056,10 @@ export default function PDDL() {
     setPlan(null)
     setExecutionId(null)
     setExecution(null)
+    setRealtimeExecutionMap({})
     setResourceAllocations([])
     setResourceBuilderMessage(null)
+    setStateBuilderMessage(null)
     setTypeInstanceDrafts({})
   }, [selectionKey])
 
@@ -1096,19 +1314,65 @@ export default function PDDL() {
 
   const handleAddState = useCallback(async () => {
     if (!selectedDistributor || !newStateName.trim()) return
+
+    const template = newStateName.trim()
+    const expanded = expandStateNameByTemplate(
+      template,
+      selectedDistributor.resources || [],
+      agents.map(item => ({ id: item.agent.id, name: item.agent.name || item.agent.id }))
+    )
+    if (expanded.length === 0) {
+      const needsResource =
+        template.includes('{{resource.name}}')
+        || template.includes('{{resource.id}}')
+        || template.includes('{{resource}}')
+      const needsAgent =
+        template.includes('{{agent.name}}')
+        || template.includes('{{agent.id}}')
+        || template.includes('{{agent}}')
+      if (needsResource && (selectedDistributor.resources || []).filter(isResourceInstance).length === 0) {
+        setStateBuilderMessage('생성할 resource instance가 없습니다. Resource를 먼저 추가하세요.')
+      } else if (needsAgent && agents.length === 0) {
+        setStateBuilderMessage('생성할 agent가 없습니다. Agent 연결 상태를 먼저 확인하세요.')
+      } else {
+        setStateBuilderMessage('생성할 상태가 없습니다. placeholder 입력값을 확인하세요.')
+      }
+      return
+    }
+
+    const existing = new Set((selectedDistributor.states || []).map(state => state.name))
+    const uniqueNames = Array.from(new Set(expanded))
+    const targetNames = uniqueNames.filter(name => !existing.has(name))
+    const skipped = uniqueNames.length - targetNames.length
+    const normalizedInitialValue = (() => {
+      if (newStateType === 'bool') {
+        return newStateInitialValue === '' ? 'false' : newStateInitialValue
+      }
+      return newStateInitialValue || undefined
+    })()
+
+    if (targetNames.length === 0) {
+      setStateBuilderMessage('모든 상태가 이미 존재해서 추가할 항목이 없습니다.')
+      return
+    }
+
     try {
-      await taskDistributorApi.createState(selectedDistributor.id, {
-        name: newStateName.trim(),
-        type: newStateType,
-        initial_value: newStateInitialValue || undefined,
-      })
+      await Promise.all(targetNames.map((name) =>
+        taskDistributorApi.createState(selectedDistributor.id, {
+          name,
+          type: newStateType,
+          initial_value: normalizedInitialValue,
+        })
+      ))
       setNewStateName('')
       setNewStateInitialValue('')
-      loadDistributors()
+      setStateBuilderMessage(`상태 ${targetNames.length}개 생성, 중복 ${skipped}개 건너뜀`)
+      await loadDistributors()
     } catch (err) {
       console.error('Failed to add state:', err)
+      setStateBuilderMessage('상태 생성 중 오류가 발생했습니다.')
     }
-  }, [selectedDistributor, newStateName, newStateType, newStateInitialValue, loadDistributors])
+  }, [selectedDistributor, newStateName, newStateType, newStateInitialValue, loadDistributors, agents])
 
   const handleDeleteState = useCallback(async (stateId: string) => {
     if (!selectedDistributor) return
@@ -1359,6 +1623,7 @@ export default function PDDL() {
       setPlan(null)
       setExecutionId(null)
       setExecution(null)
+      setRealtimeExecutionMap({})
       setResourceAllocations([])
 
       const importedGoals = (parsed.realtime?.goals || []).map((goal, index) => ({
@@ -1375,6 +1640,7 @@ export default function PDDL() {
       }
       setRealtimeSessionId(null)
       setRealtimeSession(null)
+      setRealtimeExecutionMap({})
 
       setProfileNotice(`Imported profile: ${file.name}`)
       setTimeout(() => setProfileNotice(null), 5000)
@@ -1392,14 +1658,18 @@ export default function PDDL() {
   // Plan handlers
   // -----------------------------------------------------------------------
 
-  const selectedBehaviorTreeIds = selectedBTs.map(bt => bt.id)
+  const selectedBehaviorTreeIds = useMemo(() => {
+    const fromLoaded = selectedBTs.map(bt => bt.id)
+    if (fromLoaded.length > 0) return fromLoaded
+    return selectedBTIds.filter(id => selectedTaskIdSet.has(id))
+  }, [selectedBTIds, selectedBTs, selectedTaskIdSet])
   const selectedBehaviorTreeLabel = selectedBTs.length === 1
     ? selectedBTs[0].name
-    : `${selectedBTs.length} tasks`
+    : `${selectedBehaviorTreeIds.length} tasks`
 
   const handlePreview = async () => {
-    if (selectedBTs.length === 0 || !selectedDistributor || selectedAgentIds.length === 0 || Object.keys(goalState).length === 0) return
-    setIsSolving(true); setPlan(null); setExecutionId(null); setExecution(null); setResourceAllocations([])
+    if (selectedBehaviorTreeIds.length === 0 || !selectedDistributor || selectedAgentIds.length === 0 || Object.keys(goalState).length === 0) return
+    setIsSolving(true); setPlan(null); setExecutionId(null); setExecution(null); setRealtimeExecutionMap({}); setResourceAllocations([])
     try {
       const result = await pddlApi.preview({
         behavior_tree_id: selectedBehaviorTreeIds[0],
@@ -1417,8 +1687,8 @@ export default function PDDL() {
   }
 
   const handleSaveAndSolve = async () => {
-    if (selectedBTs.length === 0 || !selectedDistributor || selectedAgentIds.length === 0 || Object.keys(goalState).length === 0) return
-    setIsSolving(true); setPlan(null); setExecutionId(null); setExecution(null); setResourceAllocations([])
+    if (selectedBehaviorTreeIds.length === 0 || !selectedDistributor || selectedAgentIds.length === 0 || Object.keys(goalState).length === 0) return
+    setIsSolving(true); setPlan(null); setExecutionId(null); setExecution(null); setRealtimeExecutionMap({}); setResourceAllocations([])
     try {
       const problem = await pddlApi.createProblem({
         name: `${selectedBehaviorTreeLabel} - ${new Date().toLocaleString()}`,
@@ -1438,7 +1708,7 @@ export default function PDDL() {
   }
 
   const handleExecute = async () => {
-    if (!plan?.is_valid || selectedBTs.length === 0 || !selectedDistributor) return
+    if (!plan?.is_valid || selectedBehaviorTreeIds.length === 0 || !selectedDistributor) return
     try {
       const problem = await pddlApi.createProblem({
         name: `${selectedBehaviorTreeLabel} - Exec ${new Date().toLocaleString()}`,
@@ -1473,7 +1743,7 @@ export default function PDDL() {
   }, [goalState, realtimeGoals.length])
 
   const handleStartRealtime = async () => {
-    if (selectedBTs.length === 0 || !selectedDistributor || selectedAgentIds.length === 0) return
+    if (selectedBehaviorTreeIds.length === 0 || !selectedDistributor || selectedAgentIds.length === 0) return
     const validGoals = realtimeGoals
       .filter(goal => goal.enabled && Object.keys(goal.goal_state || {}).length > 0)
       .map((goal, index) => ({
@@ -1483,6 +1753,8 @@ export default function PDDL() {
     if (validGoals.length === 0) return
 
     setIsStartingRealtime(true)
+    setRealtimeNotice(null)
+    setRealtimeExecutionMap({})
     try {
       const session = await pddlApi.startRealtimeSession({
         name: `${selectedBehaviorTreeLabel} realtime`,
@@ -1496,8 +1768,10 @@ export default function PDDL() {
       })
       setRealtimeSessionId(session.id)
       setRealtimeSession(session)
+      setRealtimeNotice('Realtime 세션을 시작했습니다.')
     } catch (err) {
       console.error('Failed to start realtime PDDL session:', err)
+      setRealtimeNotice(`Realtime 세션 시작 실패: ${getApiErrorMessage(err)}`)
     } finally {
       setIsStartingRealtime(false)
     }
@@ -1505,11 +1779,34 @@ export default function PDDL() {
 
   const handleStopRealtime = async () => {
     if (!realtimeSessionId) return
+    setIsStoppingRealtime(true)
+    setRealtimeNotice(null)
     try {
       const session = await pddlApi.stopRealtimeSession(realtimeSessionId)
-      setRealtimeSession(session)
+      if ('status' in session) {
+        setRealtimeSession(session)
+        if (session.status === 'stopped') {
+          setRealtimeSessionId(null)
+          setRealtimeExecutionMap({})
+        }
+      } else {
+        setRealtimeSession(null)
+        setRealtimeSessionId(null)
+        setRealtimeExecutionMap({})
+      }
+      setRealtimeNotice('Realtime 세션 중지 요청을 처리했습니다.')
     } catch (err) {
       console.error('Failed to stop realtime PDDL session:', err)
+      if (isMissingRealtimeSessionError(err)) {
+        setRealtimeSession(null)
+        setRealtimeSessionId(null)
+        setRealtimeExecutionMap({})
+        setRealtimeNotice('Realtime 세션이 이미 종료되어 로컬 상태를 정리했습니다.')
+      } else {
+        setRealtimeNotice('Realtime 세션 중지 실패: 서버 상태를 확인하고 다시 시도하세요.')
+      }
+    } finally {
+      setIsStoppingRealtime(false)
     }
   }
 
@@ -1563,7 +1860,7 @@ export default function PDDL() {
   }, [stateVars, initialState, execution])
   const agentDispatchMap = useMemo(() => {
     const m = new Map<string, PlanExecution['steps']>()
-    for (const dispatch of execution?.steps || []) {
+    for (const dispatch of effectiveExecutionSteps) {
       const existing = m.get(dispatch.agent_id) || []
       existing.push(dispatch)
       existing.sort((left, right) => {
@@ -1580,7 +1877,7 @@ export default function PDDL() {
       m.set(dispatch.agent_id, existing)
     }
     return m
-  }, [execution])
+  }, [effectiveExecutionSteps])
   const heldResourcesByAgent = useMemo(() => {
     const m = new Map<string, ResourceAllocation[]>()
     for (const allocation of activeResourceAllocations) {
@@ -1631,37 +1928,61 @@ export default function PDDL() {
       : plan
         ? t('status.failed')
         : t('pddl.planDraft')
+  const selectedTaskCount = selectedBehaviorTreeIds.length
   const pendingRequirements = useMemo(() => {
     const r: string[] = []
     if (!selectedDistributor) r.push(t('pddl.needDistributor'))
-    if (selectedBTs.length === 0) r.push(t('pddl.needBT'))
+    if (selectedTaskCount === 0) r.push(t('pddl.needBT'))
     if (selectedAgentIds.length === 0) r.push(t('pddl.needAgents'))
     if (goalCount === 0) r.push(t('pddl.needGoal'))
     return r
-  }, [selectedDistributor, selectedBTs.length, selectedAgentIds.length, goalCount, t])
+  }, [selectedDistributor, selectedTaskCount, selectedAgentIds.length, goalCount, t])
   const solveTooltip = useMemo(() => {
     if (!selectedDistributor) return t('pddl.needDistributor')
-    if (selectedBTs.length === 0) return t('pddl.needBT')
+    if (selectedTaskCount === 0) return t('pddl.needBT')
     if (selectedAgentIds.length === 0) return t('pddl.needAgents')
     if (Object.keys(goalState).length === 0) return t('pddl.needGoal')
     return undefined
-  }, [selectedDistributor, selectedBTs.length, selectedAgentIds, goalState, t])
+  }, [selectedDistributor, selectedTaskCount, selectedAgentIds, goalState, t])
   const executeTooltip = useMemo(() => {
     if (!selectedDistributor) return t('pddl.needDistributor')
-    if (selectedBTs.length === 0) return t('pddl.needBT')
+    if (selectedTaskCount === 0) return t('pddl.needBT')
     if (isExecuting) return t('pddl.alreadyExecuting')
     if (!plan?.is_valid) return t('pddl.needValidPlan')
     return undefined
-  }, [selectedDistributor, selectedBTs.length, plan, isExecuting, t])
-  const canSolve = !!selectedDistributor && selectedBTs.length > 0 && selectedAgentIds.length > 0 && Object.keys(goalState).length > 0
-  const canExecute = !!selectedDistributor && selectedBTs.length > 0 && !!plan?.is_valid && !isExecuting
+  }, [selectedDistributor, selectedTaskCount, plan, isExecuting, t])
+  const canSolve = !!selectedDistributor && selectedTaskCount > 0 && selectedAgentIds.length > 0 && Object.keys(goalState).length > 0
+  const canExecute = !!selectedDistributor && selectedTaskCount > 0 && !!plan?.is_valid && !isExecuting
   const validRealtimeGoals = useMemo(
     () => realtimeGoals.filter(goal => goal.enabled && Object.keys(goal.goal_state || {}).length > 0),
     [realtimeGoals]
   )
   const hasRealtimeSession = Boolean(realtimeSessionId)
-  const isRealtimeActive = hasRealtimeSession && realtimeSession?.status !== 'stopped'
-  const canStartRealtime = !!selectedDistributor && selectedBTs.length > 0 && selectedAgentIds.length > 0 && validRealtimeGoals.length > 0 && !isStartingRealtime && !isRealtimeActive && !isExecuting
+  const isRealtimeActive = hasRealtimeSession && (realtimeSession ? realtimeSession.status !== 'stopped' : false)
+  const canStartRealtime = !!selectedDistributor && selectedTaskCount > 0 && selectedAgentIds.length > 0 && validRealtimeGoals.length > 0 && !isStartingRealtime && !isStoppingRealtime && !isRealtimeActive && !isExecuting
+  const realtimeStartDisabledReason = useMemo(() => {
+    if (canStartRealtime) return null
+    if (!selectedDistributor) return t('pddl.needDistributor')
+    if (selectedTaskCount === 0) return t('pddl.needBT')
+    if (selectedAgentIds.length === 0) return t('pddl.needAgents')
+    if (validRealtimeGoals.length === 0) return '유효한 Realtime Goal이 필요합니다 (enabled + goal_state 설정)'
+    if (isExecuting) return t('pddl.alreadyExecuting')
+    if (isStartingRealtime) return 'Realtime 세션 시작 중입니다...'
+    if (isStoppingRealtime) return 'Realtime 세션 중지 처리 중입니다...'
+    if (isRealtimeActive) return '이미 Realtime 세션이 실행 중입니다. 먼저 Stop realtime을 눌러주세요.'
+    return 'Realtime 시작 조건을 확인해주세요.'
+  }, [
+    canStartRealtime,
+    isExecuting,
+    isRealtimeActive,
+    isStartingRealtime,
+    isStoppingRealtime,
+    selectedAgentIds.length,
+    selectedTaskCount,
+    selectedDistributor,
+    t,
+    validRealtimeGoals.length,
+  ])
 
   const sortedAgents = useMemo(
     () => [...agents].sort((a, b) => {
@@ -1676,6 +1997,159 @@ export default function PDDL() {
     }),
     [agents, selectedAgentIds, recommendedSet]
   )
+
+  const plannedTaskBlocksByAgent = useMemo(() => {
+    const grouped = new Map<string, SequenceTaskBlock[]>()
+    const assignments = realtimeSession?.last_plan?.assignments || plan?.assignments || []
+
+    for (const assignment of assignments) {
+      const agentId = assignment.agent_id
+      if (!agentId) continue
+      const list = grouped.get(agentId) || []
+      const taskId = assignment.task_id || assignment.behavior_tree_id || assignment.task_name || assignment.step_id
+      const taskName = assignment.task_name || assignment.step_name || taskId
+      if (!taskId || !taskName) continue
+
+      const prev = list[list.length - 1]
+      if (prev && prev.taskId === taskId) {
+        prev.order = Math.min(prev.order, assignment.order)
+        prev.status = mergeSequenceStatus(prev.status, 'pending')
+      } else {
+        list.push({
+          taskId,
+          taskName,
+          behaviorTreeId: assignment.behavior_tree_id,
+          order: assignment.order,
+          status: 'pending',
+        })
+      }
+      grouped.set(agentId, list)
+    }
+
+    for (const value of grouped.values()) {
+      value.sort((left, right) => left.order - right.order)
+    }
+
+    return grouped
+  }, [plan?.assignments, realtimeSession?.last_plan?.assignments])
+
+  const executionTaskBlocksByAgent = useMemo(() => {
+    const grouped = new Map<string, SequenceTaskBlock[]>()
+
+    for (const step of effectiveExecutionSteps) {
+      const agentId = step.agent_id
+      if (!agentId) continue
+      const list = grouped.get(agentId) || []
+      const taskId = step.task_id || step.behavior_tree_id || step.task_name || step.step_id
+      const taskName = step.task_name || step.step_name || taskId
+      if (!taskId || !taskName) continue
+      const status = normalizeSequenceStatus(step.status)
+
+      const prev = list[list.length - 1]
+      if (prev && prev.taskId === taskId) {
+        prev.order = Math.min(prev.order, step.order)
+        prev.status = mergeSequenceStatus(prev.status, status)
+      } else {
+        list.push({
+          taskId,
+          taskName,
+          behaviorTreeId: step.behavior_tree_id,
+          order: step.order,
+          status,
+        })
+      }
+      grouped.set(agentId, list)
+    }
+
+    for (const value of grouped.values()) {
+      value.sort((left, right) => left.order - right.order)
+    }
+
+    return grouped
+  }, [effectiveExecutionSteps])
+
+  const realtimeTaskRows = useMemo(() => {
+    return runtimeViewAgents.map(entry => {
+      const executionTasks = executionTaskBlocksByAgent.get(entry.agentId) || []
+      const plannedTasks = plannedTaskBlocksByAgent.get(entry.agentId) || []
+      const timeline = executionTasks.length > 0 ? executionTasks : plannedTasks
+
+      let currentIndex = timeline.findIndex(task => task.status === 'running')
+      if (currentIndex < 0) currentIndex = timeline.findIndex(task => task.status === 'pending')
+
+      let previous: SequenceTaskBlock | null = null
+      let current: SequenceTaskBlock | null = null
+      let next: SequenceTaskBlock | null = null
+      if (currentIndex >= 0) {
+        previous = currentIndex > 0 ? timeline[currentIndex - 1] : null
+        current = timeline[currentIndex]
+        next = currentIndex + 1 < timeline.length ? timeline[currentIndex + 1] : null
+      } else if (timeline.length > 0) {
+        // all completed/terminal: completed를 '지금'으로 보이지 않도록 마지막 항목을 이전으로만 표기
+        previous = timeline[timeline.length - 1]
+      }
+
+      return {
+        ...entry,
+        timeline,
+        previous,
+        current,
+        next,
+      }
+    })
+  }, [executionTaskBlocksByAgent, plannedTaskBlocksByAgent, runtimeViewAgents])
+
+  const handleOpenTaskFlow = useCallback(async (task?: SequenceTaskBlock | null) => {
+    if (!task) return
+
+    let resolvedTree: BehaviorTree | null = null
+    const candidateIds: string[] = []
+    if (task.behaviorTreeId) candidateIds.push(task.behaviorTreeId)
+    if (task.taskId) candidateIds.push(task.taskId)
+
+    for (const id of candidateIds) {
+      const cached = btCache.get(id)
+      if (cached) {
+        resolvedTree = cached
+        break
+      }
+    }
+
+    if (!resolvedTree) {
+      const byName = treeList.find(item => item.name === task.taskName)
+      if (byName) {
+        const cached = btCache.get(byName.id)
+        if (cached) {
+          resolvedTree = cached
+        } else {
+          candidateIds.push(byName.id)
+        }
+      }
+    }
+
+    if (!resolvedTree && candidateIds.length > 0) {
+      setIsLoadingFlowTree(true)
+      try {
+        for (const id of candidateIds) {
+          if (!id) continue
+          try {
+            const fetched = await behaviorTreeApi.get(id)
+            setBtCache(prev => new Map(prev).set(fetched.id, fetched))
+            resolvedTree = fetched
+            break
+          } catch {
+            // try next candidate id
+          }
+        }
+      } finally {
+        setIsLoadingFlowTree(false)
+      }
+    }
+
+    if (!resolvedTree) return
+    setSelectedFlowLabel(task.taskName)
+    setSelectedFlowTree(resolvedTree)
+  }, [btCache, treeList])
 
   // -----------------------------------------------------------------------
   // Render
@@ -1804,6 +2278,9 @@ export default function PDDL() {
                         }`} />
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-sm font-medium text-primary">{d.name}</div>
+                          <div className="mt-0.5 truncate font-mono text-[10px] text-muted">
+                            ID: {d.id}
+                          </div>
                           <div className="mt-0.5 text-[10px] text-secondary">
                             {d.resources?.length ?? 0} {t('pddl.resources')} · {d.states?.length ?? 0} {t('pddl.states')}
                           </div>
@@ -1834,7 +2311,7 @@ export default function PDDL() {
           <SidebarSection
             icon={Workflow}
             title={t('pddl.selectBT')}
-            count={selectedBTs.length > 0 ? String(selectedBTs.length) : undefined}
+            count={selectedTaskCount > 0 ? String(selectedTaskCount) : undefined}
           >
             {treeList.length === 0 ? (
               <p className="rounded-xl border border-dashed border-border bg-base/40 px-3 py-6 text-center text-xs text-muted">
@@ -1880,7 +2357,7 @@ export default function PDDL() {
                 })}
               </div>
             )}
-            {selectedBTs.length > 0 && (
+            {selectedTaskCount > 0 && (
               <div className="mt-2 rounded-xl border border-border bg-surface px-3 py-2 text-[11px] text-secondary">
                 Capability {requiredActionTypes.length} · Need {(selectedTaskPlanning.preconditions || []).length} · Resource {(selectedTaskPlanning.required_resources || []).length} · Result {(selectedTaskPlanning.result_states || []).length}
               </div>
@@ -1911,7 +2388,7 @@ export default function PDDL() {
                   </span>
                 </div>
                 <div className="mt-0.5 flex items-center gap-2 text-[10px] text-secondary">
-                  <span>{selectedBTs.length > 0 ? selectedBehaviorTreeLabel : `0 ${t('pddl.tasksSelectedShort')}`}</span>
+                  <span>{selectedTaskCount > 0 ? selectedBehaviorTreeLabel : `0 ${t('pddl.tasksSelectedShort')}`}</span>
                   <span>·</span>
                   <span>{selectedAgentIds.length} {t('pddl.agentsSelectedShort')}</span>
                   <span>·</span>
@@ -1920,6 +2397,14 @@ export default function PDDL() {
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setShowPlanningConfig(prev => !prev)}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-base/70 px-3 py-2 text-xs font-medium text-secondary transition hover:border-accent/20 hover:bg-accent/10 hover:text-accent"
+                title="Resource/State/Agent/Goal 설정 창 열기"
+              >
+                <Database size={14} />
+                {showPlanningConfig ? 'PDDL Config 숨기기' : 'PDDL Config 열기'}
+              </button>
               <ActionButton
                 onClick={handlePreview}
                 disabled={!canSolve || isSolving}
@@ -1974,8 +2459,21 @@ export default function PDDL() {
         ) : (
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
 
-            {/* ---- Top 4 sections: horizontal grid ---- */}
-            <div className="grid grid-cols-4 gap-2 items-start">
+            {/* ---- Planning config workspace ---- */}
+            <div className="rounded-2xl border border-border bg-surface shadow-sm shadow-slate-950/5">
+              <button
+                onClick={() => setShowPlanningConfig(prev => !prev)}
+                className="flex w-full items-center gap-2 border-b border-border px-4 py-3 text-left transition hover:bg-base/40"
+              >
+                <Database size={14} className="text-accent" />
+                <span className="flex-1 text-sm font-semibold text-primary">Planning Setup Workspace</span>
+                <span className="rounded-full bg-base px-2 py-0.5 text-[10px] text-secondary">
+                  Resource {aggregatedResources.length} · State {stateVars.length} · Agent {selectedAgentIds.length} · Goal {goalCount}
+                </span>
+                {showPlanningConfig ? <ChevronDown size={14} className="text-muted" /> : <ChevronRight size={14} className="text-muted" />}
+              </button>
+              {showPlanningConfig && (
+                <div className="grid gap-2 p-3 md:grid-cols-2 2xl:grid-cols-4 items-start">
 
             {/* =================== RESOURCE — amber =================== */}
             <ThemedSection icon={Gem} title="Resource" count={aggregatedResources.length} theme={SECTION_THEME.resource} compact>
@@ -2152,15 +2650,21 @@ export default function PDDL() {
                 <div className="flex gap-1">
                   <input
                     className="flex-1 min-w-0 rounded border border-border bg-base px-2 py-1 text-[11px] text-primary placeholder:text-muted outline-none focus:border-violet-500/50"
-                    placeholder={t('pddl.stateName')}
+                    placeholder={`${t('pddl.stateName')} (예: at_{{resource.name}})`}
                     value={newStateName}
-                    onChange={e => setNewStateName(e.target.value)}
+                    onChange={e => {
+                      setNewStateName(e.target.value)
+                      setStateBuilderMessage(null)
+                    }}
                     onKeyDown={e => e.key === 'Enter' && handleAddState()}
                   />
                   <select
                     className="rounded border border-border bg-base px-1 py-1 text-[10px] text-primary outline-none"
                     value={newStateType}
-                    onChange={e => setNewStateType(e.target.value as 'bool' | 'int' | 'string')}
+                    onChange={e => {
+                      setNewStateType(e.target.value as 'bool' | 'int' | 'string')
+                      setStateBuilderMessage(null)
+                    }}
                   >
                     <option value="bool">bool</option>
                     <option value="int">int</option>
@@ -2168,6 +2672,41 @@ export default function PDDL() {
                   </select>
                   <button onClick={handleAddState} disabled={!newStateName.trim()} className="rounded bg-violet-500/20 px-1.5 text-violet-400 disabled:opacity-40"><Plus size={12} /></button>
                 </div>
+                <div className="flex gap-1">
+                  {newStateType === 'bool' ? (
+                    <select
+                      className="w-full rounded border border-border bg-base px-2 py-1 text-[11px] text-primary outline-none focus:border-violet-500/50"
+                      value={newStateInitialValue || 'false'}
+                      onChange={e => {
+                        setNewStateInitialValue(e.target.value)
+                        setStateBuilderMessage(null)
+                      }}
+                    >
+                      <option value="false">initial: false</option>
+                      <option value="true">initial: true</option>
+                    </select>
+                  ) : (
+                    <input
+                      type={newStateType === 'int' ? 'number' : 'text'}
+                      className="w-full rounded border border-border bg-base px-2 py-1 text-[11px] text-primary placeholder:text-muted outline-none focus:border-violet-500/50"
+                      placeholder={newStateType === 'int' ? 'initial value (e.g. 0)' : 'initial value (optional)'}
+                      value={newStateInitialValue}
+                      onChange={e => {
+                        setNewStateInitialValue(e.target.value)
+                        setStateBuilderMessage(null)
+                      }}
+                    />
+                  )}
+                </div>
+                <div className="rounded border border-violet-500/20 bg-violet-500/5 px-2 py-1 text-[10px] leading-4 text-secondary">
+                  상태 이름에 <span className="font-mono text-violet-200">{'{{resource.name}}'}</span> 을 넣으면
+                  resource instance별로 상태를 일괄 생성합니다. <span className="font-mono text-violet-200">{'{{agent.name}}'}</span> / <span className="font-mono text-violet-200">{'{{agent.id}}'}</span> 도 동일하게 확장됩니다.
+                </div>
+                {stateBuilderMessage && (
+                  <div className="rounded border border-violet-500/20 bg-violet-500/10 px-2 py-1 text-[10px] text-violet-200">
+                    {stateBuilderMessage}
+                  </div>
+                )}
                 {stateVars.length === 0 ? (
                   <p className="py-3 text-center text-[10px] text-muted">{t('pddl.noPlanningStates')}</p>
                 ) : stateVars.map(sv => {
@@ -2296,13 +2835,16 @@ export default function PDDL() {
               </div>
             </ThemedSection>
 
-            </div>{/* end grid top 4 */}
+                </div>
+              )}
+            </div>
 
             <ThemedSection
               icon={Workflow}
               title="Realtime PDDL Loop"
               count={validRealtimeGoals.length}
               theme={SECTION_THEME.plan}
+              defaultOpen={false}
             >
               <div className="space-y-4">
                 <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-base/40 p-4">
@@ -2330,18 +2872,20 @@ export default function PDDL() {
                   <button
                     onClick={handleStartRealtime}
                     disabled={!canStartRealtime}
+                    title={realtimeStartDisabledReason || undefined}
                     className="inline-flex items-center gap-1.5 rounded-xl bg-accent px-3 py-2 text-xs font-medium text-white transition hover:bg-accent/80 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     <Play size={14} />
                     Start realtime
                   </button>
-                  {isRealtimeActive && realtimeSessionId && (
+                  {hasRealtimeSession && realtimeSessionId && (
                     <button
                       onClick={handleStopRealtime}
-                      className="inline-flex items-center gap-1.5 rounded-xl bg-red-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-red-500"
+                      disabled={isStoppingRealtime}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-red-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <Square size={14} />
-                      Stop realtime
+                      {isStoppingRealtime ? 'Stopping...' : 'Stop realtime'}
                     </button>
                   )}
                   {realtimeSession && (
@@ -2361,14 +2905,34 @@ export default function PDDL() {
                           goal · {realtimeSession.selected_goal_name}
                         </span>
                       )}
+                      {realtimeSession.selected_agent_name && (
+                        <span className="rounded-full bg-violet-500/10 px-3 py-1 text-violet-300">
+                          agent · {realtimeSession.selected_agent_name}
+                        </span>
+                      )}
+                      {realtimeSession.selected_resource_name && (
+                        <span className="rounded-full bg-amber-500/10 px-3 py-1 text-amber-300">
+                          resource · {realtimeSession.selected_resource_name}
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>
+                {!canStartRealtime && !hasRealtimeSession && realtimeStartDisabledReason && (
+                  <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
+                    Start realtime 비활성화 사유: {realtimeStartDisabledReason}
+                  </div>
+                )}
 
                 {realtimeSession?.last_error && (
                   <div className="flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-xs text-red-300">
                     <AlertTriangle size={14} />
                     {realtimeSession.last_error}
+                  </div>
+                )}
+                {realtimeNotice && (
+                  <div className="rounded-xl border border-sky-500/20 bg-sky-500/5 px-4 py-3 text-xs text-sky-200">
+                    {realtimeNotice}
                   </div>
                 )}
 
@@ -2411,6 +2975,75 @@ export default function PDDL() {
                         ))}
                       </div>
                     </div>
+                  </div>
+                )}
+              </div>
+            </ThemedSection>
+
+            <ThemedSection
+              icon={Bot}
+              title="Realtime Agent Task Sequence"
+              count={realtimeTaskRows.length}
+              theme={SECTION_THEME.agent}
+            >
+              <div className="space-y-3">
+                <div className="rounded-xl border border-border bg-base/50 px-3 py-2 text-xs text-secondary">
+                  각 Agent별로 이전 → 지금 → 이후 task 흐름을 보여줍니다. 블록을 클릭하면 해당 task의 BT 흐름을 볼 수 있습니다.
+                </div>
+
+                {realtimeTaskRows.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-border bg-base/30 px-4 py-8 text-center text-sm text-muted">
+                    실행 중인 agent/task 시퀀스가 없습니다.
+                  </div>
+                ) : (
+                  <div className="max-h-[420px] space-y-3 overflow-y-auto pr-1">
+                    {realtimeTaskRows.map((row) => {
+                      const blocks = [
+                        { key: 'previous', label: '이전', item: row.previous },
+                        { key: 'current', label: '지금', item: row.current },
+                        { key: 'next', label: '이후', item: row.next },
+                      ] as const
+
+                      return (
+                        <div key={`realtime-seq-${row.agentId}`} className="rounded-2xl border border-border bg-base/60 p-3">
+                          <div className="mb-2 flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-semibold text-primary">{row.agent?.name || row.agentId}</span>
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] ${
+                              row.isOnline ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'
+                            }`}>
+                              {row.stateLabel}
+                            </span>
+                            <span className="rounded-full bg-surface px-2 py-0.5 text-[10px] text-secondary">
+                              queue {row.timeline.length}
+                            </span>
+                          </div>
+
+                          <div className="grid gap-2 md:grid-cols-3">
+                            {blocks.map((block) => (
+                              <div key={`${row.agentId}-${block.key}`} className="rounded-xl border border-border bg-surface/70 p-2">
+                                <div className="mb-1 text-[10px] uppercase tracking-wider text-muted">{block.label}</div>
+                                {block.item ? (
+                                  <button
+                                    onClick={() => handleOpenTaskFlow(block.item)}
+                                    className={`w-full rounded-lg border px-2 py-2 text-left transition hover:border-accent/40 ${statusBadgeClass(block.item.status)}`}
+                                  >
+                                    <div className="truncate text-xs font-semibold">{block.item.taskName}</div>
+                                    <div className="mt-1 flex items-center justify-between gap-1 text-[10px]">
+                                      <span className="truncate opacity-80">{block.item.taskId}</span>
+                                      <span className="rounded-full bg-black/20 px-1.5 py-0.5 uppercase">{block.item.status}</span>
+                                    </div>
+                                  </button>
+                                ) : (
+                                  <div className="rounded-lg border border-dashed border-border px-2 py-3 text-center text-[11px] text-muted">
+                                    없음
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
               </div>
@@ -2532,6 +3165,49 @@ export default function PDDL() {
           </div>
         )}
       </main>
+
+      {(selectedFlowTree || isLoadingFlowTree) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="flex h-[80vh] w-full max-w-6xl flex-col rounded-2xl border border-border bg-surface shadow-2xl">
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <div>
+                <div className="text-sm font-semibold text-primary">Task BT Flow</div>
+                <div className="text-xs text-secondary">{selectedFlowLabel}</div>
+              </div>
+              <button
+                onClick={() => {
+                  setSelectedFlowTree(null)
+                  setSelectedFlowLabel('Task flow')
+                  setIsLoadingFlowTree(false)
+                }}
+                className="rounded-lg border border-border bg-base px-2 py-1 text-xs text-secondary transition hover:text-primary"
+              >
+                닫기
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden p-3">
+              {isLoadingFlowTree ? (
+                <div className="flex h-full items-center justify-center text-sm text-secondary">
+                  BT 흐름을 불러오는 중...
+                </div>
+              ) : selectedFlowTree ? (
+                <div className="h-full overflow-hidden rounded-xl border border-border bg-base">
+                  <ActionGraphViewer
+                    actionGraph={selectedFlowTree}
+                    className="h-full"
+                    showControls={true}
+                    showMiniMap={true}
+                  />
+                </div>
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-muted">
+                  표시할 BT가 없습니다.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -62,7 +62,12 @@ type RealtimeSessionResponse struct {
 	LiveState        map[string]string      `json:"live_state,omitempty"`
 	SelectedGoalID   string                 `json:"selected_goal_id,omitempty"`
 	SelectedGoalName string                 `json:"selected_goal_name,omitempty"`
+	SelectedAgentID   string                `json:"selected_agent_id,omitempty"`
+	SelectedAgentName string                `json:"selected_agent_name,omitempty"`
+	SelectedResourceID   string             `json:"selected_resource_id,omitempty"`
+	SelectedResourceName string             `json:"selected_resource_name,omitempty"`
 	ActiveExecutionID string                `json:"active_execution_id,omitempty"`
+	ActiveExecutionIDs []string             `json:"active_execution_ids,omitempty"`
 	ActiveExecutionStatus string            `json:"active_execution_status,omitempty"`
 	LastError        string                 `json:"last_error,omitempty"`
 	LastPlan         *pddl.Plan             `json:"last_plan,omitempty"`
@@ -79,30 +84,69 @@ type realtimeGoal struct {
 	GoalState            map[string]string
 }
 
+type realtimeGoalBinding struct {
+	AgentID      string
+	AgentName    string
+	ResourceID   string
+	ResourceName string
+}
+
+type realtimeExecutionContext struct {
+	ExecutionID string
+	Plan        *pddl.Plan
+	Goal        *realtimeGoal
+	Binding     realtimeGoalBinding
+	StartedAt   time.Time
+}
+
+type realtimeDispatchCandidate struct {
+	AgentID    string
+	AgentOrder int
+	Goal       *realtimeGoal
+	Binding    realtimeGoalBinding
+	Plan       *pddl.Plan
+	FailureKey string
+}
+
 type realtimeSession struct {
 	ID                string
 	Name              string
 	BehaviorTreeIDs   []string
 	TaskDistributorID string
 	AgentIDs          []string
+	Agents            []pddl.AgentInfo
+	Resources         []pddl.ResourceInfo
 	TickInterval      time.Duration
 	Goals             []realtimeGoal
 	CurrentState      map[string]string
 	SelectedGoalID    string
 	SelectedGoalName  string
+	SelectedAgentID   string
+	SelectedAgentName string
+	SelectedResourceID   string
+	SelectedResourceName string
+	LastSelectedAgentID string
 	ActiveExecutionID string
 	ActivePlan        *pddl.Plan
 	ActiveGoal        *realtimeGoal
+	ActiveExecutions  map[string]realtimeExecutionContext
 	ActiveStatus      string
 	LastError         string
 	LastPlan          *pddl.Plan
 	StartedAt         time.Time
 	UpdatedAt         time.Time
+	RuntimeStateSources map[string]runtimeStateSource
 
 	cancel         context.CancelFunc
 	ctx            context.Context
 	failedStateKey map[string]string
 	mu             sync.RWMutex
+}
+
+type runtimeStateSource struct {
+	Values    map[string]string
+	UpdatedAt time.Time
+	ExpiresAt *time.Time
 }
 
 type RealtimePddlManager struct {
@@ -147,6 +191,14 @@ func (m *RealtimePddlManager) Start(req RealtimeSessionRequest) (*realtimeSessio
 	if err != nil {
 		return nil, err
 	}
+	agents, err := m.server.loadRealtimeAgents(req.AgentIDs)
+	if err != nil {
+		return nil, err
+	}
+	resources, err := m.server.loadRealtimeResources(req.TaskDistributorID)
+	if err != nil {
+		return nil, err
+	}
 
 	tickInterval := 2 * time.Second
 	if req.TickIntervalSec > 0 {
@@ -164,6 +216,8 @@ func (m *RealtimePddlManager) Start(req RealtimeSessionRequest) (*realtimeSessio
 		BehaviorTreeIDs:   behaviorTreeIDs,
 		TaskDistributorID: strings.TrimSpace(req.TaskDistributorID),
 		AgentIDs:          append([]string{}, req.AgentIDs...),
+		Agents:            append([]pddl.AgentInfo{}, agents...),
+		Resources:         append([]pddl.ResourceInfo{}, resources...),
 		TickInterval:      tickInterval,
 		Goals:             normalizeRealtimeGoals(req.Goals),
 		CurrentState:      cloneStringMap(currentState),
@@ -173,6 +227,8 @@ func (m *RealtimePddlManager) Start(req RealtimeSessionRequest) (*realtimeSessio
 		ctx:               ctx,
 		cancel:            cancel,
 		failedStateKey:    map[string]string{},
+		ActiveExecutions:  map[string]realtimeExecutionContext{},
+		RuntimeStateSources: map[string]runtimeStateSource{},
 	}
 	if session.Name == "" {
 		session.Name = fmt.Sprintf("realtime-%s", session.ID)
@@ -196,14 +252,186 @@ func (m *RealtimePddlManager) Stop(id string) error {
 	session.mu.Lock()
 	session.ActiveStatus = "stopped"
 	session.UpdatedAt = time.Now().UTC()
-	activeExecutionID := session.ActiveExecutionID
+	activeExecutionIDs := make([]string, 0, len(session.ActiveExecutions)+1)
+	for executionID := range session.ActiveExecutions {
+		activeExecutionIDs = append(activeExecutionIDs, executionID)
+	}
+	if strings.TrimSpace(session.ActiveExecutionID) != "" {
+		activeExecutionIDs = append(activeExecutionIDs, session.ActiveExecutionID)
+	}
+	session.ActiveExecutionID = ""
+	session.ActivePlan = nil
+	session.ActiveGoal = nil
+	session.ActiveExecutions = map[string]realtimeExecutionContext{}
 	session.mu.Unlock()
 
-	if activeExecutionID != "" {
-		_ = m.server.planExecutor.CancelExecution(activeExecutionID)
-	}
 	session.cancel()
+
+	for _, executionID := range uniqueNonEmptyStrings(activeExecutionIDs) {
+		if strings.TrimSpace(executionID) == "" {
+			continue
+		}
+		_ = m.server.planExecutor.CancelExecution(executionID)
+	}
+	m.cancelExecutionsByProblemPrefix("realtime:" + id + ":")
 	return nil
+}
+
+func (m *RealtimePddlManager) cancelExecutionsByProblemPrefix(prefix string) {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return
+	}
+
+	executions := m.server.planExecutor.ListExecutions()
+	for _, execution := range executions {
+		if execution == nil {
+			continue
+		}
+		snapshot := execution.Snapshot()
+		if !strings.HasPrefix(snapshot.ProblemID, prefix) {
+			continue
+		}
+		status := strings.ToLower(strings.TrimSpace(snapshot.Status))
+		if status != string(executor.PlanExecRunning) && status != string(executor.PlanExecPending) {
+			continue
+		}
+		_ = m.server.planExecutor.CancelExecution(snapshot.ID)
+	}
+}
+
+// UpsertRuntimeStateByDistributor applies runtime state overlays to all realtime
+// sessions bound to the given task distributor.
+func (m *RealtimePddlManager) UpsertRuntimeStateByDistributor(
+	taskDistributorID string,
+	source string,
+	values map[string]string,
+	ttlSec float64,
+) int {
+	taskDistributorID = strings.TrimSpace(taskDistributorID)
+	if taskDistributorID == "" {
+		return 0
+	}
+	normalized := normalizeRuntimeStateValues(values)
+	if len(normalized) == 0 {
+		return 0
+	}
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = "runtime"
+	}
+
+	now := time.Now().UTC()
+	var expiresAt *time.Time
+	if ttlSec > 0 {
+		exp := now.Add(time.Duration(ttlSec * float64(time.Second)))
+		expiresAt = &exp
+	}
+
+	updated := 0
+	m.mu.RLock()
+	for _, session := range m.sessions {
+		if session == nil || session.TaskDistributorID != taskDistributorID {
+			continue
+		}
+		session.mu.Lock()
+		session.RuntimeStateSources[source] = runtimeStateSource{
+			Values:    cloneStringMap(normalized),
+			UpdatedAt: now,
+			ExpiresAt: expiresAt,
+		}
+		session.UpdatedAt = now
+		session.mu.Unlock()
+		updated++
+	}
+	m.mu.RUnlock()
+
+	return updated
+}
+
+// UpsertRuntimeStateByAgent applies runtime state overlays to all realtime sessions
+// that include the given agent ID.
+func (m *RealtimePddlManager) UpsertRuntimeStateByAgent(
+	agentID string,
+	source string,
+	values map[string]string,
+	ttlSec float64,
+) int {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return 0
+	}
+	normalized := normalizeRuntimeStateValues(values)
+	if len(normalized) == 0 {
+		return 0
+	}
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = "agent:" + agentID
+	}
+
+	now := time.Now().UTC()
+	var expiresAt *time.Time
+	if ttlSec > 0 {
+		exp := now.Add(time.Duration(ttlSec * float64(time.Second)))
+		expiresAt = &exp
+	}
+
+	updated := 0
+	m.mu.RLock()
+	for _, session := range m.sessions {
+		if session == nil || !sessionContainsAgent(session, agentID) {
+			continue
+		}
+		session.mu.Lock()
+		session.RuntimeStateSources[source] = runtimeStateSource{
+			Values:    cloneStringMap(normalized),
+			UpdatedAt: now,
+			ExpiresAt: expiresAt,
+		}
+		session.UpdatedAt = now
+		session.mu.Unlock()
+		updated++
+	}
+	m.mu.RUnlock()
+
+	return updated
+}
+
+// ClearRuntimeStateByDistributor removes runtime overlay state from sessions of a distributor.
+// If source is empty, all runtime sources are cleared.
+func (m *RealtimePddlManager) ClearRuntimeStateByDistributor(taskDistributorID string, source string) int {
+	taskDistributorID = strings.TrimSpace(taskDistributorID)
+	if taskDistributorID == "" {
+		return 0
+	}
+	source = strings.TrimSpace(source)
+	now := time.Now().UTC()
+	cleared := 0
+
+	m.mu.RLock()
+	for _, session := range m.sessions {
+		if session == nil || session.TaskDistributorID != taskDistributorID {
+			continue
+		}
+		session.mu.Lock()
+		if source == "" {
+			if len(session.RuntimeStateSources) > 0 {
+				session.RuntimeStateSources = map[string]runtimeStateSource{}
+				cleared++
+			}
+		} else {
+			if _, ok := session.RuntimeStateSources[source]; ok {
+				delete(session.RuntimeStateSources, source)
+				cleared++
+			}
+		}
+		session.UpdatedAt = now
+		session.mu.Unlock()
+	}
+	m.mu.RUnlock()
+
+	return cleared
 }
 
 func (m *RealtimePddlManager) Get(id string) (*realtimeSession, bool) {
@@ -251,154 +479,895 @@ func (m *RealtimePddlManager) tick(session *realtimeSession) {
 		return
 	}
 
-	if m.syncExecution(session) {
-		return
-	}
+	m.syncExecutions(session)
+	currentState := m.sessionMergedState(session)
 
-	currentState := sessionCurrentState(session)
-	selectedGoal := selectRealtimeGoal(session.Goals, currentState)
-	if selectedGoal == nil {
+	session.mu.RLock()
+	preferredAgentID := strings.TrimSpace(session.LastSelectedAgentID)
+	agents := append([]pddl.AgentInfo{}, session.Agents...)
+	resources := append([]pddl.ResourceInfo{}, session.Resources...)
+	goals := make([]realtimeGoal, 0, len(session.Goals))
+	for _, goal := range session.Goals {
+		goals = append(goals, realtimeGoal{
+			ID:                   goal.ID,
+			Name:                 goal.Name,
+			Priority:             goal.Priority,
+			Enabled:              goal.Enabled,
+			ActivationConditions: cloneConditions(goal.ActivationConditions),
+			GoalState:            cloneStringMap(goal.GoalState),
+		})
+	}
+	behaviorTreeIDs := append([]string{}, session.BehaviorTreeIDs...)
+	taskDistributorID := strings.TrimSpace(session.TaskDistributorID)
+	session.mu.RUnlock()
+
+	if len(agents) == 0 || len(behaviorTreeIDs) == 0 {
 		session.mu.Lock()
-		session.SelectedGoalID = ""
-		session.SelectedGoalName = ""
-		session.ActiveStatus = "idle"
+		if len(session.ActiveExecutions) == 0 {
+			session.ActiveStatus = "idle"
+			session.ActiveExecutionID = ""
+			session.ActivePlan = nil
+			session.ActiveGoal = nil
+		}
 		session.UpdatedAt = time.Now().UTC()
 		session.mu.Unlock()
 		return
 	}
 
-	failureKey := goalFailureKey(selectedGoal.ID, currentState)
+	agents = rotateAgentsByPreferred(agents, preferredAgentID)
+	busyAgents, busyResources := m.collectBusyAgentsAndResources(session)
+	startedExecution := false
 
-	session.mu.RLock()
-	if session.failedStateKey[selectedGoal.ID] == failureKey {
-		session.mu.RUnlock()
-		return
+	// Build dispatch candidates greedily with a provisional reservation set.
+	// This lets later agents in the same tick solve with already-reserved
+	// resources filtered out (e.g., agent2 can pick cnc02 instead of failing on
+	// cnc01 selected by agent1).
+	provisionalBusyResources := cloneBoolMap(busyResources)
+	if provisionalBusyResources == nil {
+		provisionalBusyResources = map[string]bool{}
 	}
-	session.mu.RUnlock()
+	provisionalBusyAgents := cloneBoolMap(busyAgents)
+	if provisionalBusyAgents == nil {
+		provisionalBusyAgents = map[string]bool{}
+	}
+	selectedCandidates := make([]realtimeDispatchCandidate, 0, len(agents))
 
-	plan, err := m.server.solveProblemSpec(planningSolveSpec{
-		BehaviorTreeIDs:   session.BehaviorTreeIDs,
-		TaskDistributorID: session.TaskDistributorID,
-		InitialState:      currentState,
-		GoalState:         cloneStringMap(selectedGoal.GoalState),
-		AgentIDs:          append([]string{}, session.AgentIDs...),
-	})
-	if err != nil {
-		recordRealtimeGoalFailure(session, selectedGoal, failureKey, err.Error(), nil)
-		return
-	}
-	if plan == nil || !plan.IsValid {
-		errMsg := "plan is invalid"
-		if plan != nil && strings.TrimSpace(plan.ErrorMessage) != "" {
-			errMsg = plan.ErrorMessage
+	for agentOrder, agent := range agents {
+		agentID := strings.TrimSpace(agent.ID)
+		if agentID == "" || provisionalBusyAgents[agentID] {
+			continue
 		}
-		recordRealtimeGoalFailure(session, selectedGoal, failureKey, errMsg, plan)
-		return
-	}
-	if len(plan.Assignments) == 0 {
-		recordRealtimeGoalFailure(session, selectedGoal, failureKey, "plan has no assignments", plan)
-		return
+		if !isRealtimeAgentIdle(currentState, agent) {
+			continue
+		}
+		candidate := m.buildDispatchCandidateForAgent(
+			session,
+			agent,
+			agentOrder,
+			currentState,
+			goals,
+			resources,
+			behaviorTreeIDs,
+			taskDistributorID,
+			provisionalBusyResources,
+		)
+		if candidate == nil {
+			continue
+		}
+		selectedCandidates = append(selectedCandidates, *candidate)
+		provisionalBusyAgents[agentID] = true
+		if resourceID := strings.TrimSpace(candidate.Binding.ResourceID); resourceID != "" {
+			provisionalBusyResources[resourceID] = true
+		}
+		if resourceName := strings.TrimSpace(candidate.Binding.ResourceName); resourceName != "" {
+			provisionalBusyResources[resourceName] = true
+		}
+		markBusyAgentsAndResourcesFromPlan(candidate.Plan, provisionalBusyAgents, provisionalBusyResources)
 	}
 
-	executionProblemID := fmt.Sprintf("realtime:%s:%d", session.ID, time.Now().UnixNano())
-	executionID, err := m.server.planExecutor.StartRuntimePlanExecution(
-		session.ctx,
-		executionProblemID,
-		session.BehaviorTreeIDs,
-		session.TaskDistributorID,
-		currentState,
-		plan,
-	)
-	if err != nil {
-		recordRealtimeGoalFailure(session, selectedGoal, failureKey, err.Error(), plan)
-		return
+	for _, candidate := range selectedCandidates {
+		executionProblemID := fmt.Sprintf(
+			"realtime:%s:%s:%d",
+			session.ID,
+			candidate.AgentID,
+			time.Now().UnixNano(),
+		)
+		executionID, err := m.server.planExecutor.StartRuntimePlanExecution(
+			session.ctx,
+			executionProblemID,
+			behaviorTreeIDs,
+			taskDistributorID,
+			currentState,
+			candidate.Plan,
+		)
+		if err != nil {
+			recordRealtimeGoalFailure(
+				session,
+				candidate.Goal,
+				candidate.Binding,
+				candidate.FailureKey,
+				err.Error(),
+				candidate.Plan,
+			)
+			continue
+		}
+
+		now := time.Now().UTC()
+		session.mu.Lock()
+		delete(session.failedStateKey, candidate.Goal.ID)
+		if session.ActiveExecutions == nil {
+			session.ActiveExecutions = map[string]realtimeExecutionContext{}
+		}
+		session.ActiveExecutions[executionID] = realtimeExecutionContext{
+			ExecutionID: executionID,
+			Plan:        clonePlan(candidate.Plan),
+			Goal:        cloneRealtimeGoalPtr(candidate.Goal),
+			Binding: realtimeGoalBinding{
+				AgentID:      candidate.Binding.AgentID,
+				AgentName:    candidate.Binding.AgentName,
+				ResourceID:   candidate.Binding.ResourceID,
+				ResourceName: candidate.Binding.ResourceName,
+			},
+			StartedAt: now,
+		}
+		session.ActiveExecutionID = executionID
+		session.ActivePlan = clonePlan(candidate.Plan)
+		session.ActiveGoal = cloneRealtimeGoalPtr(candidate.Goal)
+		session.ActiveStatus = "running"
+		session.SelectedGoalID = candidate.Goal.ID
+		session.SelectedGoalName = candidate.Goal.Name
+		session.SelectedAgentID = candidate.Binding.AgentID
+		session.SelectedAgentName = candidate.Binding.AgentName
+		session.SelectedResourceID = candidate.Binding.ResourceID
+		session.SelectedResourceName = candidate.Binding.ResourceName
+		if strings.TrimSpace(candidate.Binding.AgentID) != "" {
+			session.LastSelectedAgentID = strings.TrimSpace(candidate.Binding.AgentID)
+		}
+		session.LastError = ""
+		session.LastPlan = clonePlan(candidate.Plan)
+		session.UpdatedAt = now
+		session.mu.Unlock()
+
+		busyAgents[candidate.AgentID] = true
+		if resourceID := strings.TrimSpace(candidate.Binding.ResourceID); resourceID != "" {
+			busyResources[resourceID] = true
+		}
+		if resourceName := strings.TrimSpace(candidate.Binding.ResourceName); resourceName != "" {
+			busyResources[resourceName] = true
+		}
+		markBusyAgentsAndResourcesFromPlan(candidate.Plan, busyAgents, busyResources)
+		startedExecution = true
 	}
 
 	session.mu.Lock()
-	delete(session.failedStateKey, selectedGoal.ID)
-	session.ActiveExecutionID = executionID
-	session.ActivePlan = clonePlan(plan)
-	session.ActiveGoal = cloneRealtimeGoalPtr(selectedGoal)
-	session.ActiveStatus = "running"
-	session.SelectedGoalID = selectedGoal.ID
-	session.SelectedGoalName = selectedGoal.Name
-	session.LastError = ""
-	session.LastPlan = clonePlan(plan)
+	if len(session.ActiveExecutions) == 0 && !startedExecution {
+		session.SelectedGoalID = ""
+		session.SelectedGoalName = ""
+		session.SelectedAgentID = ""
+		session.SelectedAgentName = ""
+		session.SelectedResourceID = ""
+		session.SelectedResourceName = ""
+		session.ActiveStatus = "idle"
+		session.ActiveExecutionID = ""
+		session.ActivePlan = nil
+		session.ActiveGoal = nil
+	} else if len(session.ActiveExecutions) > 0 && strings.TrimSpace(session.ActiveStatus) == "" {
+		session.ActiveStatus = "running"
+	}
 	session.UpdatedAt = time.Now().UTC()
 	session.mu.Unlock()
 }
 
-func (m *RealtimePddlManager) syncExecution(session *realtimeSession) bool {
+func (m *RealtimePddlManager) buildDispatchCandidateForAgent(
+	session *realtimeSession,
+	agent pddl.AgentInfo,
+	agentOrder int,
+	currentState map[string]string,
+	goals []realtimeGoal,
+	resources []pddl.ResourceInfo,
+	behaviorTreeIDs []string,
+	taskDistributorID string,
+	busyResources map[string]bool,
+) *realtimeDispatchCandidate {
+	if session == nil {
+		return nil
+	}
+	agentID := strings.TrimSpace(agent.ID)
+	if agentID == "" {
+		return nil
+	}
+
+	availableResources := filterRealtimeAvailableResources(resources, busyResources)
+	availableResources = filterRealtimeAvailableResourcesByReservation(currentState, availableResources, agent)
+	for goalIdx := range goals {
+		goalCandidate := goals[goalIdx]
+		if !goalCandidate.Enabled {
+			continue
+		}
+
+		met, selectedBinding := realtimeActivationConditionsMet(
+			currentState,
+			goalCandidate.ActivationConditions,
+			[]pddl.AgentInfo{agent},
+			availableResources,
+			agentID,
+		)
+		if !met {
+			continue
+		}
+		if realtimeGoalSatisfied(currentState, goalCandidate.GoalState) {
+			continue
+		}
+
+		selectedGoal := cloneRealtimeGoalPtr(&goalCandidate)
+		if selectedGoal == nil {
+			continue
+		}
+
+		failureKey := goalFailureKey(selectedGoal.ID, currentState, selectedBinding)
+		session.mu.RLock()
+		sameFailureState := session.failedStateKey[selectedGoal.ID] == failureKey
+		session.mu.RUnlock()
+		if sameFailureState {
+			continue
+		}
+
+		goalStateForSolve := applyRealtimeGoalBinding(selectedGoal.GoalState, selectedBinding)
+		plan, err := m.server.solveProblemSpec(planningSolveSpec{
+			BehaviorTreeIDs:   behaviorTreeIDs,
+			TaskDistributorID: taskDistributorID,
+			InitialState:      currentState,
+			GoalState:         goalStateForSolve,
+			AgentIDs:          []string{agentID},
+		})
+		if err != nil {
+			recordRealtimeGoalFailure(session, selectedGoal, selectedBinding, failureKey, err.Error(), nil)
+			continue
+		}
+		if plan == nil || !plan.IsValid {
+			errMsg := "plan is invalid"
+			if plan != nil && strings.TrimSpace(plan.ErrorMessage) != "" {
+				errMsg = plan.ErrorMessage
+			}
+			recordRealtimeGoalFailure(session, selectedGoal, selectedBinding, failureKey, errMsg, plan)
+			continue
+		}
+		if len(plan.Assignments) == 0 {
+			recordRealtimeGoalFailure(session, selectedGoal, selectedBinding, failureKey, "plan has no assignments", plan)
+			continue
+		}
+
+		conflicts := planBusyResourceConflicts(plan, busyResources)
+		if len(conflicts) > 0 {
+			// Busy-resource conflict is transient. Do not cache as failedStateKey,
+			// so the goal can be retried once resources are released.
+			session.mu.Lock()
+			session.LastError = fmt.Sprintf(
+				"skip goal %s for agent %s: busy resources %v",
+				selectedGoal.ID,
+				agentID,
+				conflicts,
+			)
+			session.UpdatedAt = time.Now().UTC()
+			session.mu.Unlock()
+			continue
+		}
+
+		return &realtimeDispatchCandidate{
+			AgentID:    agentID,
+			AgentOrder: agentOrder,
+			Goal:       selectedGoal,
+			Binding: realtimeGoalBinding{
+				AgentID:      selectedBinding.AgentID,
+				AgentName:    selectedBinding.AgentName,
+				ResourceID:   selectedBinding.ResourceID,
+				ResourceName: selectedBinding.ResourceName,
+			},
+			Plan:       clonePlan(plan),
+			FailureKey: failureKey,
+		}
+	}
+
+	return nil
+}
+
+func selectRealtimeDispatchCandidates(
+	candidates []realtimeDispatchCandidate,
+	busyResources map[string]bool,
+) []realtimeDispatchCandidate {
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	ordered := make([]realtimeDispatchCandidate, len(candidates))
+	copy(ordered, candidates)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		left := 0
+		right := 0
+		if ordered[i].Goal != nil {
+			left = ordered[i].Goal.Priority
+		}
+		if ordered[j].Goal != nil {
+			right = ordered[j].Goal.Priority
+		}
+		if left != right {
+			return left < right
+		}
+		return ordered[i].AgentOrder < ordered[j].AgentOrder
+	})
+
+	reservedResources := cloneBoolMap(busyResources)
+	if reservedResources == nil {
+		reservedResources = map[string]bool{}
+	}
+	selectedAgents := map[string]bool{}
+	dummyBusyAgents := map[string]bool{}
+	selected := make([]realtimeDispatchCandidate, 0, len(ordered))
+
+	for _, candidate := range ordered {
+		agentID := strings.TrimSpace(candidate.AgentID)
+		if agentID == "" || selectedAgents[agentID] {
+			continue
+		}
+		if candidate.Plan == nil || candidate.Goal == nil {
+			continue
+		}
+
+		if conflicts := planBusyResourceConflicts(candidate.Plan, reservedResources); len(conflicts) > 0 {
+			continue
+		}
+		resourceID := strings.TrimSpace(candidate.Binding.ResourceID)
+		resourceName := strings.TrimSpace(candidate.Binding.ResourceName)
+		if (resourceID != "" && reservedResources[resourceID]) || (resourceName != "" && reservedResources[resourceName]) {
+			continue
+		}
+
+		selected = append(selected, candidate)
+		selectedAgents[agentID] = true
+		if resourceID != "" {
+			reservedResources[resourceID] = true
+		}
+		if resourceName != "" {
+			reservedResources[resourceName] = true
+		}
+		markBusyAgentsAndResourcesFromPlan(candidate.Plan, dummyBusyAgents, reservedResources)
+	}
+
+	return selected
+}
+
+func (m *RealtimePddlManager) syncExecutions(session *realtimeSession) bool {
 	session.mu.RLock()
-	activeExecutionID := session.ActiveExecutionID
-	activePlan := clonePlan(session.ActivePlan)
-	activeGoal := cloneRealtimeGoalPtr(session.ActiveGoal)
+	activeExecutions := make([]realtimeExecutionContext, 0, len(session.ActiveExecutions))
+	for _, executionCtx := range session.ActiveExecutions {
+		activeExecutions = append(activeExecutions, cloneRealtimeExecutionContext(executionCtx))
+	}
 	session.mu.RUnlock()
 
-	if activeExecutionID == "" {
+	if len(activeExecutions) == 0 {
 		return false
 	}
 
-	execState, ok := m.server.planExecutor.GetExecution(activeExecutionID)
-	if !ok {
-		session.mu.Lock()
-		session.ActiveExecutionID = ""
-		session.ActivePlan = nil
-		session.ActiveGoal = nil
-		session.ActiveStatus = "idle"
-		session.UpdatedAt = time.Now().UTC()
-		session.mu.Unlock()
-		return false
+	sort.Slice(activeExecutions, func(i, j int) bool {
+		if activeExecutions[i].StartedAt.Equal(activeExecutions[j].StartedAt) {
+			return activeExecutions[i].ExecutionID < activeExecutions[j].ExecutionID
+		}
+		return activeExecutions[i].StartedAt.Before(activeExecutions[j].StartedAt)
+	})
+
+	nextState := sessionCurrentState(session)
+	if nextState == nil {
+		nextState = map[string]string{}
 	}
 
-	snapshot := execState.Snapshot()
-	session.mu.Lock()
-	session.ActiveStatus = snapshot.Status
-	session.UpdatedAt = time.Now().UTC()
-	session.mu.Unlock()
+	remainingExecutions := make(map[string]realtimeExecutionContext, len(activeExecutions))
+	completedGoalIDs := map[string]bool{}
+	runningExecutionID := ""
+	runningExecutionStatus := ""
+	var runningPlan *pddl.Plan
+	var runningGoal *realtimeGoal
+	runningBinding := realtimeGoalBinding{}
+	lastError := ""
 
-	switch executor.PlanExecutionStatus(snapshot.Status) {
-	case executor.PlanExecPending, executor.PlanExecRunning:
-		return true
-	case executor.PlanExecCompleted:
-		nextState := sessionCurrentState(session)
-		for _, assignment := range activePlan.Assignments {
-			for _, effect := range assignment.ResultStates {
-				if strings.TrimSpace(effect.Variable) == "" {
-					continue
+	for _, executionCtx := range activeExecutions {
+		executionID := strings.TrimSpace(executionCtx.ExecutionID)
+		if executionID == "" {
+			continue
+		}
+		execState, ok := m.server.planExecutor.GetExecution(executionID)
+		if !ok {
+			continue
+		}
+
+		snapshot := execState.Snapshot()
+		switch executor.PlanExecutionStatus(snapshot.Status) {
+		case executor.PlanExecPending, executor.PlanExecRunning:
+			remainingExecutions[executionID] = executionCtx
+			if runningExecutionID == "" {
+				runningExecutionID = executionID
+				runningExecutionStatus = snapshot.Status
+				runningPlan = clonePlan(executionCtx.Plan)
+				runningGoal = cloneRealtimeGoalPtr(executionCtx.Goal)
+				runningBinding = executionCtx.Binding
+			}
+		case executor.PlanExecCompleted:
+			if executionCtx.Plan != nil {
+				for _, assignment := range executionCtx.Plan.Assignments {
+					for _, effect := range assignment.ResultStates {
+						if key := strings.TrimSpace(effect.Variable); key != "" {
+							nextState[key] = effect.Value
+						}
+					}
 				}
-				nextState[effect.Variable] = effect.Value
+			}
+			if executionCtx.Goal != nil {
+				completedGoalIDs[executionCtx.Goal.ID] = true
+			}
+		case executor.PlanExecFailed, executor.PlanExecCancelled:
+			applyRealtimePartialEffects(nextState, executionCtx.Plan, snapshot.Steps)
+			if strings.TrimSpace(snapshot.Error) != "" {
+				lastError = snapshot.Error
+			}
+		default:
+			if strings.TrimSpace(snapshot.Error) != "" {
+				lastError = snapshot.Error
 			}
 		}
-		session.mu.Lock()
-		session.CurrentState = nextState
+	}
+
+	now := time.Now().UTC()
+	session.mu.Lock()
+	session.CurrentState = nextState
+	session.ActiveExecutions = remainingExecutions
+	if runningExecutionID != "" {
+		session.ActiveExecutionID = runningExecutionID
+		session.ActivePlan = runningPlan
+		session.ActiveGoal = runningGoal
+		session.ActiveStatus = runningExecutionStatus
+		session.SelectedGoalID = ""
+		session.SelectedGoalName = ""
+		session.SelectedAgentID = ""
+		session.SelectedAgentName = ""
+		session.SelectedResourceID = ""
+		session.SelectedResourceName = ""
+		if runningGoal != nil {
+			session.SelectedGoalID = runningGoal.ID
+			session.SelectedGoalName = runningGoal.Name
+		}
+		session.SelectedAgentID = runningBinding.AgentID
+		session.SelectedAgentName = runningBinding.AgentName
+		session.SelectedResourceID = runningBinding.ResourceID
+		session.SelectedResourceName = runningBinding.ResourceName
+		if strings.TrimSpace(session.LastError) != "" && strings.TrimSpace(lastError) == "" {
+			// keep previous last_error until a new plan starts or another error occurs
+		}
+	} else {
 		session.ActiveExecutionID = ""
 		session.ActivePlan = nil
 		session.ActiveGoal = nil
-		session.ActiveStatus = "idle"
-		session.LastError = ""
-		if activeGoal != nil {
-			delete(session.failedStateKey, activeGoal.ID)
+		if strings.TrimSpace(lastError) == "" {
+			session.ActiveStatus = "idle"
+		} else {
+			session.ActiveStatus = "error"
 		}
-		session.UpdatedAt = time.Now().UTC()
-		session.mu.Unlock()
-		return false
-	case executor.PlanExecFailed, executor.PlanExecCancelled:
-		session.mu.Lock()
-		if activeGoal != nil {
-			session.failedStateKey[activeGoal.ID] = goalFailureKey(activeGoal.ID, session.CurrentState)
+	}
+	if strings.TrimSpace(lastError) != "" {
+		session.LastError = lastError
+	}
+	for goalID := range completedGoalIDs {
+		delete(session.failedStateKey, goalID)
+	}
+	session.UpdatedAt = now
+	session.mu.Unlock()
+
+	return len(remainingExecutions) > 0
+}
+
+// applyRealtimePartialEffects applies only effects of assignments whose steps
+// actually completed, even when the whole plan execution failed/cancelled.
+// This keeps realtime current_state aligned with what was already executed
+// (e.g., go_to_cnc_and_park completed but follow-up step failed).
+func applyRealtimePartialEffects(
+	state map[string]string,
+	plan *pddl.Plan,
+	stepSnapshots []executor.StepStatusSnapshot,
+) {
+	if state == nil || plan == nil || len(plan.Assignments) == 0 || len(stepSnapshots) == 0 {
+		return
+	}
+
+	completedTasks := map[string]bool{}
+	for _, step := range stepSnapshots {
+		if strings.EqualFold(strings.TrimSpace(step.Status), "completed") {
+			taskID := strings.TrimSpace(step.TaskID)
+			if taskID != "" {
+				completedTasks[taskID] = true
+			}
 		}
-		session.ActiveExecutionID = ""
-		session.ActivePlan = nil
-		session.ActiveGoal = nil
-		session.ActiveStatus = snapshot.Status
-		session.LastError = snapshot.Error
-		session.UpdatedAt = time.Now().UTC()
-		session.mu.Unlock()
-		return false
-	default:
+	}
+	if len(completedTasks) == 0 {
+		return
+	}
+
+	for _, assignment := range plan.Assignments {
+		if !completedTasks[strings.TrimSpace(assignment.TaskID)] {
+			continue
+		}
+		for _, effect := range assignment.ResultStates {
+			if key := strings.TrimSpace(effect.Variable); key != "" {
+				state[key] = effect.Value
+			}
+		}
+	}
+}
+
+func (m *RealtimePddlManager) collectBusyAgentsAndResources(session *realtimeSession) (map[string]bool, map[string]bool) {
+	busyAgents := map[string]bool{}
+	busyResources := map[string]bool{}
+	if session == nil {
+		return busyAgents, busyResources
+	}
+
+	session.mu.RLock()
+	activeExecutions := make([]realtimeExecutionContext, 0, len(session.ActiveExecutions))
+	for _, executionCtx := range session.ActiveExecutions {
+		activeExecutions = append(activeExecutions, cloneRealtimeExecutionContext(executionCtx))
+	}
+	session.mu.RUnlock()
+
+	for _, executionCtx := range activeExecutions {
+		executionID := strings.TrimSpace(executionCtx.ExecutionID)
+		if executionID == "" {
+			continue
+		}
+
+		execState, ok := m.server.planExecutor.GetExecution(executionID)
+		if !ok {
+			continue
+		}
+		snapshot := execState.Snapshot()
+		switch executor.PlanExecutionStatus(snapshot.Status) {
+		case executor.PlanExecPending, executor.PlanExecRunning:
+		default:
+			continue
+		}
+
+		markBusyAgentsAndResourcesFromPlan(executionCtx.Plan, busyAgents, busyResources)
+		if agentID := strings.TrimSpace(executionCtx.Binding.AgentID); agentID != "" {
+			busyAgents[agentID] = true
+		}
+		if resourceID := strings.TrimSpace(executionCtx.Binding.ResourceID); resourceID != "" {
+			busyResources[resourceID] = true
+		}
+		if resourceName := strings.TrimSpace(executionCtx.Binding.ResourceName); resourceName != "" {
+			busyResources[resourceName] = true
+		}
+	}
+
+	return busyAgents, busyResources
+}
+
+func markBusyAgentsAndResourcesFromPlan(plan *pddl.Plan, busyAgents map[string]bool, busyResources map[string]bool) {
+	if plan == nil {
+		return
+	}
+	for _, assignment := range plan.Assignments {
+		if agentID := strings.TrimSpace(assignment.AgentID); agentID != "" {
+			busyAgents[agentID] = true
+		}
+
+		if len(assignment.RuntimeParams) == 0 {
+			continue
+		}
+		addBusyResourceValue(busyResources, assignment.RuntimeParams["resource_id"])
+		addBusyResourceValue(busyResources, assignment.RuntimeParams["resource_name"])
+		addBusyResourceValue(busyResources, assignment.RuntimeParams["resource.id"])
+		addBusyResourceValue(busyResources, assignment.RuntimeParams["resource.name"])
+
+		if rawBindings := strings.TrimSpace(assignment.RuntimeParams["__fleet_resource_bindings"]); rawBindings != "" {
+			var bindings map[string]string
+			if err := json.Unmarshal([]byte(rawBindings), &bindings); err == nil {
+				for _, value := range bindings {
+					addBusyResourceValue(busyResources, value)
+				}
+			}
+		}
+	}
+}
+
+func addBusyResourceValue(busyResources map[string]bool, value string) {
+	key := strings.TrimSpace(value)
+	if key == "" {
+		return
+	}
+	busyResources[key] = true
+}
+
+func planBusyResourceConflicts(plan *pddl.Plan, busyResources map[string]bool) []string {
+	if plan == nil || len(plan.Assignments) == 0 || len(busyResources) == 0 {
+		return nil
+	}
+
+	conflicts := map[string]bool{}
+	checkValue := func(value string) {
+		key := strings.TrimSpace(value)
+		if key == "" {
+			return
+		}
+		if busyResources[key] {
+			conflicts[key] = true
+		}
+	}
+
+	for _, assignment := range plan.Assignments {
+		if len(assignment.RuntimeParams) == 0 {
+			continue
+		}
+
+		checkValue(assignment.RuntimeParams["resource_id"])
+		checkValue(assignment.RuntimeParams["resource_name"])
+		checkValue(assignment.RuntimeParams["resource.id"])
+		checkValue(assignment.RuntimeParams["resource.name"])
+
+		if rawBindings := strings.TrimSpace(assignment.RuntimeParams["__fleet_resource_bindings"]); rawBindings != "" {
+			var bindings map[string]string
+			if err := json.Unmarshal([]byte(rawBindings), &bindings); err == nil {
+				for _, value := range bindings {
+					checkValue(value)
+				}
+			}
+		}
+	}
+
+	if len(conflicts) == 0 {
+		return nil
+	}
+
+	result := make([]string, 0, len(conflicts))
+	for key := range conflicts {
+		result = append(result, key)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func cloneRealtimeExecutionContext(ctx realtimeExecutionContext) realtimeExecutionContext {
+	cloned := ctx
+	cloned.Plan = clonePlan(ctx.Plan)
+	cloned.Goal = cloneRealtimeGoalPtr(ctx.Goal)
+	cloned.Binding = realtimeGoalBinding{
+		AgentID:      ctx.Binding.AgentID,
+		AgentName:    ctx.Binding.AgentName,
+		ResourceID:   ctx.Binding.ResourceID,
+		ResourceName: ctx.Binding.ResourceName,
+	}
+	return cloned
+}
+
+func isRealtimeAgentIdle(current map[string]string, agent pddl.AgentInfo) bool {
+	if len(current) == 0 {
+		return true
+	}
+	agentID := strings.TrimSpace(agent.ID)
+	agentName := strings.TrimSpace(agent.Name)
+
+	// 1) Prefer explicit execution flags when available.
+	// This avoids stale/non-critical mode=status overlays (e.g., "error") from
+	// unnecessarily excluding an agent that is actually idle.
+	execCandidates := uniqueNonEmptyStrings([]string{
+		agentName + "_is_executing",
+		agentID + "_is_executing",
+		strings.ReplaceAll(agentID, "-", "_") + "_is_executing",
+	})
+	foundExec := false
+	for _, key := range execCandidates {
+		raw, ok := current[key]
+		if !ok {
+			continue
+		}
+		foundExec = true
+		normalized := strings.ToLower(strings.TrimSpace(raw))
+		if normalized == "true" || normalized == "1" || normalized == "yes" || normalized == "executing" || normalized == "running" {
+			return false
+		}
+	}
+	if foundExec {
+		return true
+	}
+
+	// 2) Fallback to status/mode keys.
+	// Use precedence so mixed aliases do not over-constrain idle checks:
+	// agent-name keys > normalized-agent-id keys > raw-agent-id keys.
+	type candidateGroup struct {
+		keys []string
+	}
+	groups := []candidateGroup{
+		{keys: uniqueNonEmptyStrings([]string{agentName + "_status", agentName + "_mode"})},
+		{keys: uniqueNonEmptyStrings([]string{
+			strings.ReplaceAll(agentID, "-", "_") + "_status",
+			strings.ReplaceAll(agentID, "-", "_") + "_mode",
+		})},
+		{keys: uniqueNonEmptyStrings([]string{agentID + "_status", agentID + "_mode"})},
+	}
+	for _, group := range groups {
+		foundAny := false
+		allIdleLike := true
+		for _, key := range group.keys {
+			value, ok := current[key]
+			if !ok {
+				continue
+			}
+			foundAny = true
+			normalized := strings.ToLower(strings.TrimSpace(value))
+			idleLike := normalized == "" || normalized == "idle" || normalized == "ready"
+			if !idleLike {
+				allIdleLike = false
+			}
+		}
+		if foundAny {
+			return allIdleLike
+		}
+	}
+	return true
+}
+
+func agentLocationFromState(current map[string]string, agent pddl.AgentInfo) string {
+	if len(current) == 0 {
+		return ""
+	}
+	agentID := strings.TrimSpace(agent.ID)
+	agentName := strings.TrimSpace(agent.Name)
+	candidates := uniqueNonEmptyStrings([]string{
+		agentName + "_location",
+		agentID + "_location",
+		strings.ReplaceAll(agentID, "-", "_") + "_location",
+	})
+	for _, key := range candidates {
+		if value, ok := current[key]; ok {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func inferGoalTargetResourceName(goal *realtimeGoal, binding realtimeGoalBinding, resources []pddl.ResourceInfo) string {
+	if goal == nil {
+		return ""
+	}
+	if name := strings.TrimSpace(binding.ResourceName); name != "" {
+		return name
+	}
+	if resourceID := strings.TrimSpace(binding.ResourceID); resourceID != "" {
+		for _, resource := range resources {
+			if strings.TrimSpace(resource.ID) == resourceID {
+				return strings.TrimSpace(resource.Name)
+			}
+		}
+	}
+
+	instanceNames := make([]string, 0, len(resources))
+	for _, resource := range resources {
+		if strings.EqualFold(strings.TrimSpace(resource.Kind), "type") {
+			continue
+		}
+		name := strings.TrimSpace(resource.Name)
+		if name == "" {
+			continue
+		}
+		instanceNames = append(instanceNames, name)
+	}
+	if len(instanceNames) == 0 {
+		return ""
+	}
+
+	matches := map[string]bool{}
+	for variable := range goal.GoalState {
+		key := strings.TrimSpace(variable)
+		if key == "" {
+			continue
+		}
+		for _, name := range instanceNames {
+			if key == name || strings.HasPrefix(key, name+"_") {
+				matches[name] = true
+			}
+		}
+	}
+
+	if len(matches) != 1 {
+		return ""
+	}
+	for name := range matches {
+		return name
+	}
+	return ""
+}
+
+func hasOtherIdleAgentAtResource(
+	current map[string]string,
+	agents []pddl.AgentInfo,
+	busyAgents map[string]bool,
+	resourceName string,
+	excludeAgentID string,
+) bool {
+	target := strings.TrimSpace(resourceName)
+	if target == "" {
 		return false
 	}
+	exclude := strings.TrimSpace(excludeAgentID)
+	for _, candidate := range agents {
+		candidateID := strings.TrimSpace(candidate.ID)
+		if candidateID == "" || candidateID == exclude {
+			continue
+		}
+		if busyAgents[candidateID] {
+			continue
+		}
+		if !isRealtimeAgentIdle(current, candidate) {
+			continue
+		}
+		location := strings.TrimSpace(agentLocationFromState(current, candidate))
+		if location != "" && strings.EqualFold(location, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func filterRealtimeAvailableResources(resources []pddl.ResourceInfo, busyResources map[string]bool) []pddl.ResourceInfo {
+	if len(resources) == 0 {
+		return nil
+	}
+	filtered := make([]pddl.ResourceInfo, 0, len(resources))
+	for _, resource := range resources {
+		kind := strings.ToLower(strings.TrimSpace(resource.Kind))
+		if kind == "type" {
+			filtered = append(filtered, resource)
+			continue
+		}
+		resourceID := strings.TrimSpace(resource.ID)
+		resourceName := strings.TrimSpace(resource.Name)
+		if (resourceID != "" && busyResources[resourceID]) || (resourceName != "" && busyResources[resourceName]) {
+			continue
+		}
+		filtered = append(filtered, resource)
+	}
+	return filtered
+}
+
+func filterRealtimeAvailableResourcesByReservation(
+	current map[string]string,
+	resources []pddl.ResourceInfo,
+	agent pddl.AgentInfo,
+) []pddl.ResourceInfo {
+	if len(resources) == 0 {
+		return nil
+	}
+
+	allowed := make([]pddl.ResourceInfo, 0, len(resources))
+	for _, resource := range resources {
+		kind := strings.ToLower(strings.TrimSpace(resource.Kind))
+		if kind == "type" {
+			allowed = append(allowed, resource)
+			continue
+		}
+
+		stateKey := reservationStateKeyForResource(resource, current)
+		if stateKey == "" {
+			allowed = append(allowed, resource)
+			continue
+		}
+
+		holder := normalizeReservationHolder(current[stateKey])
+		if holder == "" {
+			allowed = append(allowed, resource)
+			continue
+		}
+		if reservationHolderMatchesAgent(holder, agent) {
+			allowed = append(allowed, resource)
+			continue
+		}
+	}
+	return allowed
 }
 
 func normalizeRealtimeGoals(goals []RealtimeGoalRequest) []realtimeGoal {
@@ -426,21 +1395,201 @@ func normalizeRealtimeGoals(goals []RealtimeGoalRequest) []realtimeGoal {
 	return result
 }
 
-func selectRealtimeGoal(goals []realtimeGoal, currentState map[string]string) *realtimeGoal {
+func selectRealtimeGoal(
+	goals []realtimeGoal,
+	currentState map[string]string,
+	agents []pddl.AgentInfo,
+	resources []pddl.ResourceInfo,
+	preferredAgentID string,
+) (*realtimeGoal, realtimeGoalBinding) {
 	for index := range goals {
 		goal := goals[index]
 		if !goal.Enabled {
 			continue
 		}
-		if !planningConditionsMet(currentState, goal.ActivationConditions) {
+		met, binding := realtimeActivationConditionsMet(currentState, goal.ActivationConditions, agents, resources, preferredAgentID)
+		if !met {
 			continue
 		}
 		if realtimeGoalSatisfied(currentState, goal.GoalState) {
 			continue
 		}
-		return cloneRealtimeGoalPtr(&goal)
+		return cloneRealtimeGoalPtr(&goal), binding
 	}
-	return nil
+	return nil, realtimeGoalBinding{}
+}
+
+func realtimeActivationConditionsMet(
+	current map[string]string,
+	conditions []db.PlanningCondition,
+	agents []pddl.AgentInfo,
+	resources []pddl.ResourceInfo,
+	preferredAgentID string,
+) (bool, realtimeGoalBinding) {
+	if len(conditions) == 0 {
+		return true, realtimeGoalBinding{}
+	}
+
+	needsAgent := false
+	needsResource := false
+	for _, condition := range conditions {
+		if containsAgentPlaceholder(condition.Variable) || containsAgentPlaceholder(condition.Value) {
+			needsAgent = true
+		}
+		if containsResourcePlaceholder(condition.Variable) || containsResourcePlaceholder(condition.Value) {
+			needsResource = true
+		}
+	}
+
+	if !needsAgent && !needsResource {
+		return planningConditionsMet(current, conditions), realtimeGoalBinding{}
+	}
+
+	agentCandidates := []pddl.AgentInfo{{}}
+	if needsAgent {
+		if len(agents) == 0 {
+			return false, realtimeGoalBinding{}
+		}
+		agentCandidates = rotateAgentsByPreferred(agents, preferredAgentID)
+	}
+
+	resourceCandidates := []pddl.ResourceInfo{{}}
+	if needsResource {
+		instances := resourceInstances(resources)
+		if len(instances) == 0 {
+			return false, realtimeGoalBinding{}
+		}
+		resourceCandidates = instances
+	}
+
+	for _, agent := range agentCandidates {
+		for _, resource := range resourceCandidates {
+			expanded := expandRealtimeActivationConditions(conditions, agent, resource)
+			if hasUnresolvedConditionPlaceholders(expanded) {
+				continue
+			}
+			if planningConditionsMet(current, expanded) {
+				binding := realtimeGoalBinding{}
+				if needsAgent {
+					binding.AgentID = strings.TrimSpace(agent.ID)
+					binding.AgentName = strings.TrimSpace(agent.Name)
+					if binding.AgentName == "" {
+						binding.AgentName = binding.AgentID
+					}
+				}
+				if needsResource {
+					binding.ResourceID = strings.TrimSpace(resource.ID)
+					binding.ResourceName = strings.TrimSpace(resource.Name)
+					if binding.ResourceName == "" {
+						binding.ResourceName = binding.ResourceID
+					}
+				}
+				return true, binding
+			}
+		}
+	}
+
+	return false, realtimeGoalBinding{}
+}
+
+func expandRealtimeActivationConditions(
+	conditions []db.PlanningCondition,
+	agent pddl.AgentInfo,
+	resource pddl.ResourceInfo,
+) []db.PlanningCondition {
+	expanded := make([]db.PlanningCondition, 0, len(conditions))
+	for _, condition := range conditions {
+		variable := strings.TrimSpace(condition.Variable)
+		value := strings.TrimSpace(condition.Value)
+		if resource.ID != "" || resource.Name != "" {
+			variable = applyResourcePlaceholders(variable, resource)
+			value = applyResourcePlaceholders(value, resource)
+		}
+		if agent.ID != "" || agent.Name != "" {
+			variable = applyAgentPlaceholders(variable, agent)
+			value = applyAgentPlaceholders(value, agent)
+		}
+		expanded = append(expanded, db.PlanningCondition{
+			Variable: variable,
+			Operator: condition.Operator,
+			Value:    value,
+		})
+	}
+	return expanded
+}
+
+func rotateAgentsByPreferred(agents []pddl.AgentInfo, preferredAgentID string) []pddl.AgentInfo {
+	if len(agents) <= 1 {
+		return append([]pddl.AgentInfo{}, agents...)
+	}
+	preferredAgentID = strings.TrimSpace(preferredAgentID)
+	if preferredAgentID == "" {
+		return append([]pddl.AgentInfo{}, agents...)
+	}
+
+	pivot := -1
+	for index, agent := range agents {
+		if strings.TrimSpace(agent.ID) == preferredAgentID {
+			pivot = index
+			break
+		}
+	}
+	if pivot < 0 {
+		return append([]pddl.AgentInfo{}, agents...)
+	}
+
+	rotated := make([]pddl.AgentInfo, 0, len(agents))
+	for offset := 1; offset <= len(agents); offset++ {
+		rotated = append(rotated, agents[(pivot+offset)%len(agents)])
+	}
+	return rotated
+}
+
+func hasUnresolvedConditionPlaceholders(conditions []db.PlanningCondition) bool {
+	for _, condition := range conditions {
+		if containsAgentPlaceholder(condition.Variable) || containsAgentPlaceholder(condition.Value) {
+			return true
+		}
+		if containsResourcePlaceholder(condition.Variable) || containsResourcePlaceholder(condition.Value) {
+			return true
+		}
+	}
+	return false
+}
+
+func applyRealtimeGoalBinding(goalState map[string]string, binding realtimeGoalBinding) map[string]string {
+	bound := cloneStringMap(goalState)
+	if len(bound) == 0 {
+		return bound
+	}
+
+	agent := pddl.AgentInfo{
+		ID:   strings.TrimSpace(binding.AgentID),
+		Name: strings.TrimSpace(binding.AgentName),
+	}
+	resource := pddl.ResourceInfo{
+		ID:   strings.TrimSpace(binding.ResourceID),
+		Name: strings.TrimSpace(binding.ResourceName),
+	}
+
+	result := make(map[string]string, len(bound))
+	for variable, value := range bound {
+		nextKey := strings.TrimSpace(variable)
+		nextValue := strings.TrimSpace(value)
+
+		if agent.ID != "" || agent.Name != "" {
+			nextKey = applyAgentPlaceholders(nextKey, agent)
+			nextValue = applyAgentPlaceholders(nextValue, agent)
+		}
+		if resource.ID != "" || resource.Name != "" {
+			nextKey = applyResourcePlaceholders(nextKey, resource)
+			nextValue = applyResourcePlaceholders(nextValue, resource)
+		}
+
+		result[nextKey] = nextValue
+	}
+
+	return result
 }
 
 func planningConditionsMet(current map[string]string, conditions []db.PlanningCondition) bool {
@@ -453,7 +1602,7 @@ func planningConditionsMet(current map[string]string, conditions []db.PlanningCo
 		if operator == "" {
 			operator = "=="
 		}
-		currentValue := current[key]
+		currentValue := normalizePlanningConditionCurrentValue(current, key, condition.Value)
 		switch operator {
 		case "!=":
 			if currentValue == condition.Value {
@@ -466,6 +1615,51 @@ func planningConditionsMet(current map[string]string, conditions []db.PlanningCo
 		}
 	}
 	return true
+}
+
+// normalizePlanningConditionCurrentValue applies a small realtime-specific
+// normalization to avoid stale agent status/mode overlays starving dispatch.
+//
+// If a condition expects "..._status == idle|ready" (or "..._mode == idle|ready")
+// but telemetry still reports stale "error/warning" while "..._is_executing=false",
+// treat it as idle for condition matching.
+func normalizePlanningConditionCurrentValue(current map[string]string, key, expected string) string {
+	currentValue := current[key]
+	normalizedExpected := strings.ToLower(strings.TrimSpace(expected))
+	if normalizedExpected != "idle" && normalizedExpected != "ready" {
+		return currentValue
+	}
+
+	lowerKey := strings.ToLower(strings.TrimSpace(key))
+	if !(strings.HasSuffix(lowerKey, "_status") || strings.HasSuffix(lowerKey, "_mode")) {
+		return currentValue
+	}
+
+	prefix := strings.TrimSpace(key[:len(key)-len("_status")])
+	if strings.HasSuffix(lowerKey, "_mode") {
+		prefix = strings.TrimSpace(key[:len(key)-len("_mode")])
+	}
+	if prefix == "" {
+		return currentValue
+	}
+
+	execKey := prefix + "_is_executing"
+	execRaw, ok := current[execKey]
+	if !ok {
+		return currentValue
+	}
+
+	execNormalized := strings.ToLower(strings.TrimSpace(execRaw))
+	isExecuting := execNormalized == "true" || execNormalized == "1" || execNormalized == "yes" || execNormalized == "running" || execNormalized == "executing"
+	if isExecuting {
+		return currentValue
+	}
+
+	valueNormalized := strings.ToLower(strings.TrimSpace(currentValue))
+	if valueNormalized == "error" || valueNormalized == "warning" {
+		return "idle"
+	}
+	return currentValue
 }
 
 func realtimeGoalSatisfied(current map[string]string, goal map[string]string) bool {
@@ -483,12 +1677,228 @@ func sessionCurrentState(session *realtimeSession) map[string]string {
 	return cloneStringMap(session.CurrentState)
 }
 
-func goalFailureKey(goalID string, state map[string]string) string {
-	raw, _ := json.Marshal(state)
-	return goalID + "::" + string(raw)
+func (m *RealtimePddlManager) sessionMergedState(session *realtimeSession) map[string]string {
+	if session == nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	session.mu.Lock()
+	defer session.mu.Unlock()
+
+	merged := cloneStringMap(session.CurrentState)
+	if merged == nil {
+		merged = map[string]string{}
+	}
+
+	for source, runtime := range session.RuntimeStateSources {
+		if runtime.ExpiresAt != nil && now.After(*runtime.ExpiresAt) {
+			delete(session.RuntimeStateSources, source)
+			continue
+		}
+		for key, value := range runtime.Values {
+			merged[key] = value
+		}
+	}
+
+	if reconcileRealtimeReservationState(merged, session.CurrentState, session.Agents, session.Resources) {
+		for key, value := range merged {
+			if _, exists := session.CurrentState[key]; exists {
+				session.CurrentState[key] = value
+			}
+		}
+	}
+
+	return merged
 }
 
-func recordRealtimeGoalFailure(session *realtimeSession, goal *realtimeGoal, failureKey, errMsg string, plan *pddl.Plan) {
+func reconcileRealtimeReservationState(
+	merged map[string]string,
+	current map[string]string,
+	agents []pddl.AgentInfo,
+	resources []pddl.ResourceInfo,
+) bool {
+	if len(merged) == 0 || len(current) == 0 || len(agents) == 0 || len(resources) == 0 {
+		return false
+	}
+
+	type agentAlias struct {
+		Agent     pddl.AgentInfo
+		Canonical string
+	}
+
+	aliases := make([]agentAlias, 0, len(agents))
+	byToken := map[string]agentAlias{}
+	for _, agent := range agents {
+		agentID := strings.TrimSpace(agent.ID)
+		if agentID == "" {
+			continue
+		}
+		canonical := strings.TrimSpace(agent.Name)
+		if canonical == "" {
+			canonical = agentID
+		}
+		alias := agentAlias{
+			Agent:     agent,
+			Canonical: canonical,
+		}
+		aliases = append(aliases, alias)
+
+		for _, token := range reservationHolderTokens(agent) {
+			byToken[token] = alias
+		}
+	}
+	if len(aliases) == 0 {
+		return false
+	}
+
+	locationByCanonical := map[string]string{}
+	for _, alias := range aliases {
+		locationByCanonical[alias.Canonical] = strings.TrimSpace(agentLocationFromState(merged, alias.Agent))
+	}
+
+	changed := false
+	for _, resource := range resources {
+		if strings.EqualFold(strings.TrimSpace(resource.Kind), "type") {
+			continue
+		}
+
+		resourceName := strings.TrimSpace(resource.Name)
+		if resourceName == "" {
+			continue
+		}
+		stateKey := reservationStateKeyForResource(resource, current)
+		if stateKey == "" {
+			continue
+		}
+
+		holderRaw := strings.TrimSpace(merged[stateKey])
+		holder := normalizeReservationHolder(holderRaw)
+
+		// 1) Release stale reservation when holder moved away.
+		if holder != "" {
+			if alias, ok := byToken[holder]; ok {
+				holderLocation := strings.TrimSpace(locationByCanonical[alias.Canonical])
+				if holderLocation != "" && !strings.EqualFold(holderLocation, "none") && !strings.EqualFold(holderLocation, resourceName) {
+					merged[stateKey] = "none"
+					holder = ""
+					holderRaw = "none"
+					changed = true
+				} else if !strings.EqualFold(holderRaw, alias.Canonical) {
+					merged[stateKey] = alias.Canonical
+					holderRaw = alias.Canonical
+					changed = true
+				}
+			}
+		}
+
+		// 2) If not reserved, auto-claim when exactly one agent is currently there.
+		if holder == "" {
+			candidates := make([]string, 0, 2)
+			for canonical, location := range locationByCanonical {
+				if strings.EqualFold(strings.TrimSpace(location), resourceName) {
+					candidates = append(candidates, canonical)
+				}
+			}
+			if len(candidates) == 1 {
+				if !strings.EqualFold(holderRaw, candidates[0]) {
+					merged[stateKey] = candidates[0]
+					changed = true
+				}
+			}
+		}
+	}
+
+	return changed
+}
+
+func reservationStateKeyForResource(resource pddl.ResourceInfo, current map[string]string) string {
+	candidates := uniqueNonEmptyStrings([]string{
+		strings.TrimSpace(resource.Name) + "_reserved_by",
+		strings.TrimSpace(resource.ID) + "_reserved_by",
+	})
+	for _, candidate := range candidates {
+		if _, ok := current[candidate]; ok {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func normalizeReservationHolder(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "", "none", "null", "nil", "-", "na", "n/a", "false":
+		return ""
+	default:
+		return normalized
+	}
+}
+
+func reservationHolderMatchesAgent(holder string, agent pddl.AgentInfo) bool {
+	holder = normalizeReservationHolder(holder)
+	if holder == "" {
+		return true
+	}
+	for _, token := range reservationHolderTokens(agent) {
+		if token == holder {
+			return true
+		}
+	}
+	return false
+}
+
+func reservationHolderTokens(agent pddl.AgentInfo) []string {
+	agentID := strings.TrimSpace(agent.ID)
+	agentName := strings.TrimSpace(agent.Name)
+	if agentName == "" {
+		agentName = agentID
+	}
+	normalizedID := strings.ReplaceAll(agentID, "-", "_")
+	return uniqueNonEmptyStrings([]string{
+		strings.ToLower(agentID),
+		strings.ToLower(agentName),
+		strings.ToLower(normalizedID),
+		strings.ToLower(strings.ReplaceAll(agentName, "-", "_")),
+	})
+}
+
+func normalizeRuntimeStateValues(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	normalized := make(map[string]string, len(values))
+	for key, value := range values {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
+		normalized[trimmedKey] = strings.TrimSpace(value)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func sessionContainsAgent(session *realtimeSession, agentID string) bool {
+	if session == nil || agentID == "" {
+		return false
+	}
+	for _, id := range session.AgentIDs {
+		if strings.TrimSpace(id) == agentID {
+			return true
+		}
+	}
+	return false
+}
+
+func goalFailureKey(goalID string, state map[string]string, binding realtimeGoalBinding) string {
+	bindingRaw, _ := json.Marshal(binding)
+	raw, _ := json.Marshal(state)
+	return goalID + "::" + string(bindingRaw) + "::" + string(raw)
+}
+
+func recordRealtimeGoalFailure(session *realtimeSession, goal *realtimeGoal, binding realtimeGoalBinding, failureKey, errMsg string, plan *pddl.Plan) {
 	if session == nil || goal == nil {
 		return
 	}
@@ -496,6 +1906,10 @@ func recordRealtimeGoalFailure(session *realtimeSession, goal *realtimeGoal, fai
 	session.failedStateKey[goal.ID] = failureKey
 	session.SelectedGoalID = goal.ID
 	session.SelectedGoalName = goal.Name
+	session.SelectedAgentID = binding.AgentID
+	session.SelectedAgentName = binding.AgentName
+	session.SelectedResourceID = binding.ResourceID
+	session.SelectedResourceName = binding.ResourceName
 	session.ActiveStatus = "error"
 	session.LastError = errMsg
 	session.LastPlan = clonePlan(plan)
@@ -527,6 +1941,34 @@ func cloneStringMap(values map[string]string) map[string]string {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func cloneBoolMap(values map[string]bool) map[string]bool {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]bool, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func uniqueNonEmptyStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		result = append(result, trimmed)
+	}
+	return result
 }
 
 func clonePlan(plan *pddl.Plan) *pddl.Plan {
@@ -572,39 +2014,98 @@ func cloneRealtimeGoalPtr(goal *realtimeGoal) *realtimeGoal {
 
 func (m *RealtimePddlManager) toResponse(session *realtimeSession) RealtimeSessionResponse {
 	session.mu.RLock()
-	defer session.mu.RUnlock()
+	id := session.ID
+	name := session.Name
+	status := session.ActiveStatus
+	behaviorTreeIDs := append([]string{}, session.BehaviorTreeIDs...)
+	taskDistributorID := session.TaskDistributorID
+	agentIDs := append([]string{}, session.AgentIDs...)
+	tickIntervalSec := session.TickInterval.Seconds()
+	currentState := cloneStringMap(session.CurrentState)
+	selectedGoalID := session.SelectedGoalID
+	selectedGoalName := session.SelectedGoalName
+	selectedAgentID := session.SelectedAgentID
+	selectedAgentName := session.SelectedAgentName
+	selectedResourceID := session.SelectedResourceID
+	selectedResourceName := session.SelectedResourceName
+	activeExecutionID := session.ActiveExecutionID
+	activeExecutionIDs := make([]string, 0, len(session.ActiveExecutions))
+	for executionID := range session.ActiveExecutions {
+		activeExecutionIDs = append(activeExecutionIDs, executionID)
+	}
+	sort.Strings(activeExecutionIDs)
+	activeExecutionStatus := session.ActiveStatus
+	lastError := session.LastError
+	lastPlan := clonePlan(session.LastPlan)
+	startedAt := session.StartedAt
+	updatedAt := session.UpdatedAt
+	goals := make([]realtimeGoal, 0, len(session.Goals))
+	for _, goal := range session.Goals {
+		goals = append(goals, realtimeGoal{
+			ID:                   goal.ID,
+			Name:                 goal.Name,
+			Priority:             goal.Priority,
+			Enabled:              goal.Enabled,
+			ActivationConditions: cloneConditions(goal.ActivationConditions),
+			GoalState:            cloneStringMap(goal.GoalState),
+		})
+	}
+	session.mu.RUnlock()
 
-	response := RealtimeSessionResponse{
-		ID:                 session.ID,
-		Name:               session.Name,
-		Status:             session.ActiveStatus,
-		BehaviorTreeIDs:    append([]string{}, session.BehaviorTreeIDs...),
-		TaskDistributorID:  session.TaskDistributorID,
-		AgentIDs:           append([]string{}, session.AgentIDs...),
-		TickIntervalSec:    session.TickInterval.Seconds(),
-		CurrentState:       cloneStringMap(session.CurrentState),
-		SelectedGoalID:     session.SelectedGoalID,
-		SelectedGoalName:   session.SelectedGoalName,
-		ActiveExecutionID:  session.ActiveExecutionID,
-		ActiveExecutionStatus: session.ActiveStatus,
-		LastError:          session.LastError,
-		LastPlan:           clonePlan(session.LastPlan),
-		StartedAt:          session.StartedAt,
-		UpdatedAt:          session.UpdatedAt,
+	if strings.TrimSpace(activeExecutionID) == "" && len(activeExecutionIDs) > 0 {
+		activeExecutionID = activeExecutionIDs[0]
 	}
 
-	if session.ActiveExecutionID != "" {
-		if execState, ok := m.server.planExecutor.GetExecution(session.ActiveExecutionID); ok {
-			snapshot := execState.Snapshot()
+	response := RealtimeSessionResponse{
+		ID:                    id,
+		Name:                  name,
+		Status:                status,
+		BehaviorTreeIDs:       behaviorTreeIDs,
+		TaskDistributorID:     taskDistributorID,
+		AgentIDs:              agentIDs,
+		TickIntervalSec:       tickIntervalSec,
+		CurrentState:          currentState,
+		SelectedGoalID:        selectedGoalID,
+		SelectedGoalName:      selectedGoalName,
+		SelectedAgentID:       selectedAgentID,
+		SelectedAgentName:     selectedAgentName,
+		SelectedResourceID:    selectedResourceID,
+		SelectedResourceName:  selectedResourceName,
+		ActiveExecutionID:     activeExecutionID,
+		ActiveExecutionIDs:    append([]string{}, activeExecutionIDs...),
+		ActiveExecutionStatus: activeExecutionStatus,
+		LastError:             lastError,
+		LastPlan:              lastPlan,
+		StartedAt:             startedAt,
+		UpdatedAt:             updatedAt,
+	}
+
+	liveState := m.sessionMergedState(session)
+
+	for _, executionID := range uniqueNonEmptyStrings(append([]string{activeExecutionID}, activeExecutionIDs...)) {
+		execState, ok := m.server.planExecutor.GetExecution(executionID)
+		if !ok {
+			continue
+		}
+		snapshot := execState.Snapshot()
+		if executionID == activeExecutionID {
 			response.ActiveExecutionStatus = snapshot.Status
-			if live := m.server.stateManager.GetPlanningState(snapshot.ProblemID); len(live) > 0 {
-				response.LiveState = live
+		}
+		if planningLive := m.server.stateManager.GetPlanningState(snapshot.ProblemID); len(planningLive) > 0 {
+			if liveState == nil {
+				liveState = map[string]string{}
+			}
+			for key, value := range planningLive {
+				liveState[key] = value
 			}
 		}
 	}
+	if len(liveState) > 0 {
+		response.LiveState = liveState
+	}
 
-	response.Goals = make([]RealtimeGoalResponse, 0, len(session.Goals))
-	for _, goal := range session.Goals {
+	response.Goals = make([]RealtimeGoalResponse, 0, len(goals))
+	for _, goal := range goals {
 		response.Goals = append(response.Goals, RealtimeGoalResponse{
 			ID:                   goal.ID,
 			Name:                 goal.Name,
@@ -634,10 +2135,65 @@ func (s *Server) buildRealtimeInitialState(taskDistributorID string, overrides m
 	return initial, nil
 }
 
+func (s *Server) loadRealtimeAgents(agentIDs []string) ([]pddl.AgentInfo, error) {
+	if len(agentIDs) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[string]bool)
+	agents := make([]pddl.AgentInfo, 0, len(agentIDs))
+	for _, rawID := range agentIDs {
+		agentID := strings.TrimSpace(rawID)
+		if agentID == "" || seen[agentID] {
+			continue
+		}
+		agent, err := s.repo.GetAgent(agentID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get agent %s: %w", agentID, err)
+		}
+		if agent == nil {
+			return nil, fmt.Errorf("agent %s not found", agentID)
+		}
+		agents = append(agents, pddl.AgentInfo{
+			ID:   agentID,
+			Name: strings.TrimSpace(agent.Name),
+		})
+		seen[agentID] = true
+	}
+	return agents, nil
+}
+
+func (s *Server) loadRealtimeResources(taskDistributorID string) ([]pddl.ResourceInfo, error) {
+	taskDistributorID = strings.TrimSpace(taskDistributorID)
+	if taskDistributorID == "" {
+		return nil, nil
+	}
+
+	tdResources, err := s.repo.ListTaskDistributorResources(taskDistributorID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load task distributor resources: %w", err)
+	}
+
+	resources := make([]pddl.ResourceInfo, 0, len(tdResources))
+	for _, resource := range tdResources {
+		resources = append(resources, pddl.ResourceInfo{
+			ID:               resource.ID,
+			Name:             resource.Name,
+			Kind:             resource.Kind,
+			ParentResourceID: resource.ParentResourceID,
+		})
+	}
+	return resources, nil
+}
+
 func (s *Server) solveProblemSpec(spec planningSolveSpec) (*pddl.Plan, error) {
 	behaviorTreeIDs := normalizeBehaviorTreeIDs(spec.BehaviorTreeID, spec.BehaviorTreeIDs)
 	behaviorTreeIDsJSON, _ := json.Marshal(behaviorTreeIDs)
-	initialStateJSON, _ := json.Marshal(spec.InitialState)
+	filteredInitialState, err := s.filterInitialStateByTaskDistributor(spec.TaskDistributorID, spec.InitialState)
+	if err != nil {
+		return nil, err
+	}
+	initialStateJSON, _ := json.Marshal(filteredInitialState)
 	goalStateJSON, _ := json.Marshal(spec.GoalState)
 	agentIDsJSON, _ := json.Marshal(spec.AgentIDs)
 
@@ -652,6 +2208,38 @@ func (s *Server) solveProblemSpec(spec planningSolveSpec) (*pddl.Plan, error) {
 		AgentIDs:          datatypes.JSON(agentIDsJSON),
 	}
 	return s.solveProblem(pp)
+}
+
+func (s *Server) filterInitialStateByTaskDistributor(taskDistributorID string, initial map[string]string) (map[string]string, error) {
+	copied := cloneStringMap(initial)
+	if copied == nil {
+		copied = map[string]string{}
+	}
+	if strings.TrimSpace(taskDistributorID) == "" {
+		return copied, nil
+	}
+
+	states, err := s.repo.ListTaskDistributorStates(taskDistributorID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load task distributor states for realtime solve: %w", err)
+	}
+
+	allowed := make(map[string]struct{}, len(states))
+	for _, state := range states {
+		name := strings.TrimSpace(state.Name)
+		if name == "" {
+			continue
+		}
+		allowed[name] = struct{}{}
+	}
+
+	filtered := make(map[string]string, len(copied))
+	for key, value := range copied {
+		if _, ok := allowed[key]; ok {
+			filtered[key] = value
+		}
+	}
+	return filtered, nil
 }
 
 type planningSolveSpec struct {

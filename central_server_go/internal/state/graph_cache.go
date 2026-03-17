@@ -185,6 +185,43 @@ func (c *GraphCache) InvalidateDeployed(agentID, graphID string) {
 	}
 }
 
+// InvalidateAgentDeployments removes all deployed graph cache entries for a
+// specific agent. This is used when an agent disconnects/reconnects to avoid
+// stale "deployed" assumptions after in-agent storage reset/restart.
+func (c *GraphCache) InvalidateAgentDeployments(agentID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return
+	}
+
+	prefix := agentID + ":"
+	keysToDelete := make([]string, 0)
+	for key := range c.deployed {
+		if strings.HasPrefix(key, prefix) {
+			keysToDelete = append(keysToDelete, key)
+		}
+	}
+
+	for _, key := range keysToDelete {
+		parts := strings.SplitN(key, ":", 2)
+		if len(parts) != 2 {
+			delete(c.deployed, key)
+			continue
+		}
+		graphID := parts[1]
+		delete(c.deployed, key)
+		if agents, exists := c.graphToAgents[graphID]; exists {
+			delete(agents, agentID)
+			if len(agents) == 0 {
+				delete(c.graphToAgents, graphID)
+			}
+		}
+	}
+}
+
 // InvalidateAllDeployments removes a graph from all agent caches
 // Called when graph is updated or deleted
 func (c *GraphCache) InvalidateAllDeployments(graphID string) []string {

@@ -13,7 +13,14 @@ import (
 	"central_server_go/internal/graph"
 )
 
-func (s *Scheduler) prepareExecutionGraph(ctx context.Context, agentID, taskID string, baseGraph *db.BehaviorTree, runtimeParams map[string]string) (string, error) {
+func (s *Scheduler) prepareExecutionGraph(
+	ctx context.Context,
+	agentID,
+	taskID string,
+	baseGraph *db.BehaviorTree,
+	runtimeParams map[string]string,
+	forceBaseDeploy bool,
+) (string, error) {
 	if baseGraph == nil {
 		return "", fmt.Errorf("behavior tree is nil")
 	}
@@ -23,18 +30,23 @@ func (s *Scheduler) prepareExecutionGraph(ctx context.Context, agentID, taskID s
 		return "", err
 	}
 
-	if !changed {
-		if err := s.ensureGraphDeployed(ctx, agentID, baseGraph); err != nil {
-			return "", err
-		}
-		return baseGraph.ID, nil
+	// Runtime graph deploy per task causes large dispatch instability in realtime
+	// PDDL loops (deploy timeout/race -> immediate task fail). Prefer static graph
+	// deployment and pass runtime params to the agent as execution variables.
+	//
+	// The agent resolves ${...} placeholders at execution time.
+	if changed {
+		log.Printf(
+			"[Scheduler] Runtime placeholders detected for graph %s task %s; using static deploy + runtime params (no per-task concrete deploy)",
+			baseGraph.ID, taskID,
+		)
+		_ = concreteGraph // keep build path validated for compatibility/debug
 	}
 
-	if err := s.deployConcreteExecutionGraph(ctx, agentID, concreteGraph); err != nil {
+	if err := s.ensureGraphDeployed(ctx, agentID, baseGraph, forceBaseDeploy); err != nil {
 		return "", err
 	}
-
-	return concreteGraph.BehaviorTree.ID, nil
+	return baseGraph.ID, nil
 }
 
 func (s *Scheduler) deployConcreteExecutionGraph(ctx context.Context, agentID string, concreteGraph *graph.CanonicalGraph) error {

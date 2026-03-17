@@ -21,6 +21,8 @@ type PlanTask struct {
 	ResultStates        []db.PlanningEffect
 	DuringState         []db.PlanningEffect
 	RuntimeParams       map[string]string
+	BoundAgentID        string
+	BoundAgentName      string
 }
 
 // AgentInfo describes an agent available for task assignment.

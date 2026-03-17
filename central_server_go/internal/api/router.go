@@ -42,6 +42,13 @@ func NewServer(repo *db.Repository, stateManager *state.GlobalStateManager, sche
 		wsHub.Broadcast(msg)
 	})
 	s.realtimePddl = NewRealtimePddlManager(s)
+	if quicHandler != nil {
+		quicHandler.SetPlanningStateCallback(func(agentID string, values map[string]string) {
+			// Agent telemetry runtime-state updates are ephemeral.
+			// Keep a short TTL so stale values disappear automatically.
+			_ = s.realtimePddl.UpsertRuntimeStateByAgent(agentID, "agent:"+agentID, values, 5.0)
+		})
+	}
 
 	s.setupRouter()
 
@@ -295,6 +302,9 @@ func (s *Server) setupRouter() {
 			r.Post("/{distributorID}/resources", s.CreateTaskDistributorResource)
 			r.Put("/{distributorID}/resources/{resourceID}", s.UpdateTaskDistributorResource)
 			r.Delete("/{distributorID}/resources/{resourceID}", s.DeleteTaskDistributorResource)
+			r.Get("/{distributorID}/runtime-state", s.ListTaskDistributorRuntimeState)
+			r.Post("/{distributorID}/runtime-state", s.UpsertTaskDistributorRuntimeState)
+			r.Delete("/{distributorID}/runtime-state", s.ClearTaskDistributorRuntimeState)
 		})
 
 		// System/Internal endpoints

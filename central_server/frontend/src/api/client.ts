@@ -146,6 +146,12 @@ export const agentApi = {
     return data
   },
 
+  // Get a specific assigned behavior tree for an agent
+  getAssignedActionGraph: async (agentId: string, graphId: string): Promise<AgentActionGraphInfo> => {
+    const { data } = await api.get(`/agents/${agentId}/behavior-trees/${graphId}`)
+    return data
+  },
+
   // Deploy a behavior tree to an agent via QUIC
   deployBehaviorTree: async (graphId: string, agentId: string): Promise<{
     success: boolean
@@ -855,7 +861,7 @@ export const pddlApi = {
     return data
   },
 
-  stopRealtimeSession: async (id: string): Promise<RealtimeSession> => {
+  stopRealtimeSession: async (id: string): Promise<RealtimeSession | { message: string }> => {
     const { data } = await api.post(`/pddl/realtime-sessions/${id}/stop`)
     return data
   },

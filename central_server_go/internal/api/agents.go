@@ -295,6 +295,10 @@ func (s *Server) ListAgentBehaviorTrees(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	for i := range abts {
+		s.normalizeStaleDeployingStatus(&abts[i])
+	}
+
 	responses := make([]AgentBehaviorTreeResponse, len(abts))
 	for i, abt := range abts {
 		responses[i] = agentBehaviorTreeToResponse(&abt, s.repo)
@@ -374,6 +378,8 @@ func (s *Server) GetAgentBehaviorTree(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Assignment not found")
 		return
 	}
+
+	s.normalizeStaleDeployingStatus(abt)
 
 	writeJSON(w, http.StatusOK, agentBehaviorTreeToResponse(abt, s.repo))
 }
@@ -1174,4 +1180,28 @@ func agentBehaviorTreeToResponse(abt *db.AgentBehaviorTree, repo *db.Repository)
 	}
 
 	return response
+}
+
+func (s *Server) normalizeStaleDeployingStatus(abt *db.AgentBehaviorTree) {
+	if abt == nil {
+		return
+	}
+	if abt.DeploymentStatus != "deploying" {
+		return
+	}
+	if time.Since(abt.UpdatedAt) < 45*time.Second {
+		return
+	}
+
+	abt.DeploymentStatus = "failed"
+	if !abt.DeploymentError.Valid || strings.TrimSpace(abt.DeploymentError.String) == "" {
+		abt.DeploymentError = sql.NullString{
+			String: "deployment timed out (no response from RTM)",
+			Valid:  true,
+		}
+	}
+	abt.UpdatedAt = time.Now()
+	if err := s.repo.UpdateAgentBehaviorTree(abt); err != nil {
+		log.Printf("[AgentAPI] failed to normalize stale deploying status for %s/%s: %v", abt.AgentID, abt.BehaviorTreeID, err)
+	}
 }

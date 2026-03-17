@@ -186,10 +186,11 @@ const ViewerEventNode = memo(({ data, selected }: NodeProps<any>) => {
   const isStart = data.subtype === 'Start'
   const isEnd = data.subtype === 'End'
   const isError = data.subtype === 'Error'
+  const isWarning = data.subtype === 'Warning'
   const isActive = data.isActive
   const isCompleted = data.isCompleted
 
-  const bgColor = isStart ? '#22c55e' : isError ? '#ef4444' : '#3b82f6'
+  const bgColor = isStart ? '#22c55e' : isError ? '#ef4444' : isWarning ? '#f59e0b' : '#3b82f6'
 
   let borderColor = bgColor
   let glowStyle: React.CSSProperties = {}
@@ -221,7 +222,7 @@ const ViewerEventNode = memo(({ data, selected }: NodeProps<any>) => {
           <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
         )}
         <span className="text-[10px] font-bold text-primary tracking-wider">
-          {isStart ? 'START' : isError ? 'ERROR' : 'END'}
+          {isStart ? 'START' : isError ? 'ERROR' : isWarning ? 'WARNING' : 'END'}
         </span>
         {isCompleted && (
           <svg className="w-3 h-3 text-primary" fill="currentColor" viewBox="0 0 20 20">
@@ -238,13 +239,17 @@ const ViewerEventNode = memo(({ data, selected }: NodeProps<any>) => {
           className="!w-2 !h-2 !bg-green-500 !border !border-green-300 !rounded-full !-right-1"
         />
       )}
-      {(isEnd || isError) && (
+      {(isEnd || isError || isWarning) && (
         <Handle
           type="target"
           position={Position.Left}
           id="state-in"
           className={`!w-2 !h-2 !border !rounded-full !-left-1 ${
-            isError ? '!bg-red-500 !border-red-300' : '!bg-blue-500 !border-blue-300'
+            isError
+              ? '!bg-red-500 !border-red-300'
+              : isWarning
+                ? '!bg-yellow-500 !border-yellow-300'
+                : '!bg-blue-500 !border-blue-300'
           }`}
         />
       )}
@@ -420,7 +425,11 @@ function BehaviorTreeViewerInner({
         position,
         data: {
           label: step.job_name || step.name || step.id,
-          subtype: isTerminal ? (step.terminal_type === 'success' ? 'End' : 'Error') : subtype,
+          subtype: isTerminal
+            ? ((step.terminal_type === 'failure'
+                ? 'Error'
+                : (step.alert ? 'Warning' : 'End')))
+            : subtype,
           color,
           server: step.action?.server,
           duringState,

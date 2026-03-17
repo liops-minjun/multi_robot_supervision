@@ -45,6 +45,17 @@ const capabilityKindOf = (capability: AgentCapabilityInfo): 'action' | 'service'
   return capability.action_type.toLowerCase().includes('/srv/') ? 'service' : 'action'
 }
 
+const getApiErrorMessage = (error: unknown): string => {
+  const err = error as {
+    response?: { data?: { error?: string; message?: string } }
+    message?: string
+  }
+  return err?.response?.data?.error
+    || err?.response?.data?.message
+    || err?.message
+    || String(error)
+}
+
 // Status badge component
 function StatusBadge({ status, t }: { status: string; t: (key: 'agent.online' | 'agent.offline' | 'agent.warning') => string }) {
   const config: Record<string, { bg: string; text: string; dot: string; labelKey: 'agent.online' | 'agent.offline' | 'agent.warning' }> = {
@@ -822,9 +833,11 @@ export default function AgentDashboard() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agent-assigned-graphs', selectedAgentId] })
     },
-    onError: () => {
+    onError: (error: unknown) => {
+      console.error('[deployGraphMutation] Error:', error)
       // Also refresh on error to show failed status
       queryClient.invalidateQueries({ queryKey: ['agent-assigned-graphs', selectedAgentId] })
+      alert(`Deploy failed: ${getApiErrorMessage(error)}`)
     },
   })
 
@@ -1043,18 +1056,66 @@ export default function AgentDashboard() {
 
   // Task execution control mutations
   const executeGraphMutation = useMutation({
-    mutationFn: ({ graphId, agentId }: { graphId: string; agentId: string }) => {
-      console.log('[executeGraphMutation] Starting execution:', { graphId, agentId })
+    mutationFn: async ({
+      graphId,
+      agentId,
+      deploymentStatus,
+    }: {
+      graphId: string
+      agentId: string
+      deploymentStatus?: string
+    }) => {
+      console.log('[executeGraphMutation] Starting execution:', { graphId, agentId, deploymentStatus })
+
+      // Refresh deployment status from server first (UI cache can be stale).
+      let effectiveStatus = deploymentStatus
+      try {
+        const latest = await agentApi.getAssignedActionGraph(agentId, graphId)
+        effectiveStatus = latest?.deployment_status || deploymentStatus
+      } catch (refreshError) {
+        console.warn('[executeGraphMutation] Failed to refresh deployment status:', refreshError)
+      }
+
+      // Auto-heal deployment:
+      // - pending/failed/outdated => try deploy once
+      // - deploying => do NOT re-deploy here (can cause repeated 504 timeout loop)
+      //   let scheduler/execute path handle it.
+      if (effectiveStatus && effectiveStatus !== 'deployed' && effectiveStatus !== 'deploying') {
+        try {
+          const deploy = await agentApi.deployActionGraph(graphId, agentId)
+          if (!deploy.success) {
+            throw new Error(deploy.error || `Auto deploy failed (status=${deploy.deployment_status || 'unknown'})`)
+          }
+        } catch (deployError) {
+          // Timeout/temporary network issues can still end up deployed on backend.
+          // Re-check once; if deployed/deploying, continue to execute.
+          try {
+            const latest = await agentApi.getAssignedActionGraph(agentId, graphId)
+            const statusAfterError = latest?.deployment_status
+            if (statusAfterError === 'deployed' || statusAfterError === 'deploying') {
+              console.warn('[executeGraphMutation] Deploy request failed but backend status is', statusAfterError, '- continuing execute')
+            } else {
+              throw deployError
+            }
+          } catch {
+            throw deployError
+          }
+        }
+      }
+
       return actionGraphApi.execute(graphId, agentId)
     },
     onSuccess: (data) => {
       console.log('[executeGraphMutation] Success:', data)
       queryClient.invalidateQueries({ queryKey: ['agent-state'] })
       queryClient.invalidateQueries({ queryKey: ['tasks'] })
+      queryClient.invalidateQueries({ queryKey: ['agent-assigned-graphs', selectedAgentId] })
     },
-    onError: (error: Error) => {
+    onError: (error: unknown) => {
       console.error('[executeGraphMutation] Error:', error)
-      alert(`Failed to start execution: ${error.message}`)
+      queryClient.invalidateQueries({ queryKey: ['agent-assigned-graphs', selectedAgentId] })
+      queryClient.invalidateQueries({ queryKey: ['agent-state'] })
+      alert(`Failed to start execution: ${getApiErrorMessage(error)}`)
     },
   })
 
@@ -1784,6 +1845,7 @@ export default function AgentDashboard() {
                                     executeGraphMutation.mutate({
                                       graphId: fleetGraph.id,
                                       agentId: selectedRobotId,
+                                      deploymentStatus: fleetGraphMeta?.deployment_status,
                                     })
                                   }
                                 }}
@@ -1995,7 +2057,7 @@ export default function AgentDashboard() {
                                 {fleetGraphMeta.deployment_status === 'outdated' && `Graph outdated (server: v${fleetGraphMeta.server_version}, deployed: v${fleetGraphMeta.version})`}
                               </span>
                             </div>
-                            {(fleetGraphMeta.deployment_status === 'pending' || fleetGraphMeta.deployment_status === 'failed' || fleetGraphMeta.deployment_status === 'outdated' || fleetGraphMeta.deployment_status === 'deploying') && selectedAgentId && (
+                            {(fleetGraphMeta.deployment_status === 'pending' || fleetGraphMeta.deployment_status === 'failed' || fleetGraphMeta.deployment_status === 'outdated') && selectedAgentId && (
                               <button
                                 onClick={() => deployGraphMutation.mutate({ graphId: fleetGraphMeta.id, agentId: selectedAgentId })}
                                 disabled={deployGraphMutation.isPending}
@@ -2006,7 +2068,7 @@ export default function AgentDashboard() {
                                 ) : (
                                   <Play className="w-3 h-3" />
                                 )}
-                                {fleetGraphMeta.deployment_status === 'outdated' ? 'Update' : fleetGraphMeta.deployment_status === 'deploying' ? 'Retry' : 'Deploy'}
+                                {fleetGraphMeta.deployment_status === 'outdated' ? 'Update' : 'Deploy'}
                               </button>
                             )}
                           </div>

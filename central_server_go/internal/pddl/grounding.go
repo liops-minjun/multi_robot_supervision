@@ -17,12 +17,12 @@ type groundedResource struct {
 // GroundTasks expands generic task templates into concrete resource-bound tasks.
 // Currently this is primarily intended for one generic task template such as
 // "go_to_cnc_and_park" that should be solved once per concrete CNC instance.
-func GroundTasks(tasks []PlanTask, resources []ResourceInfo) ([]PlanTask, error) {
+func GroundTasks(tasks []PlanTask, resources []ResourceInfo, agents []AgentInfo) ([]PlanTask, error) {
 	catalog := buildResourceCatalog(resources)
 	grounded := make([]PlanTask, 0, len(tasks))
 
 	for _, task := range tasks {
-		taskGrounded, err := groundTask(task, catalog)
+		taskGrounded, err := groundTask(task, catalog, agents)
 		if err != nil {
 			return nil, err
 		}
@@ -32,7 +32,7 @@ func GroundTasks(tasks []PlanTask, resources []ResourceInfo) ([]PlanTask, error)
 	return grounded, nil
 }
 
-func groundTask(task PlanTask, catalog resourceCatalog) ([]PlanTask, error) {
+func groundTask(task PlanTask, catalog resourceCatalog, agents []AgentInfo) ([]PlanTask, error) {
 	type candidateSet struct {
 		token     string
 		instances []string
@@ -79,7 +79,7 @@ func groundTask(task PlanTask, catalog resourceCatalog) ([]PlanTask, error) {
 		if err != nil {
 			return nil, err
 		}
-		return []PlanTask{groundedTask}, nil
+		return groundTaskByAgent([]PlanTask{groundedTask}, agents)
 	}
 
 	sort.Slice(dynamic, func(i, j int) bool {
@@ -134,7 +134,35 @@ func groundTask(task PlanTask, catalog resourceCatalog) ([]PlanTask, error) {
 		return nil, err
 	}
 
-	return results, nil
+	return groundTaskByAgent(results, agents)
+}
+
+func groundTaskByAgent(tasks []PlanTask, agents []AgentInfo) ([]PlanTask, error) {
+	result := make([]PlanTask, 0, len(tasks))
+	for _, task := range tasks {
+		if !usesGenericAgentPlaceholderTask(task) {
+			result = append(result, task)
+			continue
+		}
+		if len(agents) == 0 {
+			return nil, fmt.Errorf("task %q uses {{agent.*}} placeholders but no agent was provided", task.TaskID)
+		}
+		candidateAgents := make([]AgentInfo, 0, len(agents))
+		for _, agent := range agents {
+			if !agentCanRunTask(agent, task) {
+				continue
+			}
+			candidateAgents = append(candidateAgents, agent)
+		}
+		if len(candidateAgents) == 0 {
+			return nil, fmt.Errorf("task %q uses {{agent.*}} placeholders but no capable online agent is available", task.TaskID)
+		}
+		for _, agent := range candidateAgents {
+			bound := instantiateAgentTask(task, agent)
+			result = append(result, bound)
+		}
+	}
+	return result, nil
 }
 
 func instantiateGroundTask(task PlanTask, bindings map[string]groundedResource) (PlanTask, error) {
@@ -211,6 +239,28 @@ func usesGenericResourcePlaceholderTask(task PlanTask) bool {
 	return false
 }
 
+func usesGenericAgentPlaceholderTask(task PlanTask) bool {
+	contains := func(value string) bool {
+		return strings.Contains(value, "{{agent.") || strings.Contains(value, "{{agent}}")
+	}
+	for _, cond := range task.Preconditions {
+		if contains(cond.Variable) || contains(cond.Value) {
+			return true
+		}
+	}
+	for _, effect := range task.ResultStates {
+		if contains(effect.Variable) || contains(effect.Value) {
+			return true
+		}
+	}
+	for _, effect := range task.DuringState {
+		if contains(effect.Variable) || contains(effect.Value) {
+			return true
+		}
+	}
+	return false
+}
+
 func substituteResourcePlaceholders(value string, primary *groundedResource) string {
 	if value == "" || primary == nil {
 		return value
@@ -230,6 +280,67 @@ func substituteResourcePlaceholders(value string, primary *groundedResource) str
 		result = strings.ReplaceAll(result, placeholder, replacement)
 	}
 	return result
+}
+
+func substituteAgentPlaceholders(value string, agent AgentInfo) string {
+	if value == "" {
+		return value
+	}
+	agentName := strings.TrimSpace(agent.Name)
+	if agentName == "" {
+		agentName = agent.ID
+	}
+	replacements := map[string]string{
+		"{{agent}}":      agentName,
+		"{{agent.id}}":   agent.ID,
+		"{{agent.name}}": agentName,
+	}
+
+	result := value
+	for placeholder, replacement := range replacements {
+		result = strings.ReplaceAll(result, placeholder, replacement)
+	}
+	return result
+}
+
+func instantiateAgentTask(task PlanTask, agent AgentInfo) PlanTask {
+	bound := task
+	bound.Preconditions = cloneConditions(task.Preconditions)
+	bound.ResultStates = cloneEffects(task.ResultStates)
+	bound.DuringState = cloneEffects(task.DuringState)
+	bound.RuntimeParams = cloneStringMap(task.RuntimeParams)
+
+	for i := range bound.Preconditions {
+		bound.Preconditions[i].Variable = substituteAgentPlaceholders(bound.Preconditions[i].Variable, agent)
+		bound.Preconditions[i].Value = substituteAgentPlaceholders(bound.Preconditions[i].Value, agent)
+	}
+	for i := range bound.ResultStates {
+		bound.ResultStates[i].Variable = substituteAgentPlaceholders(bound.ResultStates[i].Variable, agent)
+		bound.ResultStates[i].Value = substituteAgentPlaceholders(bound.ResultStates[i].Value, agent)
+	}
+	for i := range bound.DuringState {
+		bound.DuringState[i].Variable = substituteAgentPlaceholders(bound.DuringState[i].Variable, agent)
+		bound.DuringState[i].Value = substituteAgentPlaceholders(bound.DuringState[i].Value, agent)
+	}
+
+	agentName := strings.TrimSpace(agent.Name)
+	if agentName == "" {
+		agentName = agent.ID
+	}
+	if bound.RuntimeParams == nil {
+		bound.RuntimeParams = make(map[string]string)
+	}
+	bound.RuntimeParams["agent"] = agentName
+	bound.RuntimeParams["agent_id"] = agent.ID
+	bound.RuntimeParams["agent_name"] = agentName
+	bound.RuntimeParams["agent.id"] = agent.ID
+	bound.RuntimeParams["agent.name"] = agentName
+
+	bound.BoundAgentID = agent.ID
+	bound.BoundAgentName = agentName
+	bound.TaskID = bound.TaskID + "::" + agent.ID
+	bound.TaskName = strings.TrimSpace(fmt.Sprintf("%s [%s]", bound.TaskName, agentName))
+	return bound
 }
 
 func buildRuntimeParams(primary *groundedResource) map[string]string {
