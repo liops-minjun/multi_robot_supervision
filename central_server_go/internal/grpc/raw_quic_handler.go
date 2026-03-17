@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -63,6 +62,9 @@ type RawQUICHandler struct {
 
 	// Ping interval for latency tracking
 	pingInterval time.Duration
+	pingTimeout  time.Duration
+	pingMu       sync.Mutex
+	inFlightPing map[string]*inFlightPingState
 
 	// Task completion callback (for agent-driven execution)
 	taskCompleteCallback TaskCompleteCallback
@@ -123,7 +125,6 @@ type agentConnection struct {
 	commandStream   quic.Stream           // Primary stream for Server→Agent commands
 	sendChan        chan *OutboundCommand // Queue for outgoing commands
 	sendDone        chan struct{}         // Signal to stop sender goroutine
-	useHeartbeatRtt atomic.Bool           // Prefer latency from heartbeat stats
 	// In 1:1 model, agent_id = robot_id, so no separate robotIDs field needed
 
 	// Debug counters
@@ -140,6 +141,11 @@ type OutboundCommand struct {
 type graphOverrideState struct {
 	StepID   string
 	AgentIDs []string
+}
+
+type inFlightPingState struct {
+	PingID string
+	SentAt time.Time
 }
 
 // CommandCallback is called when action result/feedback is received
@@ -163,6 +169,8 @@ func NewRawQUICHandler(
 		configWaiters:   make(map[string]chan *ConfigUpdateResult),
 		graphOverrides:  make(map[string]*graphOverrideState),
 		pingInterval:    time.Second,
+		pingTimeout:     3 * time.Second,
+		inFlightPing:    make(map[string]*inFlightPingState),
 		ctx:             ctx,
 		cancel:          cancel,
 	}
@@ -290,19 +298,68 @@ func (h *RawQUICHandler) pingLoop() {
 			h.connMu.RLock()
 			agentIDs := make([]string, 0, len(h.connections))
 			for agentID, conn := range h.connections {
-				if conn != nil && conn.registered && !conn.useHeartbeatRtt.Load() {
+				if conn != nil && conn.registered {
 					agentIDs = append(agentIDs, agentID)
 				}
 			}
 			h.connMu.RUnlock()
 
 			for _, agentID := range agentIDs {
-				pingID := fmt.Sprintf("ping-%s-%d", agentID, time.Now().UnixNano())
-				if err := h.SendPing(agentID, pingID); err != nil {
-					log.Printf("[RawQUIC] Ping send failed for %s: %v", agentID, err)
-				}
+				h.trySendPing(agentID)
 			}
 		}
+	}
+}
+
+func (h *RawQUICHandler) effectivePingTimeout() time.Duration {
+	if h.pingTimeout > 0 {
+		return h.pingTimeout
+	}
+	if h.pingInterval > 0 {
+		return 3 * h.pingInterval
+	}
+	return 3 * time.Second
+}
+
+func (h *RawQUICHandler) clearInFlightPing(agentID string) {
+	if agentID == "" {
+		return
+	}
+	h.pingMu.Lock()
+	delete(h.inFlightPing, agentID)
+	h.pingMu.Unlock()
+}
+
+func (h *RawQUICHandler) trySendPing(agentID string) {
+	now := time.Now()
+	timeout := h.effectivePingTimeout()
+
+	h.pingMu.Lock()
+	if inFlight, exists := h.inFlightPing[agentID]; exists {
+		elapsed := now.Sub(inFlight.SentAt)
+		if elapsed < timeout {
+			h.pingMu.Unlock()
+			return
+		}
+		log.Printf("[RawQUIC] Ping timeout for %s: ping_id=%s elapsed=%v (dropping stale in-flight ping)",
+			agentID, inFlight.PingID, elapsed)
+		delete(h.inFlightPing, agentID)
+	}
+
+	pingID := fmt.Sprintf("ping-%s-%d", agentID, now.UnixNano())
+	h.inFlightPing[agentID] = &inFlightPingState{
+		PingID: pingID,
+		SentAt: now,
+	}
+	h.pingMu.Unlock()
+
+	if err := h.SendPing(agentID, pingID); err != nil {
+		h.pingMu.Lock()
+		if current, exists := h.inFlightPing[agentID]; exists && current.PingID == pingID {
+			delete(h.inFlightPing, agentID)
+		}
+		h.pingMu.Unlock()
+		log.Printf("[RawQUIC] Ping send failed for %s: %v", agentID, err)
 	}
 }
 
@@ -1840,6 +1897,7 @@ func (h *RawQUICHandler) handleRegisterAgent(
 	}
 	h.connections[effectiveAgentID] = agentConn
 	h.connMu.Unlock()
+	h.clearInFlightPing(effectiveAgentID)
 
 	// Register robot in state manager (agent_id = robot_id in 1:1 model)
 	h.stateManager.RegisterRobot(
@@ -2025,6 +2083,7 @@ func (h *RawQUICHandler) handleDisconnect(agentConn *agentConnection) {
 	}
 	delete(h.connections, agentConn.agentID)
 	h.connMu.Unlock()
+	h.clearInFlightPing(agentConn.agentID)
 
 	// Update state manager (mark agent as offline by unregistering)
 	h.stateManager.UnregisterAgent(agentConn.agentID)
@@ -4953,9 +5012,24 @@ func (h *RawQUICHandler) handleConfigUpdateAck(ack *ConfigUpdateAckMsg) {
 
 // handlePong processes pong response for latency measurement
 func (h *RawQUICHandler) handlePong(agentConn *agentConnection, pong *PongResponseMsg) {
-	if agentConn.useHeartbeatRtt.Load() {
+	h.pingMu.Lock()
+	inFlight, exists := h.inFlightPing[agentConn.agentID]
+	if !exists {
+		h.pingMu.Unlock()
+		log.Printf("[RawQUIC] Ignoring pong from %s: ping_id=%s (no in-flight ping)",
+			agentConn.agentID, pong.PingID)
 		return
 	}
+	if inFlight.PingID != pong.PingID {
+		expectedPingID := inFlight.PingID
+		h.pingMu.Unlock()
+		log.Printf("[RawQUIC] Ignoring stale pong from %s: ping_id=%s expected=%s",
+			agentConn.agentID, pong.PingID, expectedPingID)
+		return
+	}
+	delete(h.inFlightPing, agentConn.agentID)
+	h.pingMu.Unlock()
+
 	latencyMs := time.Now().UnixMilli() - pong.ServerTimestampMs
 	if latencyMs < 0 {
 		latencyMs = 0
