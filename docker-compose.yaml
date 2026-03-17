@@ -20,7 +20,8 @@ services:
       interval: 10s
       timeout: 10s
       retries: 10
-
+    restart: unless-stopped
+    
   # Go Backend - Single unified backend server
   # Provides: REST API, WebSocket, gRPC over QUIC
   # Memory: ~20-50MB (vs Python ~150-300MB)
