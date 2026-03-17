@@ -63,11 +63,11 @@ const (
 type EdgeType string
 
 const (
-	EdgeTypeOnSuccess EdgeType = "on_success"
-	EdgeTypeOnFailure EdgeType = "on_failure"
-	EdgeTypeOnTimeout EdgeType = "on_timeout"
-	EdgeTypeOnConfirm EdgeType = "on_confirm"
-	EdgeTypeOnCancel  EdgeType = "on_cancel"
+	EdgeTypeOnSuccess   EdgeType = "on_success"
+	EdgeTypeOnFailure   EdgeType = "on_failure"
+	EdgeTypeOnTimeout   EdgeType = "on_timeout"
+	EdgeTypeOnConfirm   EdgeType = "on_confirm"
+	EdgeTypeOnCancel    EdgeType = "on_cancel"
 	EdgeTypeConditional EdgeType = "conditional"
 )
 
@@ -94,21 +94,21 @@ type CanonicalGraph struct {
 
 // BehaviorTreeMeta contains behavior tree metadata
 type BehaviorTreeMeta struct {
-	ID          string               `json:"id"`
-	Name        string               `json:"name"`
-	Version     int                  `json:"version"`
-	Description string               `json:"description,omitempty"`
-	AgentID     string               `json:"agent_id,omitempty"` // Target agent (empty = template)
-	Requirements *RobotRequirements  `json:"robot_requirements,omitempty"`
-	TaskDistributorID string            `json:"task_distributor_id,omitempty"` // Task Distributor reference
-	CreatedAt   time.Time            `json:"created_at,omitempty"`
-	UpdatedAt   time.Time            `json:"updated_at,omitempty"`
+	ID                string             `json:"id"`
+	Name              string             `json:"name"`
+	Version           int                `json:"version"`
+	Description       string             `json:"description,omitempty"`
+	AgentID           string             `json:"agent_id,omitempty"` // Target agent (empty = template)
+	Requirements      *RobotRequirements `json:"robot_requirements,omitempty"`
+	TaskDistributorID string             `json:"task_distributor_id,omitempty"` // Task Distributor reference
+	CreatedAt         time.Time          `json:"created_at,omitempty"`
+	UpdatedAt         time.Time          `json:"updated_at,omitempty"`
 }
 
 // PlanningStateVar represents a state variable for PDDL planning
 type PlanningStateVar struct {
 	Name         string `json:"name"`
-	Type         string `json:"type"`                    // bool, int, string
+	Type         string `json:"type"` // bool, int, string
 	InitialValue string `json:"initial_value,omitempty"`
 	Description  string `json:"description,omitempty"`
 }
@@ -177,16 +177,16 @@ type StepData struct {
 	// PDDL Planning fields
 	ResourceAcquire       []string            `json:"resource_acquire,omitempty"`
 	ResourceRelease       []string            `json:"resource_release,omitempty"`
-	PlanningPreconditions []PlanningCondition  `json:"planning_preconditions,omitempty"`
-	PlanningEffects       []PlanningEffect     `json:"planning_effects,omitempty"`
-	PlanningDuring        []PlanningEffect     `json:"planning_during,omitempty"`
+	PlanningPreconditions []PlanningCondition `json:"planning_preconditions,omitempty"`
+	PlanningEffects       []PlanningEffect    `json:"planning_effects,omitempty"`
+	PlanningDuring        []PlanningEffect    `json:"planning_during,omitempty"`
 }
 
 // ActionConfig defines an action to execute
 type ActionConfig struct {
-	Type         string            `json:"type"`                    // ROS2 action type (e.g., "nav2_msgs/action/NavigateToPose")
-	Server       string            `json:"server"`                  // Action server name
-	Params       *ActionParams     `json:"params,omitempty"`        // Action parameters
+	Type         string            `json:"type"`             // ROS2 action type (e.g., "nav2_msgs/action/NavigateToPose")
+	Server       string            `json:"server"`           // Action server name
+	Params       *ActionParams     `json:"params,omitempty"` // Action parameters
 	TimeoutSec   float64           `json:"timeout_sec,omitempty"`
 	ResultSchema *StepResultSchema `json:"result_schema,omitempty"` // Expected result schema (for other steps to reference)
 }
@@ -429,11 +429,11 @@ func CheckTypeCompatibility(sourceType, targetType *DataTypeInfo) TypeCompatibil
 
 // ParameterFieldSource defines how a single field gets its value
 type ParameterFieldSource struct {
-	Source      ParameterSourceType `json:"source"`                  // constant, step_result, dynamic, expression
-	Value       interface{}         `json:"value,omitempty"`         // For constant
-	StepID      string              `json:"step_id,omitempty"`       // For step_result
-	ResultField string              `json:"result_field,omitempty"`  // For step_result (e.g., "pose.position.x", "poses[0].position")
-	Expression  string              `json:"expression,omitempty"`    // For expression
+	Source      ParameterSourceType `json:"source"`                 // constant, step_result, dynamic, expression
+	Value       interface{}         `json:"value,omitempty"`        // For constant
+	StepID      string              `json:"step_id,omitempty"`      // For step_result
+	ResultField string              `json:"result_field,omitempty"` // For step_result (e.g., "pose.position.x", "poses[0].position")
+	Expression  string              `json:"expression,omitempty"`   // For expression
 
 	// Type information (for validation)
 	SourceType *DataTypeInfo         `json:"source_type,omitempty"`
@@ -534,17 +534,18 @@ type UIPosition struct {
 
 // Edge represents a transition between vertices
 type Edge struct {
-	From   string     `json:"from"`
-	To     string     `json:"to"`
-	Type   EdgeType   `json:"type"`
+	From   string      `json:"from"`
+	To     string      `json:"to"`
+	Type   EdgeType    `json:"type"`
 	Config *EdgeConfig `json:"config,omitempty"`
 }
 
 // EdgeConfig contains edge-specific configuration
 type EdgeConfig struct {
 	// For on_failure edges
-	Retry    int    `json:"retry,omitempty"`    // Number of retries before following edge
-	Fallback string `json:"fallback,omitempty"` // Final fallback if retries exhausted
+	Retry     int    `json:"retry,omitempty"`      // Number of retries before following edge
+	Fallback  string `json:"fallback,omitempty"`   // Final fallback if retries exhausted
+	BackoffMs int    `json:"backoff_ms,omitempty"` // Wait before each retry (milliseconds)
 
 	// For conditional edges
 	Condition string `json:"condition,omitempty"` // Condition expression

@@ -1507,6 +1507,11 @@ func (s *Scheduler) handleStepResult(task *RunningTask, step *db.BehaviorTreeSte
 			retryCount := task.RetryCount[step.ID]
 			if failureTransition.Retry > 0 && retryCount < failureTransition.Retry {
 				task.RetryCount[step.ID]++
+				if failureTransition.BackoffMs > 0 {
+					backoff := time.Duration(failureTransition.BackoffMs) * time.Millisecond
+					log.Printf("Retry backoff for step %s: %v (attempt %d/%d)", step.ID, backoff, retryCount+1, failureTransition.Retry)
+					time.Sleep(backoff)
+				}
 				log.Printf("Retrying step %s (attempt %d/%d)", step.ID, retryCount+1, failureTransition.Retry)
 				return step.ID // Retry same step
 			}
@@ -1717,6 +1722,21 @@ func (s *Scheduler) parseFailureTransition(transition interface{}) *db.Transitio
 
 	// Object - parse as TransitionOnFailure (from JSON unmarshaling)
 	if obj, ok := transition.(map[string]interface{}); ok {
+		parseInt := func(value interface{}) int {
+			switch v := value.(type) {
+			case int:
+				return v
+			case int64:
+				return int(v)
+			case float64:
+				return int(v)
+			case float32:
+				return int(v)
+			default:
+				return 0
+			}
+		}
+
 		result := &db.TransitionOnFailure{}
 
 		if retry, exists := obj["retry"]; exists {
@@ -1733,6 +1753,11 @@ func (s *Scheduler) parseFailureTransition(transition interface{}) *db.Transitio
 			if nextStr, ok := next.(string); ok {
 				result.Next = nextStr
 			}
+		}
+		if backoffMs, exists := obj["backoff_ms"]; exists {
+			result.BackoffMs = parseInt(backoffMs)
+		} else if backoffMs, exists := obj["backoffMs"]; exists {
+			result.BackoffMs = parseInt(backoffMs)
 		}
 
 		return result
@@ -2220,11 +2245,12 @@ func (s *Scheduler) buildTransitionsForVertex(g *graph.CanonicalGraph, vertexID 
 				transition.OnSuccess = e.To
 			}
 		case graph.EdgeTypeOnFailure:
-			if e.Config != nil && (e.Config.Retry > 0 || e.Config.Fallback != "") {
+			if e.Config != nil && (e.Config.Retry > 0 || e.Config.Fallback != "" || e.Config.BackoffMs > 0) {
 				transition.OnFailure = db.TransitionOnFailure{
-					Retry:    e.Config.Retry,
-					Fallback: e.Config.Fallback,
-					Next:     e.To,
+					Retry:     e.Config.Retry,
+					Fallback:  e.Config.Fallback,
+					Next:      e.To,
+					BackoffMs: e.Config.BackoffMs,
 				}
 			} else {
 				transition.OnFailure = e.To

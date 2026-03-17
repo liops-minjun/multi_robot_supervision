@@ -8,6 +8,7 @@
 |------|------|
 | **실시간 모니터링** | WebSocket을 통한 로봇 상태, 위치, 텔레메트리 실시간 확인 |
 | **Behavior Tree 편집기** | 드래그 앤 드롭 노드 기반 작업 시나리오 구성 (React Flow) |
+| **Retry Block** | 실패 시 직전 액션 재시도(max_retries/backoff_ms) 블록 지원 |
 | **Capability Auto-Discovery** | ROS2 Action Server 자동 탐지 및 스키마 추출 - 설정 불필요 |
 | **텔레메트리 캡처** | 로봇팔 티칭: 현재 자세(joint_state)를 클릭 한 번으로 저장 |
 | **Multi-Robot 협업** | 로봇 간 상태 기반 조건부 실행 (Precondition) |

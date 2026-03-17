@@ -256,10 +256,31 @@ func extractEdges(step *db.BehaviorTreeStep) []Edge {
 				To:   v,
 				Type: EdgeTypeOnFailure,
 			})
+		case db.TransitionOnFailure:
+			cfg := &EdgeConfig{
+				Retry:     v.Retry,
+				Fallback:  v.Fallback,
+				BackoffMs: v.BackoffMs,
+			}
+			target := v.Fallback
+			if target == "" {
+				target = v.Next
+			}
+			if target != "" {
+				edges = append(edges, Edge{
+					From:   step.ID,
+					To:     target,
+					Type:   EdgeTypeOnFailure,
+					Config: cfg,
+				})
+			}
 		case map[string]interface{}:
 			cfg := &EdgeConfig{}
 			if retry, ok := v["retry"].(float64); ok {
 				cfg.Retry = int(retry)
+			}
+			if backoffMs, ok := v["backoff_ms"].(float64); ok {
+				cfg.BackoffMs = int(backoffMs)
 			}
 			if fallback, ok := v["fallback"].(string); ok {
 				cfg.Fallback = fallback
@@ -426,11 +447,15 @@ func buildTransitionFromEdges(vertexID string, cg *CanonicalGraph) *db.StepTrans
 		case EdgeTypeOnSuccess:
 			transition.OnSuccess = e.To
 		case EdgeTypeOnFailure:
-			if e.Config != nil && e.Config.Retry > 0 {
-				transition.OnFailure = map[string]interface{}{
+			if e.Config != nil && (e.Config.Retry > 0 || e.Config.BackoffMs > 0) {
+				failure := map[string]interface{}{
 					"retry":    e.Config.Retry,
 					"fallback": e.To,
 				}
+				if e.Config.BackoffMs > 0 {
+					failure["backoff_ms"] = e.Config.BackoffMs
+				}
+				transition.OnFailure = failure
 			} else {
 				transition.OnFailure = e.To
 			}

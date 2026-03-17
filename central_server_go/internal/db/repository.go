@@ -189,6 +189,7 @@ type graphEdge struct {
 	EdgeType  string
 	Retry     int
 	Fallback  string
+	BackoffMs int
 	Condition string
 }
 
@@ -313,6 +314,12 @@ func extractEdgesFromStep(step *BehaviorTreeStep) []graphEdge {
 			if rawRetry, ok := v["retry"]; ok {
 				retry = toInt(rawRetry)
 			}
+			backoffMs := 0
+			if rawBackoff, ok := v["backoff_ms"]; ok {
+				backoffMs = toInt(rawBackoff)
+			} else if rawBackoff, ok := v["backoffMs"]; ok {
+				backoffMs = toInt(rawBackoff)
+			}
 			fallback := ""
 			if fb, ok := v["fallback"].(string); ok {
 				fallback = fb
@@ -327,11 +334,12 @@ func extractEdgesFromStep(step *BehaviorTreeStep) []graphEdge {
 			}
 			if target != "" {
 				edges = append(edges, graphEdge{
-					From:     step.ID,
-					To:       target,
-					EdgeType: "on_failure",
-					Retry:    retry,
-					Fallback: fallback,
+					From:      step.ID,
+					To:        target,
+					EdgeType:  "on_failure",
+					Retry:     retry,
+					Fallback:  fallback,
+					BackoffMs: backoffMs,
 				})
 			}
 		}
@@ -1774,15 +1782,16 @@ func (r *Repository) storeBehaviorTreeStructure(ctx context.Context, tx neo4j.Ma
 		query := fmt.Sprintf(`
 			MATCH (from {id:$from, graph_id:$graph_id})
 			MATCH (to {id:$to, graph_id:$graph_id})
-			CREATE (from)-[:%s {retry:$retry, fallback:$fallback, condition:$condition}]->(to)
+			CREATE (from)-[:%s {retry:$retry, fallback:$fallback, backoff_ms:$backoff_ms, condition:$condition}]->(to)
 		`, relType)
 		_, err = tx.Run(ctx, query, map[string]any{
-			"from":      edge.From,
-			"to":        edge.To,
-			"graph_id":  graph.ID,
-			"retry":     edge.Retry,
-			"fallback":  edge.Fallback,
-			"condition": edge.Condition,
+			"from":       edge.From,
+			"to":         edge.To,
+			"graph_id":   graph.ID,
+			"retry":      edge.Retry,
+			"fallback":   edge.Fallback,
+			"backoff_ms": edge.BackoffMs,
+			"condition":  edge.Condition,
 		})
 		if err != nil {
 			return err

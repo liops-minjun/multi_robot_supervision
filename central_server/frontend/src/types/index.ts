@@ -721,7 +721,7 @@ export interface WaitFor {
 
 export interface Transition {
   on_success?: string | TransitionCondition
-  on_failure?: string | { retry?: number; fallback?: string }
+  on_failure?: string | { retry?: number; fallback?: string; backoff_ms?: number }
   on_confirm?: string
   on_cancel?: string
   on_timeout?: string

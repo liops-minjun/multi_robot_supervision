@@ -378,9 +378,9 @@ type PlanningStateVar struct {
 // task's resource requirements and state transitions.
 type PlanningTaskSpec struct {
 	Preconditions     []PlanningCondition `json:"preconditions,omitempty"`
-	RequiredResources []string         `json:"required_resources,omitempty"`
-	DuringState       []PlanningEffect `json:"during_state,omitempty"`
-	ResultStates      []PlanningEffect `json:"result_states,omitempty"`
+	RequiredResources []string            `json:"required_resources,omitempty"`
+	DuringState       []PlanningEffect    `json:"during_state,omitempty"`
+	ResultStates      []PlanningEffect    `json:"result_states,omitempty"`
 }
 
 // HasData reports whether the task spec contains any planning metadata.
@@ -488,9 +488,10 @@ type StepTransition struct {
 }
 
 type TransitionOnFailure struct {
-	Retry    int    `json:"retry,omitempty"`
-	Fallback string `json:"fallback,omitempty"`
-	Next     string `json:"next,omitempty"`
+	Retry     int    `json:"retry,omitempty"`
+	Fallback  string `json:"fallback,omitempty"`
+	Next      string `json:"next,omitempty"`
+	BackoffMs int    `json:"backoff_ms,omitempty"`
 }
 
 type OutcomeTransition struct {
@@ -593,7 +594,7 @@ type PlanningProblem struct {
 	ID                string         `gorm:"primaryKey;size:50"`
 	Name              string         `gorm:"size:200;not null"`
 	BehaviorTreeID    string         `gorm:"size:50;not null;index"`
-	BehaviorTreeIDs   datatypes.JSON `gorm:"type:jsonb"`            // []string (preferred, multi-task support)
+	BehaviorTreeIDs   datatypes.JSON `gorm:"type:jsonb"` // []string (preferred, multi-task support)
 	TaskDistributorID sql.NullString `gorm:"size:50;index"`
 	InitialState      datatypes.JSON `gorm:"type:jsonb"`            // map[string]string
 	GoalState         datatypes.JSON `gorm:"type:jsonb;not null"`   // map[string]string

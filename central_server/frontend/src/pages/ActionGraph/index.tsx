@@ -38,6 +38,7 @@ import type {
 // State-based Node Components
 import StateActionNode from './nodes/StateActionNode'
 import StateEventNode from './nodes/StateEventNode'
+import StateRetryNode from './nodes/StateRetryNode'
 import StateTransitionNode from './nodes/StateTransitionNode'
 import DeletableEdge from './edges/DeletableEdge'
 import { TelemetryPanel } from '../../components/TelemetryPanel'
@@ -46,6 +47,7 @@ import { TelemetryProvider } from '../../contexts/TelemetryContext'
 const nodeTypes = {
   action: StateActionNode,
   event: StateEventNode,
+  retry: StateRetryNode,
   transition: StateTransitionNode,
 }
 
@@ -412,6 +414,8 @@ type PaletteItem = {
   isHidden?: boolean
   isDefaultHidden?: boolean
   isDraggable?: boolean
+  maxRetries?: number
+  backoffMs?: number
 }
 
 type PaletteCategory = {
@@ -786,6 +790,7 @@ function ActionGraphEditor() {
 
   const [expandedCategories, setExpandedCategories] = useState<string[]>([
     'Start Nodes',
+    'Control Nodes',
     'Discovered Actions',
     'Discovered Services',
     'Configured Actions',
@@ -1319,6 +1324,22 @@ function ActionGraphEditor() {
       ],
     })
 
+    palette.push({
+      category: 'Control Nodes',
+      icon: <Activity className="w-3.5 h-3.5" />,
+      items: [
+        {
+          type: 'retry',
+          subtype: 'Retry',
+          label: 'Retry Block',
+          color: '#f59e0b',
+          maxRetries: 3,
+          backoffMs: 0,
+          isDraggable: true,
+        },
+      ],
+    })
+
     // End nodes (terminal nodes for behavior tree)
     palette.push({
       category: 'End Nodes',
@@ -1738,6 +1759,16 @@ function ActionGraphEditor() {
     entryPoint?: string
   } => {
     const steps: ActionGraph['steps'] = []
+    const retryNodes = new Map(
+      nodes
+        .filter((node) => node.type === 'retry')
+        .map((node) => [node.id, node] as const)
+    )
+    const retryFallbackEdges = new Map<string, Edge | undefined>()
+    retryNodes.forEach((_, retryNodeId) => {
+      const fallbackEdge = edges.find(edge => edge.source === retryNodeId)
+      retryFallbackEdges.set(retryNodeId, fallbackEdge)
+    })
 
     nodes.forEach((node) => {
       if (node.type === 'event') {
@@ -1760,6 +1791,10 @@ function ActionGraphEditor() {
         // Start nodes don't need to be saved as steps
         return
       }
+      if (node.type === 'retry') {
+        // Retry block is a UI control node. It is compiled into transition.on_failure.
+        return
+      }
 
       const endStates: EndStateConfig[] = node.data.endStates || []
       const { successStates, failureStates, outcomes } = categorizeEndStates(endStates)
@@ -1768,19 +1803,60 @@ function ActionGraphEditor() {
 
       const outgoingEdges = edges.filter(e => e.source === node.id)
       const outcomeTransitions: OutcomeTransition[] = []
+      let failureRetryConfig: { retry: number; backoff_ms: number; fallback?: string } | undefined
+
+      const resolveRetryTarget = (edge: Edge) => {
+        const retryNode = retryNodes.get(edge.target)
+        if (!retryNode) {
+          return { target: edge.target as string, retryConfig: undefined as undefined | { retry: number; backoff_ms: number; fallback?: string } }
+        }
+
+        const maxRetries = Math.max(0, Number((retryNode.data as any)?.maxRetries ?? 0))
+        const backoffMs = Math.max(0, Number((retryNode.data as any)?.backoffMs ?? 0))
+        const fallbackEdge = retryFallbackEdges.get(retryNode.id)
+        const fallbackTarget = fallbackEdge?.target
+        return {
+          target: fallbackTarget,
+          retryConfig: {
+            retry: maxRetries,
+            backoff_ms: backoffMs,
+            fallback: fallbackTarget,
+          },
+        }
+      }
+
       endStates.forEach((endState, index) => {
         const edge = outgoingEdges.find(e => e.sourceHandle === endState.id)
         if (!edge) return
         const normalizedOutcome = normalizeOutcome(endState.outcome) || outcomes.get(endState.id) || inferOutcome(endState, index)
+        const resolved = resolveRetryTarget(edge)
+        if (resolved.retryConfig && outcomeCategory(normalizedOutcome) !== 'success') {
+          if (!failureRetryConfig) {
+            failureRetryConfig = resolved.retryConfig
+          }
+          // Retry semantics are represented by transition.on_failure object.
+          // Do not emit failure outcome transitions to avoid bypassing retry logic.
+          return
+        }
+        const nextTarget = resolved.target || edge.target
+        if (!nextTarget) return
         outcomeTransitions.push({
           outcome: normalizedOutcome,
-          next: edge.target,
+          next: nextTarget,
           state: endState.state,
         })
       })
 
       const fallbackSuccess = outcomeTransitions.find(t => t.outcome === 'success')
       const fallbackFailure = outcomeTransitions.find(t => t.outcome !== 'success')
+      const resolvedOnFailure: string | { retry?: number; fallback?: string; backoff_ms?: number } | undefined =
+        failureRetryConfig
+          ? {
+              retry: failureRetryConfig.retry,
+              backoff_ms: failureRetryConfig.backoff_ms,
+              fallback: failureRetryConfig.fallback || fallbackFailure?.next,
+            }
+          : fallbackFailure?.next
 
       const normalizedNodeServer = normalizeLegacyNamespaceServer(node.data.server)
 
@@ -1817,7 +1893,7 @@ function ActionGraphEditor() {
         resource_release: Array.from(new Set((node.data.resourceRelease || []).filter(Boolean))),
         transition: {
           on_success: fallbackSuccess?.next,
-          on_failure: fallbackFailure?.next,
+          on_failure: resolvedOnFailure,
           on_outcomes: outcomeTransitions.length > 0 ? outcomeTransitions : undefined,
         },
       }
@@ -2310,12 +2386,13 @@ function ActionGraphEditor() {
       }
       console.log('[onDrop] Parsed data:', data)
 
-      if (data.type !== 'action' && data.type !== 'service' && data.type !== 'event') {
+      if (data.type !== 'action' && data.type !== 'service' && data.type !== 'event' && data.type !== 'retry') {
         console.log('[onDrop] Unsupported palette item type:', data.type)
         return
       }
 
       const isActionLikeNode = data.type === 'action' || data.type === 'service'
+      const isRetryNode = data.type === 'retry'
       const isStartEvent = data.type === 'event' && data.subtype === 'Start'
 
       const position = screenToFlowPosition({
@@ -2337,6 +2414,24 @@ function ActionGraphEditor() {
       const defaultJobName = data.type === 'action'
         ? getDefaultJobNameTemplate(data.server || data.subtype, data.label)
         : (data.label || data.subtype || '')
+
+      if (isRetryNode) {
+        const retryNode: Node = {
+          id: getNodeId(),
+          type: 'retry',
+          position,
+          data: {
+            label: data.label || 'Retry Block',
+            subtype: data.subtype || 'Retry',
+            color: data.color || '#f59e0b',
+            maxRetries: Number.isFinite(data.maxRetries) ? Number(data.maxRetries) : 3,
+            backoffMs: Number.isFinite(data.backoffMs) ? Number(data.backoffMs) : 0,
+            isEditing,
+          },
+        }
+        setNodes((nds) => [...nds, retryNode])
+        return
+      }
 
       if (isStartEvent) {
         const startNode: Node = {
@@ -3908,10 +4003,86 @@ function convertActionGraphToGraph(
       },
     })
 
+    const failureTransitionObj =
+      step.transition?.on_failure && typeof step.transition.on_failure === 'object'
+        ? step.transition.on_failure as Record<string, unknown>
+        : undefined
+    const retryCount = Math.max(0, Number((failureTransitionObj?.retry as number | undefined) ?? 0))
+    const retryBackoffMs = Math.max(
+      0,
+      Number(
+        (failureTransitionObj?.backoff_ms as number | undefined) ??
+        (failureTransitionObj?.backoffMs as number | undefined) ??
+        0
+      )
+    )
+    const retryFallbackTarget =
+      typeof failureTransitionObj?.fallback === 'string'
+        ? failureTransitionObj.fallback
+        : (typeof failureTransitionObj?.next === 'string' ? failureTransitionObj.next : '')
+    const hasRetryBlock = retryCount > 0 || retryBackoffMs > 0
+    const retryNodeId = `${step.id}__retry`
+    let retryInputEdgeAdded = false
+
+    const addRetryInputEdge = (sourceHandle?: string) => {
+      if (!hasRetryBlock || retryInputEdgeAdded) return
+      edges.push({
+        id: `${step.id}-fail->${retryNodeId}`,
+        source: step.id,
+        target: retryNodeId,
+        sourceHandle,
+        targetHandle: 'state-in',
+        type: 'smoothstep',
+        markerEnd: { type: MarkerType.ArrowClosed, color: '#f59e0b' },
+        style: { stroke: '#f59e0b', strokeWidth: 2, strokeDasharray: '5,5' },
+      })
+      retryInputEdgeAdded = true
+    }
+
+    const addRetryFallbackEdge = () => {
+      if (!hasRetryBlock || !retryFallbackTarget) return
+      if (!stepIds.has(retryFallbackTarget)) return
+      edges.push({
+        id: `${retryNodeId}->${retryFallbackTarget}`,
+        source: retryNodeId,
+        target: retryFallbackTarget,
+        sourceHandle: 'state-out',
+        targetHandle: 'state-in',
+        type: 'smoothstep',
+        markerEnd: { type: MarkerType.ArrowClosed, color: '#f59e0b' },
+        style: { stroke: '#f59e0b', strokeWidth: 2 },
+      })
+    }
+
+    if (hasRetryBlock) {
+      nodes.push({
+        id: retryNodeId,
+        type: 'retry',
+        position: { x: x + 220, y: y + 100 },
+        data: {
+          label: 'Retry Block',
+          subtype: 'Retry',
+          color: '#f59e0b',
+          maxRetries: retryCount,
+          backoffMs: retryBackoffMs,
+          isEditing: false,
+        },
+      })
+    }
+
     if (outcomeTransitions.length > 0) {
       outcomeTransitions.forEach((transition, idx) => {
         if (!transition.next) return
         const normalizedOutcome = normalizeOutcome(transition.outcome) || 'failed'
+        if (hasRetryBlock && outcomeCategory(normalizedOutcome) !== 'success') {
+          const failureHandleMatch = stepEndStates.find(es => {
+            const esOutcome = normalizeOutcome(es.outcome) || inferOutcome(es, idx)
+            return outcomeCategory(esOutcome) !== 'success' &&
+              (!transition.state || es.state === transition.state)
+          })
+          addRetryInputEdge(failureHandleMatch?.id)
+          return
+        }
         const match = stepEndStates.find(es => {
           const esOutcome = normalizeOutcome(es.outcome) || inferOutcome(es, idx)
           return esOutcome === normalizedOutcome &&
@@ -3935,6 +4106,7 @@ function convertActionGraphToGraph(
           },
         })
       })
+      addRetryFallbackEdge()
     } else if (step.transition?.on_success || step.transition?.on_failure) {
       const findOutcomeHandle = (desired: 'success' | 'failure') => {
         const match = stepEndStates.find((endState, idx) => {
@@ -3967,21 +4139,26 @@ function convertActionGraphToGraph(
       }
 
       if (step.transition?.on_failure) {
-        const target = typeof step.transition.on_failure === 'string'
-          ? step.transition.on_failure
-          : step.transition.on_failure.fallback
+        if (hasRetryBlock) {
+          addRetryInputEdge(failureHandle)
+          addRetryFallbackEdge()
+        } else {
+          const target = typeof step.transition.on_failure === 'string'
+            ? step.transition.on_failure
+            : step.transition.on_failure.fallback
 
-        if (target) {
-          edges.push({
-            id: `${step.id}-fail->${target}`,
-            source: step.id,
-            target,
-            sourceHandle: failureHandle,
-            targetHandle: 'state-in',
-            type: 'smoothstep',
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#ef4444' },
-            style: { stroke: '#ef4444', strokeWidth: 2, strokeDasharray: '5,5' },
-          })
+          if (target) {
+            edges.push({
+              id: `${step.id}-fail->${target}`,
+              source: step.id,
+              target,
+              sourceHandle: failureHandle,
+              targetHandle: 'state-in',
+              type: 'smoothstep',
+              markerEnd: { type: MarkerType.ArrowClosed, color: '#ef4444' },
+              style: { stroke: '#ef4444', strokeWidth: 2, strokeDasharray: '5,5' },
+            })
+          }
         }
       }
     }
