@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -65,8 +64,8 @@ type RawQUICHandler struct {
 	pingInterval time.Duration
 
 	// Task completion callback (for agent-driven execution)
-	taskCompleteCallback TaskCompleteCallback
-	taskObserveCallback  TaskObserveCallback
+	taskCompleteCallback   TaskCompleteCallback
+	taskObserveCallback    TaskObserveCallback
 	resourceChangeCallback func()
 
 	ctx    context.Context
@@ -119,10 +118,9 @@ type agentConnection struct {
 	registered bool
 
 	// Bidirectional communication
-	commandStream   quic.Stream           // Primary stream for Server→Agent commands
-	sendChan        chan *OutboundCommand // Queue for outgoing commands
-	sendDone        chan struct{}         // Signal to stop sender goroutine
-	useHeartbeatRtt atomic.Bool           // Prefer latency from heartbeat stats
+	commandStream quic.Stream           // Primary stream for Server→Agent commands
+	sendChan      chan *OutboundCommand // Queue for outgoing commands
+	sendDone      chan struct{}         // Signal to stop sender goroutine
 	// In 1:1 model, agent_id = robot_id, so no separate robotIDs field needed
 
 	// Debug counters
@@ -284,7 +282,7 @@ func (h *RawQUICHandler) pingLoop() {
 			h.connMu.RLock()
 			agentIDs := make([]string, 0, len(h.connections))
 			for agentID, conn := range h.connections {
-				if conn != nil && conn.registered && !conn.useHeartbeatRtt.Load() {
+				if conn != nil && conn.registered {
 					agentIDs = append(agentIDs, agentID)
 				}
 			}
@@ -4101,18 +4099,31 @@ func (h *RawQUICHandler) handleHeartbeat(agentConn *agentConnection, hb *AgentHe
 	if err := h.repo.UpdateAgentLastSeen(agentConn.agentID); err != nil {
 		log.Printf("[RawQUIC] Failed to update agent last_seen for %s: %v", agentConn.agentID, err)
 	}
-	if hb.HasNetworkLatencyUs {
+
+	// Heartbeat-latency values are optional and can be computed differently
+	// across agent versions. Prefer ping/pong RTT when it is fresh, and use
+	// heartbeat latency only as a fallback when ping data is stale/unavailable.
+	acceptHeartbeatLatency := true
+	pingWindow := h.pingInterval
+	if pingWindow <= 0 {
+		pingWindow = time.Second
+	}
+	if status, ok := h.stateManager.GetAgentStatus(agentConn.agentID); ok && !status.LastPing.IsZero() {
+		if time.Since(status.LastPing) <= 2*pingWindow {
+			acceptHeartbeatLatency = false
+		}
+	}
+
+	if acceptHeartbeatLatency && hb.HasNetworkLatencyUs {
 		latency := time.Duration(hb.NetworkLatencyUs) * time.Microsecond
 		if err := h.stateManager.UpdateAgentPing(agentConn.agentID, latency); err != nil {
 			log.Printf("[RawQUIC] Failed to update agent network latency for %s: %v", agentConn.agentID, err)
 		}
-		agentConn.useHeartbeatRtt.Store(true)
-	} else if hb.HasNetworkLatency {
+	} else if acceptHeartbeatLatency && hb.HasNetworkLatency {
 		latency := time.Duration(hb.NetworkLatencyMs) * time.Millisecond
 		if err := h.stateManager.UpdateAgentPing(agentConn.agentID, latency); err != nil {
 			log.Printf("[RawQUIC] Failed to update agent network latency for %s: %v", agentConn.agentID, err)
 		}
-		agentConn.useHeartbeatRtt.Store(true)
 	}
 
 	// Update agent state (1:1 model: agent_id = robot_id)
@@ -4898,9 +4909,6 @@ func (h *RawQUICHandler) handleConfigUpdateAck(ack *ConfigUpdateAckMsg) {
 
 // handlePong processes pong response for latency measurement
 func (h *RawQUICHandler) handlePong(agentConn *agentConnection, pong *PongResponseMsg) {
-	if agentConn.useHeartbeatRtt.Load() {
-		return
-	}
 	latencyMs := time.Now().UnixMilli() - pong.ServerTimestampMs
 	if latencyMs < 0 {
 		latencyMs = 0
