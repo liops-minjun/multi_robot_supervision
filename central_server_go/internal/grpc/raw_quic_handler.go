@@ -4100,31 +4100,10 @@ func (h *RawQUICHandler) handleHeartbeat(agentConn *agentConnection, hb *AgentHe
 		log.Printf("[RawQUIC] Failed to update agent last_seen for %s: %v", agentConn.agentID, err)
 	}
 
-	// Heartbeat-latency values are optional and can be computed differently
-	// across agent versions. Prefer ping/pong RTT when it is fresh, and use
-	// heartbeat latency only as a fallback when ping data is stale/unavailable.
-	acceptHeartbeatLatency := true
-	pingWindow := h.pingInterval
-	if pingWindow <= 0 {
-		pingWindow = time.Second
-	}
-	if status, ok := h.stateManager.GetAgentStatus(agentConn.agentID); ok && !status.LastPing.IsZero() {
-		if time.Since(status.LastPing) <= 2*pingWindow {
-			acceptHeartbeatLatency = false
-		}
-	}
-
-	if acceptHeartbeatLatency && hb.HasNetworkLatencyUs {
-		latency := time.Duration(hb.NetworkLatencyUs) * time.Microsecond
-		if err := h.stateManager.UpdateAgentPing(agentConn.agentID, latency); err != nil {
-			log.Printf("[RawQUIC] Failed to update agent network latency for %s: %v", agentConn.agentID, err)
-		}
-	} else if acceptHeartbeatLatency && hb.HasNetworkLatency {
-		latency := time.Duration(hb.NetworkLatencyMs) * time.Millisecond
-		if err := h.stateManager.UpdateAgentPing(agentConn.agentID, latency); err != nil {
-			log.Printf("[RawQUIC] Failed to update agent network latency for %s: %v", agentConn.agentID, err)
-		}
-	}
+	// IMPORTANT:
+	// Network latency is measured exclusively via server-initiated ping/pong
+	// (see handlePong). Heartbeat-reported latency fields are intentionally
+	// ignored to avoid drift/sawtooth artifacts from agent-side calculations.
 
 	// Update agent state (1:1 model: agent_id = robot_id)
 	// State is now sent as a string directly from the agent
