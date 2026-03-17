@@ -1,5 +1,5 @@
-import { memo, useCallback, useEffect } from 'react'
-import { Code, Radio, Crosshair, Plus, Trash2 } from 'lucide-react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { Code, Radio, Crosshair, X, ChevronDown, ChevronUp, Lock } from 'lucide-react'
 import PoseEditor from './PoseEditor'
 import JointArrayEditor from './JointArrayEditor'
 import TelemetryPreview from './TelemetryPreview'
@@ -1163,6 +1163,20 @@ const TwistEditor = memo(({
   )
 })
 
+const FIXED_JOINT_ORDER = [
+  'shoulder_pan_joint',
+  'shoulder_lift_joint',
+  'elbow_joint',
+  'wrist_1_joint',
+  'wrist_2_joint',
+  'wrist_3_joint',
+] as const
+
+type AngleUnit = 'rad' | 'deg'
+
+const RAD_TO_DEG = 180 / Math.PI
+const DEG_TO_RAD = Math.PI / 180
+
 // JointState Editor for sensor_msgs/msg/JointState
 const JointStateEditor = memo(({
   value,
@@ -1202,9 +1216,29 @@ const JointStateEditor = memo(({
     )
   }
 
+  const [angleUnit, setAngleUnit] = useState<AngleUnit>('rad')
+  const [isLivePanelOpen, setIsLivePanelOpen] = useState(true)
+
   // Get live joint state from telemetry
   const liveJointState = robotTelemetry?.joint_state
-  const hasLiveTelemetry = !!(liveJointState?.name && liveJointState.name.length > 0)
+  const liveJointMap = useMemo(() => {
+    const map = new Map<string, number>()
+    if (!liveJointState?.name || !liveJointState?.position) return map
+
+    liveJointState.name.forEach((jointName, idx) => {
+      const position = liveJointState.position[idx]
+      if (typeof position === 'number' && Number.isFinite(position)) {
+        map.set(jointName, position)
+      }
+    })
+    return map
+  }, [liveJointState])
+
+  const orderedLiveJoints = useMemo(
+    () => FIXED_JOINT_ORDER.map((jointName) => ({ name: jointName, position: liveJointMap.get(jointName) })),
+    [liveJointMap],
+  )
+  const hasLiveTelemetry = orderedLiveJoints.some((joint) => joint.position !== undefined)
 
   // Current value as JointState
   const jointStateValue = value as {
@@ -1214,83 +1248,98 @@ const JointStateEditor = memo(({
     effort?: number[]
   } | null
 
-  const jointNames = jointStateValue?.name ?? []
-  const jointPositions = jointStateValue?.position ?? []
-  const hasValue = jointNames.length > 0
+  const jointNameToPosition = useMemo(() => {
+    const map = new Map<string, number>()
+    const names = jointStateValue?.name ?? []
+    const positions = jointStateValue?.position ?? []
 
-  const normalizeCurrentJointState = useCallback(() => {
-    const names = [...jointNames]
-    const positions = [...jointPositions]
-    const maxLen = Math.max(names.length, positions.length)
+    names.forEach((jointName, idx) => {
+      const position = positions[idx]
+      if (typeof position === 'number' && Number.isFinite(position)) {
+        map.set(jointName, position)
+      }
+    })
 
-    while (names.length < maxLen) names.push(`joint_${names.length + 1}`)
-    while (positions.length < maxLen) positions.push(0)
+    return map
+  }, [jointStateValue])
 
-    return { name: names, position: positions }
-  }, [jointNames, jointPositions])
+  const jointNames = useMemo(() => [...FIXED_JOINT_ORDER], [])
+  const jointPositions = useMemo(
+    () => jointNames.map((jointName) => jointNameToPosition.get(jointName) ?? 0),
+    [jointNameToPosition, jointNames],
+  )
+  const hasValue = (jointStateValue?.name?.length ?? 0) > 0 || (jointStateValue?.position?.length ?? 0) > 0
+
+  const formatAngle = useCallback((radians: number | undefined) => {
+    if (radians === undefined || Number.isNaN(radians)) return '-'
+    const display = angleUnit === 'deg' ? radians * RAD_TO_DEG : radians
+    return display.toFixed(angleUnit === 'deg' ? 2 : 4)
+  }, [angleUnit])
 
   // Capture current telemetry (only name and position - what planners actually use)
   const handleCapture = useCallback(() => {
-    if (!liveJointState) return
+    if (!hasLiveTelemetry) return
     // Only capture name and position - velocity/effort are rarely needed for goal
     onChange({
-      name: [...liveJointState.name],
-      position: [...liveJointState.position],
+      name: [...FIXED_JOINT_ORDER],
+      position: FIXED_JOINT_ORDER.map((jointName) => liveJointMap.get(jointName) ?? 0),
     })
-  }, [liveJointState, onChange])
+  }, [hasLiveTelemetry, liveJointMap, onChange])
 
   const startManualInput = useCallback(() => {
     if (hasValue) return
     onChange({
-      name: ['joint_1'],
-      position: [0],
+      name: [...FIXED_JOINT_ORDER],
+      position: FIXED_JOINT_ORDER.map(() => 0),
     })
   }, [hasValue, onChange])
 
-  const addManualJoint = useCallback(() => {
-    const current = normalizeCurrentJointState()
-    const nextIndex = current.name.length + 1
+  const updateManualJointPosition = useCallback((index: number, nextDisplayPosition: number) => {
+    const next = [...jointPositions]
+    const nextPosition = angleUnit === 'deg'
+      ? nextDisplayPosition * DEG_TO_RAD
+      : nextDisplayPosition
+    next[index] = Number.isFinite(nextPosition) ? nextPosition : 0
     onChange({
-      ...current,
-      name: [...current.name, `joint_${nextIndex}`],
-      position: [...current.position, 0],
-    })
-  }, [normalizeCurrentJointState, onChange])
-
-  const removeManualJoint = useCallback((index: number) => {
-    const current = normalizeCurrentJointState()
-    onChange({
-      ...current,
-      name: current.name.filter((_, i) => i !== index),
-      position: current.position.filter((_, i) => i !== index),
-    })
-  }, [normalizeCurrentJointState, onChange])
-
-  const updateManualJointName = useCallback((index: number, nextName: string) => {
-    const current = normalizeCurrentJointState()
-    const next = [...current.name]
-    next[index] = nextName
-    onChange({
-      ...current,
-      name: next,
-    })
-  }, [normalizeCurrentJointState, onChange])
-
-  const updateManualJointPosition = useCallback((index: number, nextPosition: number) => {
-    const current = normalizeCurrentJointState()
-    const next = [...current.position]
-    next[index] = nextPosition
-    onChange({
-      ...current,
+      name: [...FIXED_JOINT_ORDER],
       position: next,
     })
-  }, [normalizeCurrentJointState, onChange])
+  }, [angleUnit, jointPositions, onChange])
+
+  const displayJointPositions = useMemo(
+    () => jointPositions.map((position) => (angleUnit === 'deg' ? position * RAD_TO_DEG : position)),
+    [angleUnit, jointPositions],
+  )
 
   // Check if there are any steps with result fields (for enabling binding)
   const hasBindableSteps = availableSteps?.some(s => s.resultFields && s.resultFields.length > 0) || false
 
   return (
     <div className="space-y-2">
+      <div className="flex items-center justify-end gap-1">
+        <span className="text-[9px] text-muted mr-1">표시 단위</span>
+        <button
+          onClick={(e) => { e.stopPropagation(); setAngleUnit('rad') }}
+          className={`px-1.5 py-0.5 rounded text-[9px] font-medium border transition-colors ${
+            angleUnit === 'rad'
+              ? 'bg-cyan-500/25 border-cyan-500/50 text-cyan-300'
+              : 'bg-gray-800/50 border-gray-700 text-muted hover:text-primary'
+          }`}
+        >
+          rad
+        </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); setAngleUnit('deg') }}
+          className={`px-1.5 py-0.5 rounded text-[9px] font-medium border transition-colors ${
+            angleUnit === 'deg'
+              ? 'bg-cyan-500/25 border-cyan-500/50 text-cyan-300'
+              : 'bg-gray-800/50 border-gray-700 text-muted hover:text-primary'
+          }`}
+        >
+          deg
+        </button>
+      </div>
+
       {/* Live Telemetry Preview */}
       {hasLiveTelemetry ? (
         <div className="p-2 bg-green-500/10 rounded border border-green-500/30">
@@ -1298,29 +1347,50 @@ const JointStateEditor = memo(({
             <div className="flex items-center gap-2">
               <Radio className="w-3 h-3 text-green-400 animate-pulse" />
               <span className="text-[9px] text-green-400 font-medium">LIVE JointState</span>
-              <span className="text-[8px] text-muted">({liveJointState!.name.length}개 관절)</span>
+              <span className="text-[8px] text-muted">({orderedLiveJoints.length}개 관절)</span>
             </div>
+            <button
+              onClick={(e) => { e.stopPropagation(); setIsLivePanelOpen((prev) => !prev) }}
+              className="px-1.5 py-0.5 text-[8px] text-green-300 hover:text-green-200 border border-green-500/40 rounded flex items-center gap-1"
+              title={isLivePanelOpen ? '라이브 창 접기' : '라이브 창 펼치기'}
+            >
+              {isLivePanelOpen ? (
+                <>
+                  접기
+                  <ChevronUp size={10} />
+                </>
+              ) : (
+                <>
+                  펼치기
+                  <ChevronDown size={10} />
+                </>
+              )}
+            </button>
           </div>
-          {/* Simplified view - only name and position (what planners need) */}
-          <div className="max-h-28 overflow-y-auto mb-2">
-            <div className="grid grid-cols-2 gap-2 text-[8px] text-muted font-semibold mb-1 px-1">
-              <span>Joint Name</span>
-              <span>Position (rad)</span>
-            </div>
-            {liveJointState!.name.map((name, idx) => (
-              <div key={name} className="grid grid-cols-2 gap-2 text-[9px] font-mono py-0.5 px-1 hover:bg-green-500/10 rounded">
-                <span className="text-primary truncate" title={name}>{name}</span>
-                <span className="text-cyan-400">{liveJointState!.position[idx]?.toFixed(4)}</span>
+          {isLivePanelOpen && (
+            <>
+              {/* Simplified view - only name and position (what planners need) */}
+              <div className="max-h-44 overflow-y-auto mb-2">
+                <div className="grid grid-cols-2 gap-2 text-[8px] text-muted font-semibold mb-1 px-1">
+                  <span>Joint Name</span>
+                  <span>Position ({angleUnit})</span>
+                </div>
+                {orderedLiveJoints.map((joint) => (
+                  <div key={joint.name} className="grid grid-cols-2 gap-2 text-[9px] font-mono py-0.5 px-1 hover:bg-green-500/10 rounded">
+                    <span className="text-primary truncate" title={joint.name}>{joint.name}</span>
+                    <span className="text-cyan-400">{formatAngle(joint.position)}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          <button
-            onClick={(e) => { e.stopPropagation(); handleCapture() }}
-            className="w-full py-2.5 bg-green-500/30 hover:bg-green-500/50 text-green-300 rounded text-[11px] font-bold flex items-center justify-center gap-2 transition-all"
-          >
-            <Crosshair size={14} />
-            현재 자세 캡처 ({liveJointState!.name.length}개 관절)
-          </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); handleCapture() }}
+                className="w-full py-2.5 bg-green-500/30 hover:bg-green-500/50 text-green-300 rounded text-[11px] font-bold flex items-center justify-center gap-2 transition-all"
+              >
+                <Crosshair size={14} />
+                현재 자세 캡처 ({orderedLiveJoints.length}개 관절)
+              </button>
+            </>
+          )}
         </div>
       ) : (
         <div className="p-3 bg-gray-800/50 rounded border border-gray-700/50">
@@ -1336,64 +1406,50 @@ const JointStateEditor = memo(({
       {hasValue ? (
         <div className="p-2 bg-amber-500/10 rounded border border-amber-500/30">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] text-amber-400 font-medium">저장된 값 (수동 수정 가능)</span>
-            <span className="text-[9px] text-amber-300">{jointNames.length}개 관절</span>
+            <span className="text-[10px] text-amber-400 font-medium">저장된 값 (Position만 수정 가능)</span>
+            <div className="flex items-center gap-2">
+              <span className="text-[9px] text-amber-300">{jointNames.length}개 관절</span>
+              <button
+                onClick={(e) => { e.stopPropagation(); onChange(null) }}
+                className="p-1 text-muted hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+                title="입력 닫기"
+              >
+                <X size={11} />
+              </button>
+            </div>
           </div>
-          <div className="max-h-40 overflow-y-auto bg-sunken rounded p-1.5">
-            <div className="grid grid-cols-[1fr_1fr_auto] gap-2 text-[8px] text-muted font-semibold mb-1">
+          <div className="text-[8px] text-muted mb-1">Joint 이름은 고정이며 수정할 수 없습니다.</div>
+          <div className="max-h-52 overflow-y-auto bg-sunken rounded p-1.5">
+            <div className="grid grid-cols-2 gap-2 text-[8px] text-muted font-semibold mb-1">
               <span>Joint</span>
-              <span>Position (rad)</span>
-              <span />
+              <span>Position ({angleUnit})</span>
             </div>
             {jointNames.map((name, idx) => (
-              <div key={`joint-row-${idx}`} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center py-0.5">
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => { e.stopPropagation(); updateManualJointName(idx, e.target.value) }}
-                  onClick={(e) => e.stopPropagation()}
-                  className="px-1.5 py-1 bg-elevated border border-primary rounded text-[9px] text-primary font-mono focus:outline-none focus:border-amber-500"
-                />
+              <div key={`joint-row-${idx}`} className="grid grid-cols-2 gap-2 items-center py-0.5">
+                <div
+                  className="px-1.5 py-1 bg-gray-800/40 border border-gray-600/50 rounded text-[9px] text-muted font-mono flex items-center gap-1.5 select-none cursor-default"
+                  title={`${name} (고정)`}
+                >
+                  <Lock size={9} className="text-muted opacity-70 shrink-0" />
+                  <span className="truncate">{name}</span>
+                </div>
                 <input
                   type="number"
-                  value={jointPositions[idx] ?? 0}
+                  value={displayJointPositions[idx] ?? 0}
                   onChange={(e) => { e.stopPropagation(); updateManualJointPosition(idx, parseFloat(e.target.value) || 0) }}
                   onClick={(e) => e.stopPropagation()}
                   className="px-1.5 py-1 bg-elevated border border-primary rounded text-[9px] text-amber-300 font-mono focus:outline-none focus:border-amber-500"
-                  step="0.001"
+                  step={angleUnit === 'deg' ? '0.1' : '0.001'}
                 />
-                <button
-                  onClick={(e) => { e.stopPropagation(); removeManualJoint(idx) }}
-                  className="p-1 text-muted hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
-                  title="관절 삭제"
-                >
-                  <Trash2 size={11} />
-                </button>
               </div>
             ))}
-          </div>
-          <div className="flex items-center gap-2 mt-2">
-            <button
-              onClick={(e) => { e.stopPropagation(); addManualJoint() }}
-              className="flex-1 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 rounded text-[9px] text-amber-300 flex items-center justify-center gap-1"
-            >
-              <Plus size={11} />
-              관절 추가
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); onChange(null) }}
-              className="flex-1 py-1.5 text-[9px] text-muted hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
-            >
-              값 초기화
-            </button>
           </div>
         </div>
       ) : (
         <button
           onClick={(e) => { e.stopPropagation(); startManualInput() }}
-          className="w-full py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded text-[10px] text-amber-300 flex items-center justify-center gap-1"
+          className="w-full py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded text-[10px] text-amber-300"
         >
-          <Plus size={12} />
           수동 입력 시작
         </button>
       )}
