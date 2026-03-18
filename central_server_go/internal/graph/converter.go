@@ -209,11 +209,20 @@ func extractEdges(step *db.BehaviorTreeStep) []Edge {
 	}
 
 	hasOutcomes := len(step.Transition.OnOutcomes) > 0
+	hasSuccessOutcome := false
+	hasFailureLikeOutcome := false
 
 	if hasOutcomes {
 		for _, transition := range step.Transition.OnOutcomes {
 			if transition.Next == "" {
 				continue
+			}
+			outcome := strings.ToLower(strings.TrimSpace(transition.Outcome))
+			switch outcome {
+			case "success", "succeeded", "done":
+				hasSuccessOutcome = true
+			default:
+				hasFailureLikeOutcome = true
 			}
 			condition := encodeOutcomeCondition(transition.Outcome, transition.State)
 			edges = append(edges, Edge{
@@ -228,7 +237,7 @@ func extractEdges(step *db.BehaviorTreeStep) []Edge {
 	}
 
 	// On success
-	if !hasOutcomes && step.Transition.OnSuccess != nil {
+	if (!hasOutcomes || !hasSuccessOutcome) && step.Transition.OnSuccess != nil {
 		switch v := step.Transition.OnSuccess.(type) {
 		case string:
 			edges = append(edges, Edge{
@@ -248,7 +257,7 @@ func extractEdges(step *db.BehaviorTreeStep) []Edge {
 	}
 
 	// On failure
-	if !hasOutcomes && step.Transition.OnFailure != nil {
+	if (!hasOutcomes || !hasFailureLikeOutcome) && step.Transition.OnFailure != nil {
 		switch v := step.Transition.OnFailure.(type) {
 		case string:
 			edges = append(edges, Edge{

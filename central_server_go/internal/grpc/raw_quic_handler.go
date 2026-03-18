@@ -2245,6 +2245,9 @@ func (h *RawQUICHandler) buildDeployGraphMessage(correlationID string, graphJSON
 			Condition string `json:"condition"`
 			Config    *struct {
 				Condition string `json:"condition"`
+				Retry     int    `json:"retry"`
+				Fallback  string `json:"fallback"`
+				BackoffMs int    `json:"backoff_ms"`
 			} `json:"config"`
 		} `json:"edges"`
 		EntryPoint string `json:"entry_point"`
@@ -2302,6 +2305,34 @@ func (h *RawQUICHandler) buildDeployGraphMessage(correlationID string, graphJSON
 		condition := strings.TrimSpace(e.Condition)
 		if condition == "" && e.Config != nil {
 			condition = strings.TrimSpace(e.Config.Condition)
+		}
+		// Retry block metadata transfer:
+		// Graph proto Edge currently has only `condition` as extra field.
+		// Encode retry/backoff/fallback on on_failure edges into condition JSON
+		// so agent can apply retry semantics at runtime.
+		if strings.EqualFold(strings.TrimSpace(e.Type), "on_failure") && e.Config != nil {
+			retry := e.Config.Retry
+			backoffMs := e.Config.BackoffMs
+			fallback := strings.TrimSpace(e.Config.Fallback)
+			if retry > 0 || backoffMs > 0 || fallback != "" {
+				payload := map[string]interface{}{
+					"retry": retry,
+				}
+				if backoffMs > 0 {
+					payload["backoff_ms"] = backoffMs
+				}
+				if fallback != "" {
+					payload["fallback"] = fallback
+				} else if strings.TrimSpace(e.To) != "" {
+					payload["fallback"] = strings.TrimSpace(e.To)
+				}
+				if encoded, err := json.Marshal(payload); err == nil {
+					condition = string(encoded)
+				} else {
+					log.Printf("[RawQUIC] Warning: failed to encode retry edge config for %s->%s: %v",
+						e.From, e.To, err)
+				}
+			}
 		}
 		edgeMsg := h.buildEdgeMessage(e.From, e.To, e.Type, condition)
 		graphMsg = protowire.AppendTag(graphMsg, 4, protowire.BytesType)

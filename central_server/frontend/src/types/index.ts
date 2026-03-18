@@ -719,9 +719,21 @@ export interface WaitFor {
   timeout_sec?: number
 }
 
+export interface RetryNodeUIPosition {
+  x?: number
+  y?: number
+}
+
+export interface TransitionOnFailureConfig {
+  retry?: number
+  fallback?: string
+  backoff_ms?: number
+  ui?: RetryNodeUIPosition
+}
+
 export interface Transition {
   on_success?: string | TransitionCondition
-  on_failure?: string | { retry?: number; fallback?: string; backoff_ms?: number }
+  on_failure?: string | TransitionOnFailureConfig
   on_confirm?: string
   on_cancel?: string
   on_timeout?: string

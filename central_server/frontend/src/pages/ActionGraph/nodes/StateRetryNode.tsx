@@ -11,6 +11,12 @@ interface StateRetryNodeData {
   isEditing?: boolean
 }
 
+const PORT_TOP = {
+  out: '68%',
+  input: '68%',
+  failed: '84%',
+} as const
+
 const StateRetryNode = memo(({ id, data, selected }: NodeProps<StateRetryNodeData>) => {
   const { setNodes, setEdges } = useReactFlow()
   const isEditing = data.isEditing ?? true
@@ -34,21 +40,13 @@ const StateRetryNode = memo(({ id, data, selected }: NodeProps<StateRetryNodeDat
     <div
       draggable={false}
       className={`
-        relative min-w-[230px] rounded-lg overflow-visible
+        relative w-[180px] min-h-[160px] rounded-lg overflow-visible
         bg-surface border-2 shadow-lg
         ${selected ? 'border-white/60 shadow-xl' : 'border-primary'}
         transition-all duration-150
       `}
       style={{ borderColor: selected ? 'white' : color }}
     >
-      <Handle
-        type="target"
-        position={Position.Left}
-        id="state-in"
-        className="!w-4 !h-4 !border-2 !rounded-full hover:!w-5 hover:!h-5 transition-all cursor-crosshair"
-        style={{ backgroundColor: color, borderColor: `${color}99`, left: -8, pointerEvents: 'all' }}
-      />
-
       <div
         className="px-3 py-2 border-b border-primary/60 flex items-center justify-between gap-2"
         style={{ backgroundColor: `${color}25` }}
@@ -72,50 +70,78 @@ const StateRetryNode = memo(({ id, data, selected }: NodeProps<StateRetryNodeDat
         )}
       </div>
 
-      <div className="px-3 py-3 space-y-2">
-        <label className="block text-[10px] text-muted uppercase tracking-wider">
-          max_retries
-          <input
-            type="number"
-            min={0}
-            step={1}
-            value={maxRetries}
-            disabled={!isEditing}
-            onChange={(e) => {
-              e.stopPropagation()
-              const next = Math.max(0, Number(e.target.value || 0))
-              updateData('maxRetries', next)
-            }}
-            onClick={(e) => e.stopPropagation()}
-            className="mt-1 w-full rounded border border-primary/60 bg-base px-2 py-1 text-xs text-primary outline-none focus:border-white disabled:opacity-70"
-          />
-        </label>
+      <div className="px-2 py-2">
+        <div className="grid grid-cols-2 gap-2">
+          <label className="block text-[10px] text-muted uppercase tracking-wider">
+            max_retries
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={maxRetries}
+              disabled={!isEditing}
+              onChange={(e) => {
+                e.stopPropagation()
+                const next = Math.max(0, Number(e.target.value || 0))
+                updateData('maxRetries', next)
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className="mt-1 w-full rounded border border-primary/60 bg-base px-1.5 py-1 text-[11px] text-primary outline-none focus:border-white disabled:opacity-70"
+            />
+          </label>
 
-        <label className="block text-[10px] text-muted uppercase tracking-wider">
-          backoff_ms
-          <input
-            type="number"
-            min={0}
-            step={100}
-            value={backoffMs}
-            disabled={!isEditing}
-            onChange={(e) => {
-              e.stopPropagation()
-              const next = Math.max(0, Number(e.target.value || 0))
-              updateData('backoffMs', next)
-            }}
-            onClick={(e) => e.stopPropagation()}
-            className="mt-1 w-full rounded border border-primary/60 bg-base px-2 py-1 text-xs text-primary outline-none focus:border-white disabled:opacity-70"
-          />
-        </label>
+          <label className="block text-[10px] text-muted uppercase tracking-wider">
+            backoff_ms
+            <input
+              type="number"
+              min={0}
+              step={100}
+              value={backoffMs}
+              disabled={!isEditing}
+              onChange={(e) => {
+                e.stopPropagation()
+                const next = Math.max(0, Number(e.target.value || 0))
+                updateData('backoffMs', next)
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className="mt-1 w-full rounded border border-primary/60 bg-base px-1.5 py-1 text-[11px] text-primary outline-none focus:border-white disabled:opacity-70"
+            />
+          </label>
+        </div>
+      </div>
+
+      <div className="pointer-events-none absolute left-2 -translate-y-1/2 rounded bg-base/90 px-1.5 py-0.5 text-[10px] font-medium text-amber-300" style={{ top: PORT_TOP.out }}>
+        out
+      </div>
+      <div className="pointer-events-none absolute right-2 -translate-y-1/2 rounded bg-base/90 px-1.5 py-0.5 text-[10px] font-medium text-cyan-300" style={{ top: PORT_TOP.input }}>
+        in
+      </div>
+      <div className="pointer-events-none absolute right-2 -translate-y-1/2 rounded bg-base/90 px-1.5 py-0.5 text-[10px] font-medium text-red-300" style={{ top: PORT_TOP.failed }}>
+        failed
       </div>
 
       <Handle
         type="source"
-        position={Position.Right}
-        id="state-out"
+        position={Position.Left}
+        id="retry-out"
         className="!w-4 !h-4 !border-2 !rounded-full hover:!w-5 hover:!h-5 transition-all cursor-crosshair"
-        style={{ backgroundColor: color, borderColor: `${color}99`, right: -8, pointerEvents: 'all' }}
+        style={{ backgroundColor: color, borderColor: `${color}99`, left: -8, top: PORT_TOP.out, pointerEvents: 'all' }}
+      />
+
+      <Handle
+        type="target"
+        position={Position.Right}
+        id="retry-in"
+        className="!w-4 !h-4 !border-2 !rounded-full hover:!w-5 hover:!h-5 transition-all cursor-crosshair"
+        style={{ backgroundColor: '#22d3ee', borderColor: '#67e8f9', right: -8, top: PORT_TOP.input, pointerEvents: 'all' }}
+      />
+
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="retry-failed"
+        className="!w-4 !h-4 !border-2 !rounded-full hover:!w-5 hover:!h-5 transition-all cursor-crosshair"
+        style={{ backgroundColor: '#ef4444', borderColor: '#fca5a5', right: -8, top: PORT_TOP.failed, pointerEvents: 'all' }}
       />
     </div>
   )

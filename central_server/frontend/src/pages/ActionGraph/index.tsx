@@ -30,7 +30,7 @@ import { useUserStore } from '../../stores/userStore'
 import type {
   ActionGraph, StateDefinition, ActionMapping,
   AssignmentInfo, TemplateListItem,
-  EndStateConfig, ActionOutcome, OutcomeTransition, LifecycleState,
+  EndStateConfig, ActionOutcome, OutcomeTransition, LifecycleState, TransitionOnFailureConfig,
   PlanningEffect, PlanningTaskSpec,
   TaskDistributor, TaskDistributorState, TaskDistributorResource
 } from '../../types'
@@ -1358,14 +1358,7 @@ function ActionGraphEditor() {
           label: 'End (Error)',
           color: '#ef4444',
           isDraggable: true,
-        },
-        {
-          type: 'event',
-          subtype: 'Warning',
-          label: 'End (Warning)',
-          color: '#f59e0b',
-          isDraggable: true,
-        },
+        }
       ],
     })
 
@@ -1764,11 +1757,34 @@ function ActionGraphEditor() {
         .filter((node) => node.type === 'retry')
         .map((node) => [node.id, node] as const)
     )
-    const retryFallbackEdges = new Map<string, Edge | undefined>()
-    retryNodes.forEach((_, retryNodeId) => {
-      const fallbackEdge = edges.find(edge => edge.source === retryNodeId)
-      retryFallbackEdges.set(retryNodeId, fallbackEdge)
-    })
+    const resolveRetryEdge = (retryNodeId: string, sourceStepId: string) => {
+      const outgoing = edges.filter(edge => edge.source === retryNodeId)
+      const retryOutEdge = outgoing.find(edge =>
+        (edge.sourceHandle === 'retry-out' || edge.sourceHandle === 'state-out') &&
+        edge.target === sourceStepId
+      )
+      const failedFallbackEdge = outgoing.find(edge => edge.sourceHandle === 'retry-failed')
+      const warningFallbackEdge = outgoing.find(edge => edge.sourceHandle === 'retry-warning')
+      const legacyFallbackEdge = outgoing.find(edge =>
+        (!edge.sourceHandle || edge.sourceHandle === 'state-out') &&
+        edge.id !== retryOutEdge?.id &&
+        edge.target !== sourceStepId
+      )
+
+      if (failedFallbackEdge?.target && warningFallbackEdge?.target && failedFallbackEdge.target !== warningFallbackEdge.target) {
+        console.warn(
+          `[RetryBlock] Both failed and warning fallback edges are connected on ${retryNodeId}. ` +
+          `Using failed fallback (${failedFallbackEdge.target}) first.`
+        )
+      }
+
+      const fallbackTarget =
+        failedFallbackEdge?.target ||
+        warningFallbackEdge?.target ||
+        legacyFallbackEdge?.target
+
+      return { fallbackTarget }
+    }
 
     nodes.forEach((node) => {
       if (node.type === 'event') {
@@ -1803,24 +1819,39 @@ function ActionGraphEditor() {
 
       const outgoingEdges = edges.filter(e => e.source === node.id)
       const outcomeTransitions: OutcomeTransition[] = []
-      let failureRetryConfig: { retry: number; backoff_ms: number; fallback?: string } | undefined
+      let failureRetryConfig: { retry: number; backoff_ms: number; fallback?: string; ui?: { x?: number; y?: number } } | undefined
 
       const resolveRetryTarget = (edge: Edge) => {
         const retryNode = retryNodes.get(edge.target)
         if (!retryNode) {
-          return { target: edge.target as string, retryConfig: undefined as undefined | { retry: number; backoff_ms: number; fallback?: string } }
+          return {
+            target: edge.target as string,
+            retryConfig: undefined as undefined | { retry: number; backoff_ms: number; fallback?: string; ui?: { x?: number; y?: number } },
+          }
         }
 
         const maxRetries = Math.max(0, Number((retryNode.data as any)?.maxRetries ?? 0))
         const backoffMs = Math.max(0, Number((retryNode.data as any)?.backoffMs ?? 0))
-        const fallbackEdge = retryFallbackEdges.get(retryNode.id)
-        const fallbackTarget = fallbackEdge?.target
+        const { fallbackTarget } = resolveRetryEdge(retryNode.id, node.id)
+        const retryPosition = retryNode.position || { x: 0, y: 0 }
+
+        if (!fallbackTarget) {
+          console.warn(
+            `[RetryBlock] No fallback connected for retry block ${retryNode.id}. ` +
+            `After retries exhausted, step may fail terminally.`
+          )
+        }
+
         return {
           target: fallbackTarget,
           retryConfig: {
             retry: maxRetries,
             backoff_ms: backoffMs,
             fallback: fallbackTarget,
+            ui: {
+              x: Number.isFinite(retryPosition.x) ? Number(retryPosition.x) : undefined,
+              y: Number.isFinite(retryPosition.y) ? Number(retryPosition.y) : undefined,
+            },
           },
         }
       }
@@ -1849,12 +1880,13 @@ function ActionGraphEditor() {
 
       const fallbackSuccess = outcomeTransitions.find(t => t.outcome === 'success')
       const fallbackFailure = outcomeTransitions.find(t => t.outcome !== 'success')
-      const resolvedOnFailure: string | { retry?: number; fallback?: string; backoff_ms?: number } | undefined =
+      const resolvedOnFailure: string | TransitionOnFailureConfig | undefined =
         failureRetryConfig
           ? {
               retry: failureRetryConfig.retry,
               backoff_ms: failureRetryConfig.backoff_ms,
               fallback: failureRetryConfig.fallback || fallbackFailure?.next,
+              ui: failureRetryConfig.ui,
             }
           : fallbackFailure?.next
 
@@ -2269,7 +2301,11 @@ function ActionGraphEditor() {
 
       // Get target node to determine correct target handle
       const targetNode = nodes.find(node => node.id === params.target)
-      const targetHandleId = params.targetHandle || (targetNode?.type === 'action' ? 'in' : 'state-in')
+      const targetHandleId = params.targetHandle || (
+        targetNode?.type === 'action'
+          ? 'in'
+          : (targetNode?.type === 'retry' ? 'retry-in' : 'state-in')
+      )
 
       if (params.source === START_NODE_ID) {
         const color = START_NODE_COLOR
@@ -2298,10 +2334,24 @@ function ActionGraphEditor() {
 
       // If no sourceHandle specified, try to find a default (first success outcome)
       let sourceHandleId = params.sourceHandle
-      if (!sourceHandleId && endStates && endStates.length > 0) {
-        // Default to first end state (usually success)
-        sourceHandleId = endStates[0].id
-        console.log('[onConnect] No sourceHandle, defaulting to:', sourceHandleId)
+      if (!sourceHandleId) {
+        if (sourceNode?.type === 'retry') {
+          sourceHandleId = 'retry-out'
+        } else if (endStates && endStates.length > 0) {
+          // When connecting to retry, prefer the first failure-class end state.
+          // Retry semantics are currently compiled into transition.on_failure only.
+          if (targetNode?.type === 'retry') {
+            const failureEndState = endStates.find((endState, index) => {
+              const inferred = normalizeOutcome(endState.outcome) || inferOutcome(endState, index)
+              return outcomeCategory(inferred) === 'failure'
+            })
+            sourceHandleId = failureEndState?.id || endStates[0].id
+          } else {
+            // Default to first end state (usually success)
+            sourceHandleId = endStates[0].id
+          }
+          console.log('[onConnect] No sourceHandle, defaulting to:', sourceHandleId)
+        }
       }
 
       const matchedEndState = endStates?.find(es => es.id === sourceHandleId)
@@ -2309,8 +2359,20 @@ function ActionGraphEditor() {
         ? normalizeOutcome(matchedEndState.outcome) || inferOutcome(matchedEndState, 0)
         : undefined
 
+      if (targetNode?.type === 'retry' && outcome && outcomeCategory(outcome) === 'success') {
+        console.warn('[onConnect] Retry block only supports failure-class outcomes. Ignoring success->retry connection.')
+        return
+      }
+
+      const isRetrySource = sourceNode?.type === 'retry'
       const isSuccess = outcome === 'success'
-      const color = outcome ? OUTCOME_EDGE_COLORS[outcome] : '#22c55e'
+      const color = isRetrySource
+        ? (
+          sourceHandleId === 'retry-failed'
+            ? '#ef4444'
+            : '#f59e0b'
+        )
+        : (outcome ? OUTCOME_EDGE_COLORS[outcome] : '#22c55e')
 
       const newEdge = {
         ...params,
@@ -2325,7 +2387,7 @@ function ActionGraphEditor() {
         style: {
           stroke: color,
           strokeWidth: 2,
-          strokeDasharray: isSuccess ? undefined : '5,5',
+          strokeDasharray: (isRetrySource || !isSuccess) ? '5,5' : undefined,
         },
       }
       console.log('[onConnect] Creating edge:', newEdge)
@@ -2341,7 +2403,21 @@ function ActionGraphEditor() {
           return eds.filter(edge => !isSameConnection(edge))
         }
 
-        return addEdge(newEdge, eds)
+        let nextEdges = eds
+
+        // Retry node ports are single-connection ports (replace existing edge on reconnect)
+        if (sourceNode?.type === 'retry' && sourceHandleId) {
+          nextEdges = nextEdges.filter(
+            edge => !(edge.source === params.source && (edge.sourceHandle ?? null) === sourceHandleId)
+          )
+        }
+        if (targetNode?.type === 'retry' && targetHandleId) {
+          nextEdges = nextEdges.filter(
+            edge => !(edge.target === params.target && (edge.targetHandle ?? null) === targetHandleId)
+          )
+        }
+
+        return addEdge(newEdge, nextEdges)
       })
     },
     [nodes, setEdges]
@@ -3876,6 +3952,7 @@ function convertActionGraphToGraph(
 
   // Defensive: ensure steps is always an array
   const steps = actionGraph.steps || []
+  const stepByID = new Map(steps.map(step => [step.id, step] as const))
 
   const actionMappings = stateDef?.action_mappings || []
   const defaultState = availableStates.includes('idle') ? 'idle' : availableStates[0] || 'idle'
@@ -4020,6 +4097,11 @@ function convertActionGraphToGraph(
       typeof failureTransitionObj?.fallback === 'string'
         ? failureTransitionObj.fallback
         : (typeof failureTransitionObj?.next === 'string' ? failureTransitionObj.next : '')
+    const retryUi = failureTransitionObj?.ui && typeof failureTransitionObj.ui === 'object'
+      ? failureTransitionObj.ui as Record<string, unknown>
+      : undefined
+    const retryStoredX = typeof retryUi?.x === 'number' && Number.isFinite(retryUi.x) ? retryUi.x : undefined
+    const retryStoredY = typeof retryUi?.y === 'number' && Number.isFinite(retryUi.y) ? retryUi.y : undefined
     const hasRetryBlock = retryCount > 0 || retryBackoffMs > 0
     const retryNodeId = `${step.id}__retry`
     let retryInputEdgeAdded = false
@@ -4031,7 +4113,7 @@ function convertActionGraphToGraph(
         source: step.id,
         target: retryNodeId,
         sourceHandle,
-        targetHandle: 'state-in',
+        targetHandle: 'retry-in',
         type: 'smoothstep',
         markerEnd: { type: MarkerType.ArrowClosed, color: '#f59e0b' },
         style: { stroke: '#f59e0b', strokeWidth: 2, strokeDasharray: '5,5' },
@@ -4039,18 +4121,36 @@ function convertActionGraphToGraph(
       retryInputEdgeAdded = true
     }
 
+    const addRetryLoopEdge = () => {
+      if (!hasRetryBlock) return
+      edges.push({
+        id: `${retryNodeId}->${step.id}::retry`,
+        source: retryNodeId,
+        target: step.id,
+        sourceHandle: 'retry-out',
+        targetHandle: 'in',
+        type: 'smoothstep',
+        markerEnd: { type: MarkerType.ArrowClosed, color: '#f59e0b' },
+        style: { stroke: '#f59e0b', strokeWidth: 2, strokeDasharray: '5,5' },
+      })
+    }
+
     const addRetryFallbackEdge = () => {
       if (!hasRetryBlock || !retryFallbackTarget) return
       if (!stepIds.has(retryFallbackTarget)) return
+      if (retryFallbackTarget === step.id) return
+      const fallbackStep = stepByID.get(retryFallbackTarget)
+      const fallbackSubtype = fallbackStep ? terminalStepToEventSubtype(fallbackStep) : undefined
+      const edgeColor = fallbackSubtype === 'Warning' ? '#f59e0b' : '#ef4444'
       edges.push({
-        id: `${retryNodeId}->${retryFallbackTarget}`,
+        id: `${retryNodeId}->${retryFallbackTarget}::retry-failed`,
         source: retryNodeId,
         target: retryFallbackTarget,
-        sourceHandle: 'state-out',
+        sourceHandle: 'retry-failed',
         targetHandle: 'state-in',
         type: 'smoothstep',
-        markerEnd: { type: MarkerType.ArrowClosed, color: '#f59e0b' },
-        style: { stroke: '#f59e0b', strokeWidth: 2 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: edgeColor },
+        style: { stroke: edgeColor, strokeWidth: 2, strokeDasharray: '5,5' },
       })
     }
 
@@ -4058,7 +4158,7 @@ function convertActionGraphToGraph(
       nodes.push({
         id: retryNodeId,
         type: 'retry',
-        position: { x: x + 220, y: y + 100 },
+        position: { x: retryStoredX ?? (x + 180), y: retryStoredY ?? (y + 84) },
         data: {
           label: 'Retry Block',
           subtype: 'Retry',
@@ -4068,6 +4168,7 @@ function convertActionGraphToGraph(
           isEditing: false,
         },
       })
+      addRetryLoopEdge()
     }
 
     if (outcomeTransitions.length > 0) {
@@ -4106,6 +4207,13 @@ function convertActionGraphToGraph(
           },
         })
       })
+      if (hasRetryBlock && !retryInputEdgeAdded) {
+        const failureHandle = stepEndStates.find((endState, idx) => {
+          const inferred = normalizeOutcome(endState.outcome) || inferOutcome(endState, idx)
+          return outcomeCategory(inferred) === 'failure'
+        })?.id
+        addRetryInputEdge(failureHandle)
+      }
       addRetryFallbackEdge()
     } else if (step.transition?.on_success || step.transition?.on_failure) {
       const findOutcomeHandle = (desired: 'success' | 'failure') => {

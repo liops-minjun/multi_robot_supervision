@@ -696,13 +696,23 @@ func (s *Scheduler) ValidateCapabilities(behaviorTreeID, agentID string) (*Capab
 		return nil, fmt.Errorf("failed to get agent capabilities: %w", err)
 	}
 
+	normalizeServer := func(server string) string {
+		server = strings.TrimSpace(server)
+		return strings.TrimPrefix(server, "/")
+	}
+
 	// Build capability map for quick lookup
-	capMap := make(map[string]*db.AgentCapability)    // action_type -> capability
-	serverMap := make(map[string]*db.AgentCapability) // action_server -> capability
+	capMap := make(map[string]*db.AgentCapability)       // action_type -> capability
+	serverMap := make(map[string]*db.AgentCapability)    // action_server(raw) -> capability
+	serverNormMap := make(map[string]*db.AgentCapability) // action_server(normalized) -> capability
 	for i := range agentCaps {
 		cap := &agentCaps[i]
 		capMap[cap.ActionType] = cap
 		serverMap[cap.ActionServer] = cap
+		norm := normalizeServer(cap.ActionServer)
+		if norm != "" {
+			serverNormMap[norm] = cap
+		}
 	}
 
 	// Check each required capability
@@ -710,17 +720,30 @@ func (s *Scheduler) ValidateCapabilities(behaviorTreeID, agentID string) (*Capab
 	var unavailableServers []string
 
 	for actionType, actionServer := range requiredCapabilities {
-		// First check by action server (more specific)
+		// First check by action server (strict when explicitly provided by graph).
 		if actionServer != "" {
-			if cap, exists := serverMap[actionServer]; exists {
+			cap, exists := serverMap[actionServer]
+			if !exists {
+				normalized := normalizeServer(actionServer)
+				if normalized != "" {
+					cap, exists = serverNormMap[normalized]
+				}
+			}
+
+			if exists {
 				if !cap.IsAvailable {
 					unavailableServers = append(unavailableServers, actionServer)
 				}
 				continue
 			}
+
+			// IMPORTANT: when action_server is explicitly specified in the graph,
+			// do not silently fallback to action_type matching.
+			missingCaps = append(missingCaps, fmt.Sprintf("%s (%s)", actionType, actionServer))
+			continue
 		}
 
-		// Check by action type
+		// action_server is not specified in the graph -> fallback to action type.
 		if cap, exists := capMap[actionType]; exists {
 			if !cap.IsAvailable {
 				unavailableServers = append(unavailableServers, actionType)
