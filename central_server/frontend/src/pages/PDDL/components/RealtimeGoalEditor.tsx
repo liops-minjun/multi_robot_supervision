@@ -5,6 +5,11 @@ import GoalEditor from './GoalEditor'
 
 interface Props {
   stateVars: TaskDistributorState[]
+  resourceTypes?: Array<{
+    id: string
+    name: string
+    instanceCount?: number
+  }>
   goals: RealtimeGoalRule[]
   onChange: (goals: RealtimeGoalRule[]) => void
 }
@@ -37,7 +42,7 @@ function createDefaultCondition(stateVars: TaskDistributorState[]): PlanningCond
   }
 }
 
-export default function RealtimeGoalEditor({ stateVars, goals, onChange }: Props) {
+export default function RealtimeGoalEditor({ stateVars, resourceTypes, goals, onChange }: Props) {
   const stateVarMap = useMemo(
     () => new Map(stateVars.map(stateVar => [stateVar.name, stateVar])),
     [stateVars],
@@ -124,6 +129,30 @@ export default function RealtimeGoalEditor({ stateVars, goals, onChange }: Props
               <Trash2 size={12} />
               삭제
             </button>
+          </div>
+
+          <div className="rounded-xl border border-border bg-surface/60 p-3">
+            <div className="mb-2">
+              <div className="text-xs font-semibold text-primary">Resource 범위</div>
+              <div className="text-[11px] text-secondary">
+                {'{{resource.name}}'} 를 쓰는 goal이라면 어떤 resource type 인스턴스들에만 바인딩할지 제한합니다.
+              </div>
+            </div>
+            <select
+              className="w-full rounded-xl border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+              value={goal.resource_type_id || ''}
+              onChange={(e) => updateGoal(goal.id, current => ({
+                ...current,
+                resource_type_id: e.target.value || undefined,
+              }))}
+            >
+              <option value="">모든 resource</option>
+              {(resourceTypes || []).map((resourceType) => (
+                <option key={resourceType.id} value={resourceType.id}>
+                  {resourceType.name}{resourceType.instanceCount != null ? ` (${resourceType.instanceCount})` : ''}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="rounded-xl border border-border bg-surface/60 p-3">

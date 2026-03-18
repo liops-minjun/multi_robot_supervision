@@ -1501,6 +1501,7 @@ export interface RealtimeGoalRule {
   name: string
   priority: number
   enabled: boolean
+  resource_type_id?: string
   activation_conditions?: PlanningCondition[]
   goal_state: Record<string, string>
 }
@@ -1514,6 +1515,7 @@ export interface RealtimeSession {
   agent_ids: string[]
   tick_interval_sec: number
   goals: RealtimeGoalRule[]
+  effective_state?: Record<string, string>
   current_state: Record<string, string>
   live_state?: Record<string, string>
   selected_goal_id?: string

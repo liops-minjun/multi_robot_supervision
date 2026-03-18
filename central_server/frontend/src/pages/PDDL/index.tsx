@@ -2,7 +2,7 @@ import { type ChangeEvent, useState, useEffect, useCallback, useMemo, useRef } f
 import {
   RefreshCw, Play, Eye, Square, ChevronDown, ChevronRight, Info, Target,
   Database, Workflow, AlertTriangle, Link2, Plus, Trash2, Check, X, Layers,
-  Circle, Edit, Gem, ToggleLeft, Bot, Download, Upload,
+  Circle, Edit, Gem, ToggleLeft, Bot, Download, Upload, ArrowRight, Activity, CheckCircle2, Clock3,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { behaviorTreeApi, agentApi, capabilityApi, pddlApi, taskDistributorApi, fleetApi } from '../../api/client'
@@ -345,11 +345,20 @@ function createRealtimeGoalTemplate(index: number): RealtimeGoalRule {
 type SequenceTaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
 
 interface SequenceTaskBlock {
+  agentId: string
   taskId: string
   taskName: string
   behaviorTreeId?: string
   order: number
   status: SequenceTaskStatus
+  runtimeTaskId?: string
+  currentStepId?: string | null
+  currentStepName?: string | null
+  completedStepIds?: string[]
+  failedStepIds?: string[]
+  completedStepCount?: number
+  totalStepCount?: number
+  error?: string | null
 }
 
 const sequenceStatusRank: Record<SequenceTaskStatus, number> = {
@@ -358,6 +367,34 @@ const sequenceStatusRank: Record<SequenceTaskStatus, number> = {
   cancelled: 3,
   pending: 2,
   completed: 1,
+}
+
+function sortStateEntries(state: Record<string, string> | undefined): Array<[string, string]> {
+  return Object.entries(state || {}).sort(([left], [right]) => left.localeCompare(right))
+}
+
+function stateValueClass(value: string) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'true' || normalized === 'running' || normalized === 'busy' || normalized === 'charging') {
+    return 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+  }
+  if (normalized === 'false' || normalized === 'idle' || normalized === 'none') {
+    return 'bg-slate-500/10 text-slate-300 border-slate-500/20'
+  }
+  if (normalized === 'done' || normalized === 'warning') {
+    return 'bg-amber-500/10 text-amber-300 border-amber-500/20'
+  }
+  if (normalized === 'error' || normalized === 'fault' || normalized === 'failed') {
+    return 'bg-red-500/10 text-red-300 border-red-500/20'
+  }
+  return 'bg-sky-500/10 text-sky-300 border-sky-500/20'
+}
+
+interface GroupedStateSection {
+  id: string
+  label: string
+  kind: 'agent' | 'resource' | 'misc'
+  entries: Array<[string, string]>
 }
 
 function normalizeSequenceStatus(status?: string): SequenceTaskStatus {
@@ -386,6 +423,14 @@ function statusBadgeClass(status: SequenceTaskStatus) {
     default:
       return 'bg-surface text-secondary border-border'
   }
+}
+
+function appendUnique(values: string[] | undefined, value?: string | null) {
+  const next = values ? [...values] : []
+  const normalized = (value || '').trim()
+  if (!normalized) return next
+  if (!next.includes(normalized)) next.push(normalized)
+  return next
 }
 
 // ---------------------------------------------------------------------------
@@ -543,6 +588,8 @@ export default function PDDL() {
   const [showPlanningConfig, setShowPlanningConfig] = useState(true)
   const [selectedFlowTree, setSelectedFlowTree] = useState<BehaviorTree | null>(null)
   const [selectedFlowLabel, setSelectedFlowLabel] = useState<string>('Task flow')
+  const [selectedFlowAgentId, setSelectedFlowAgentId] = useState<string | null>(null)
+  const [selectedFlowTaskId, setSelectedFlowTaskId] = useState<string | null>(null)
   const [isLoadingFlowTree, setIsLoadingFlowTree] = useState(false)
   const autoSelectedTaskRef = useRef(false)
 
@@ -636,6 +683,16 @@ export default function PDDL() {
       }))
       .sort((a, b) => a.typeName.localeCompare(b.typeName))
   }, [selectedDistributor])
+
+  const realtimeGoalResourceTypeOptions = useMemo(() => (
+    resourceTypeGroups
+      .filter(group => group.typeResource?.id)
+      .map(group => ({
+        id: group.typeResource!.id,
+        name: group.typeName,
+        instanceCount: group.items.length,
+      }))
+  ), [resourceTypeGroups])
 
   const generatedResourceNames = useMemo(
     () => buildInstanceNames(resourceTypeName, resourceTypeCount),
@@ -1998,6 +2055,54 @@ export default function PDDL() {
     [agents, selectedAgentIds, recommendedSet]
   )
 
+  const effectiveStateSections = useMemo<GroupedStateSection[]>(() => {
+    const effectiveState = realtimeSession?.effective_state || realtimeSession?.live_state || realtimeSession?.current_state
+    const entries = sortStateEntries(effectiveState)
+    if (entries.length === 0) return []
+
+    const sections: GroupedStateSection[] = []
+    const consumed = new Set<string>()
+
+    const selectedAgentRows = sortedAgents.filter(({ agent }) => realtimeSession?.agent_ids?.includes(agent.id) || selectedAgentIds.includes(agent.id))
+    for (const row of selectedAgentRows) {
+      const prefix = `${row.agent.name}_`
+      const items = entries.filter(([key]) => key.startsWith(prefix))
+      if (items.length === 0) continue
+      items.forEach(([key]) => consumed.add(key))
+      sections.push({
+        id: `agent:${row.agent.id}`,
+        label: row.agent.name,
+        kind: 'agent',
+        entries: items,
+      })
+    }
+
+    for (const resource of aggregatedResources) {
+      const prefix = `${resource.name}_`
+      const items = entries.filter(([key]) => key.startsWith(prefix))
+      if (items.length === 0) continue
+      items.forEach(([key]) => consumed.add(key))
+      sections.push({
+        id: `resource:${resource.id}`,
+        label: resource.name,
+        kind: 'resource',
+        entries: items,
+      })
+    }
+
+    const miscEntries = entries.filter(([key]) => !consumed.has(key))
+    if (miscEntries.length > 0) {
+      sections.push({
+        id: 'misc',
+        label: '기타 / alias',
+        kind: 'misc',
+        entries: miscEntries,
+      })
+    }
+
+    return sections
+  }, [aggregatedResources, realtimeSession, selectedAgentIds, sortedAgents])
+
   const plannedTaskBlocksByAgent = useMemo(() => {
     const grouped = new Map<string, SequenceTaskBlock[]>()
     const assignments = realtimeSession?.last_plan?.assignments || plan?.assignments || []
@@ -2016,6 +2121,7 @@ export default function PDDL() {
         prev.status = mergeSequenceStatus(prev.status, 'pending')
       } else {
         list.push({
+          agentId,
           taskId,
           taskName,
           behaviorTreeId: assignment.behavior_tree_id,
@@ -2049,13 +2155,37 @@ export default function PDDL() {
       if (prev && prev.taskId === taskId) {
         prev.order = Math.min(prev.order, step.order)
         prev.status = mergeSequenceStatus(prev.status, status)
+        prev.runtimeTaskId = prev.runtimeTaskId || step.runtime_task_id
+        prev.behaviorTreeId = prev.behaviorTreeId || step.behavior_tree_id
+        prev.totalStepCount = (prev.totalStepCount || 0) + 1
+        if (status === 'completed') {
+          prev.completedStepIds = appendUnique(prev.completedStepIds, step.step_id)
+          prev.completedStepCount = (prev.completedStepCount || 0) + 1
+        }
+        if (status === 'failed' || status === 'cancelled') {
+          prev.failedStepIds = appendUnique(prev.failedStepIds, step.step_id)
+          prev.error = prev.error || step.error || null
+        }
+        if (status === 'running') {
+          prev.currentStepId = step.step_id
+          prev.currentStepName = step.step_name || step.step_id
+        }
       } else {
         list.push({
+          agentId,
           taskId,
           taskName,
           behaviorTreeId: step.behavior_tree_id,
           order: step.order,
           status,
+          runtimeTaskId: step.runtime_task_id,
+          currentStepId: status === 'running' ? step.step_id : null,
+          currentStepName: status === 'running' ? (step.step_name || step.step_id) : null,
+          completedStepIds: status === 'completed' ? [step.step_id] : [],
+          failedStepIds: status === 'failed' || status === 'cancelled' ? [step.step_id] : [],
+          completedStepCount: status === 'completed' ? 1 : 0,
+          totalStepCount: 1,
+          error: (status === 'failed' || status === 'cancelled') ? (step.error || null) : null,
         })
       }
       grouped.set(agentId, list)
@@ -2072,7 +2202,34 @@ export default function PDDL() {
     return runtimeViewAgents.map(entry => {
       const executionTasks = executionTaskBlocksByAgent.get(entry.agentId) || []
       const plannedTasks = plannedTaskBlocksByAgent.get(entry.agentId) || []
-      const timeline = executionTasks.length > 0 ? executionTasks : plannedTasks
+      const mergedTimeline = new Map<string, SequenceTaskBlock>()
+
+      for (const task of plannedTasks) {
+        mergedTimeline.set(task.taskId, { ...task })
+      }
+      for (const task of executionTasks) {
+        const existing = mergedTimeline.get(task.taskId)
+        if (!existing) {
+          mergedTimeline.set(task.taskId, { ...task })
+          continue
+        }
+        mergedTimeline.set(task.taskId, {
+          ...existing,
+          ...task,
+          order: Math.min(existing.order, task.order),
+          status: mergeSequenceStatus(existing.status, task.status),
+          completedStepIds: task.completedStepIds || existing.completedStepIds,
+          failedStepIds: task.failedStepIds || existing.failedStepIds,
+          currentStepId: task.currentStepId || existing.currentStepId || null,
+          currentStepName: task.currentStepName || existing.currentStepName || null,
+          completedStepCount: task.completedStepCount ?? existing.completedStepCount,
+          totalStepCount: task.totalStepCount ?? existing.totalStepCount,
+          runtimeTaskId: task.runtimeTaskId || existing.runtimeTaskId,
+          error: task.error || existing.error || null,
+        })
+      }
+
+      const timeline = Array.from(mergedTimeline.values()).sort((left, right) => left.order - right.order)
 
       let currentIndex = timeline.findIndex(task => task.status === 'running')
       if (currentIndex < 0) currentIndex = timeline.findIndex(task => task.status === 'pending')
@@ -2099,8 +2256,52 @@ export default function PDDL() {
     })
   }, [executionTaskBlocksByAgent, plannedTaskBlocksByAgent, runtimeViewAgents])
 
+  const selectedFlowBlock = useMemo(() => {
+    if (!selectedFlowAgentId || !selectedFlowTaskId) return null
+    const row = realtimeTaskRows.find(item => item.agentId === selectedFlowAgentId)
+    if (!row) return null
+    return row.timeline.find(item => item.taskId === selectedFlowTaskId) || null
+  }, [realtimeTaskRows, selectedFlowAgentId, selectedFlowTaskId])
+
+  const selectedFlowRuntime = useMemo(() => {
+    if (!selectedFlowAgentId) return null
+    return agentRuntimeMap[selectedFlowAgentId] || null
+  }, [agentRuntimeMap, selectedFlowAgentId])
+
+  const selectedFlowLiveStepId = useMemo(() => {
+    if (!selectedFlowTree || !selectedFlowRuntime) return null
+    if (
+      selectedFlowBlock?.runtimeTaskId
+      && selectedFlowRuntime.current_task_id
+      && selectedFlowRuntime.current_task_id !== selectedFlowBlock.runtimeTaskId
+    ) {
+      return null
+    }
+    return resolveRuntimeStepId(selectedFlowTree, selectedFlowRuntime)
+  }, [selectedFlowBlock?.runtimeTaskId, selectedFlowRuntime, selectedFlowTree])
+
+  const selectedFlowLiveStepName = useMemo(() => {
+    if (!selectedFlowTree || !selectedFlowLiveStepId) return null
+    const step = selectedFlowTree.steps.find(item => item.id === selectedFlowLiveStepId)
+    return step?.job_name || step?.name || selectedFlowLiveStepId
+  }, [selectedFlowLiveStepId, selectedFlowTree])
+
+  const selectedFlowStepIds = useMemo(() => new Set(selectedFlowTree?.steps.map(step => step.id) || []), [selectedFlowTree])
+
+  const selectedFlowCompletedSteps = useMemo(
+    () => (selectedFlowBlock?.completedStepIds || []).filter(stepId => selectedFlowStepIds.has(stepId)),
+    [selectedFlowBlock?.completedStepIds, selectedFlowStepIds]
+  )
+
+  const selectedFlowFailedSteps = useMemo(
+    () => (selectedFlowBlock?.failedStepIds || []).filter(stepId => selectedFlowStepIds.has(stepId)),
+    [selectedFlowBlock?.failedStepIds, selectedFlowStepIds]
+  )
+
   const handleOpenTaskFlow = useCallback(async (task?: SequenceTaskBlock | null) => {
     if (!task) return
+    setSelectedFlowAgentId(task.agentId)
+    setSelectedFlowTaskId(task.taskId)
 
     let resolvedTree: BehaviorTree | null = null
     const candidateIds: string[] = []
@@ -2938,43 +3139,120 @@ export default function PDDL() {
 
                 <RealtimeGoalEditor
                   stateVars={stateVars}
+                  resourceTypes={realtimeGoalResourceTypeOptions}
                   goals={realtimeGoals}
                   onChange={setRealtimeGoals}
                 />
 
                 {realtimeSession && (
-                  <div className="grid gap-4 xl:grid-cols-2">
-                    <div className="rounded-2xl border border-border bg-base/50 p-4">
-                      <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-secondary">
-                        Session state
-                      </div>
-                      <div className="space-y-2">
-                        {Object.entries(realtimeSession.current_state || {}).length === 0 ? (
-                          <div className="text-sm text-muted">저장된 planner state 없음</div>
-                        ) : Object.entries(realtimeSession.current_state || {}).map(([key, value]) => (
-                          <div key={`rt-current:${key}`} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface/60 px-3 py-2 text-sm">
-                            <span className="font-mono text-primary">{key}</span>
-                            <span className="font-mono text-secondary">{value}</span>
+                  <div className="space-y-4">
+                    <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4">
+                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-wider text-sky-200">
+                            Effective state
                           </div>
-                        ))}
+                          <div className="mt-1 text-[11px] text-sky-100/70">
+                            planner가 실제 판단에 사용하는 merged state 입니다. (current + live overlay)
+                          </div>
+                        </div>
+                        <span className="rounded-full bg-sky-500/10 px-3 py-1 text-[11px] text-sky-200">
+                          {sortStateEntries(realtimeSession.effective_state || realtimeSession.live_state || realtimeSession.current_state).length} vars
+                        </span>
                       </div>
+
+                      {sortStateEntries(realtimeSession.effective_state || realtimeSession.live_state || realtimeSession.current_state).length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-border bg-base/30 px-4 py-8 text-center text-sm text-muted">
+                          표시할 merged state가 없습니다.
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          {effectiveStateSections.map((section) => (
+                            <div key={section.id} className="rounded-2xl border border-border bg-surface/40 p-3">
+                              <div className="mb-3 flex items-center justify-between gap-2">
+                                <div className="text-sm font-semibold text-primary">{section.label}</div>
+                                <span className={`rounded-full px-2 py-0.5 text-[10px] ${
+                                  section.kind === 'agent' ? 'bg-violet-500/10 text-violet-300'
+                                    : section.kind === 'resource' ? 'bg-amber-500/10 text-amber-300'
+                                    : 'bg-slate-500/10 text-slate-300'
+                                }`}>
+                                  {section.kind === 'agent' ? 'agent' : section.kind === 'resource' ? 'resource' : 'misc'} · {section.entries.length}
+                                </span>
+                              </div>
+                              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                                {section.entries.map(([key, value]) => (
+                                  <div
+                                    key={`rt-effective:${section.id}:${key}`}
+                                    className="rounded-xl border border-border bg-base/70 px-3 py-3"
+                                  >
+                                    <div className="truncate text-[11px] font-semibold uppercase tracking-wider text-secondary">
+                                      {section.kind === 'misc'
+                                        ? key
+                                        : (key.startsWith(`${section.label}_`) ? key.slice(section.label.length + 1) : key)}
+                                    </div>
+                                    <div className={`mt-2 inline-flex max-w-full items-center rounded-full border px-2.5 py-1 text-xs font-mono ${stateValueClass(value)}`}>
+                                      <span className="truncate">{value}</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
-                    <div className="rounded-2xl border border-border bg-base/50 p-4">
-                      <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-secondary">
-                        Live state
-                      </div>
-                      <div className="space-y-2">
-                        {Object.entries(realtimeSession.live_state || {}).length === 0 ? (
-                          <div className="text-sm text-muted">실행 중인 planner state 없음</div>
-                        ) : Object.entries(realtimeSession.live_state || {}).map(([key, value]) => (
-                          <div key={`rt-live:${key}`} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface/60 px-3 py-2 text-sm">
-                            <span className="font-mono text-primary">{key}</span>
-                            <span className="font-mono text-secondary">{value}</span>
+                    <details className="rounded-2xl border border-border bg-base/40 p-4">
+                      <summary className="cursor-pointer list-none">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <div className="text-xs font-semibold uppercase tracking-wider text-secondary">
+                              Raw state details
+                            </div>
+                            <div className="mt-1 text-[11px] text-muted">
+                              필요할 때만 펼쳐서 current_state 와 live_state 원본 값을 확인합니다.
+                            </div>
                           </div>
-                        ))}
+                          <span className="rounded-full bg-surface px-3 py-1 text-[11px] text-secondary">
+                            current {sortStateEntries(realtimeSession.current_state).length} · live {sortStateEntries(realtimeSession.live_state).length}
+                          </span>
+                        </div>
+                      </summary>
+
+                      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+                        <div className="rounded-2xl border border-border bg-base/50 p-4">
+                          <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-secondary">
+                            Current state
+                          </div>
+                          <div className="space-y-2">
+                            {sortStateEntries(realtimeSession.current_state).length === 0 ? (
+                              <div className="text-sm text-muted">저장된 planner state 없음</div>
+                            ) : sortStateEntries(realtimeSession.current_state).map(([key, value]) => (
+                              <div key={`rt-current:${key}`} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface/60 px-3 py-2 text-sm">
+                                <span className="font-mono text-primary">{key}</span>
+                                <span className="font-mono text-secondary">{value}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-border bg-base/50 p-4">
+                          <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-secondary">
+                            Live state
+                          </div>
+                          <div className="space-y-2">
+                            {sortStateEntries(realtimeSession.live_state).length === 0 ? (
+                              <div className="text-sm text-muted">실시간 overlay state 없음</div>
+                            ) : sortStateEntries(realtimeSession.live_state).map(([key, value]) => (
+                              <div key={`rt-live:${key}`} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface/60 px-3 py-2 text-sm">
+                                <span className="font-mono text-primary">{key}</span>
+                                <span className="font-mono text-secondary">{value}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
                       </div>
-                    </div>
+                    </details>
                   </div>
                 )}
               </div>
@@ -2986,61 +3264,148 @@ export default function PDDL() {
               count={realtimeTaskRows.length}
               theme={SECTION_THEME.agent}
             >
-              <div className="space-y-3">
-                <div className="rounded-xl border border-border bg-base/50 px-3 py-2 text-xs text-secondary">
-                  각 Agent별로 이전 → 지금 → 이후 task 흐름을 보여줍니다. 블록을 클릭하면 해당 task의 BT 흐름을 볼 수 있습니다.
-                </div>
-
+              <div className="space-y-2.5">
                 {realtimeTaskRows.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-border bg-base/30 px-4 py-8 text-center text-sm text-muted">
                     실행 중인 agent/task 시퀀스가 없습니다.
                   </div>
                 ) : (
-                  <div className="max-h-[420px] space-y-3 overflow-y-auto pr-1">
+                  <div className="max-h-[360px] space-y-2.5 overflow-y-auto pr-1">
                     {realtimeTaskRows.map((row) => {
-                      const blocks = [
-                        { key: 'previous', label: '이전', item: row.previous },
-                        { key: 'current', label: '지금', item: row.current },
-                        { key: 'next', label: '이후', item: row.next },
-                      ] as const
-
                       return (
-                        <div key={`realtime-seq-${row.agentId}`} className="rounded-2xl border border-border bg-base/60 p-3">
-                          <div className="mb-2 flex flex-wrap items-center gap-2">
-                            <span className="text-sm font-semibold text-primary">{row.agent?.name || row.agentId}</span>
-                            <span className={`rounded-full px-2 py-0.5 text-[10px] ${
-                              row.isOnline ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'
-                            }`}>
-                              {row.stateLabel}
-                            </span>
-                            <span className="rounded-full bg-surface px-2 py-0.5 text-[10px] text-secondary">
-                              queue {row.timeline.length}
-                            </span>
-                          </div>
-
-                          <div className="grid gap-2 md:grid-cols-3">
-                            {blocks.map((block) => (
-                              <div key={`${row.agentId}-${block.key}`} className="rounded-xl border border-border bg-surface/70 p-2">
-                                <div className="mb-1 text-[10px] uppercase tracking-wider text-muted">{block.label}</div>
-                                {block.item ? (
-                                  <button
-                                    onClick={() => handleOpenTaskFlow(block.item)}
-                                    className={`w-full rounded-lg border px-2 py-2 text-left transition hover:border-accent/40 ${statusBadgeClass(block.item.status)}`}
-                                  >
-                                    <div className="truncate text-xs font-semibold">{block.item.taskName}</div>
-                                    <div className="mt-1 flex items-center justify-between gap-1 text-[10px]">
-                                      <span className="truncate opacity-80">{block.item.taskId}</span>
-                                      <span className="rounded-full bg-black/20 px-1.5 py-0.5 uppercase">{block.item.status}</span>
-                                    </div>
-                                  </button>
-                                ) : (
-                                  <div className="rounded-lg border border-dashed border-border px-2 py-3 text-center text-[11px] text-muted">
-                                    없음
-                                  </div>
+                        <div key={`realtime-seq-${row.agentId}`} className="rounded-2xl border border-border bg-gradient-to-br from-base/90 to-surface/90 p-3 shadow-[0_10px_24px_rgba(0,0,0,0.12)]">
+                          <div className="flex flex-col gap-2 xl:flex-row xl:items-start xl:justify-between">
+                            <div className="min-w-0 flex-1 space-y-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="truncate text-sm font-semibold text-primary">{row.agent?.name || row.agentId}</span>
+                                <span className={`rounded-full px-2 py-0.5 text-[10px] ${
+                                  row.isOnline ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'
+                                }`}>
+                                  {row.stateLabel}
+                                </span>
+                                <span className="rounded-full bg-surface px-2 py-0.5 text-[10px] text-secondary">
+                                  queue {row.timeline.length}
+                                </span>
+                                {row.current?.status === 'running' && (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[10px] text-cyan-300">
+                                    <Activity size={11} />
+                                    live
+                                  </span>
                                 )}
                               </div>
-                            ))}
+
+                              <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                                <span className="rounded-full bg-base/70 px-2 py-0.5 text-secondary">
+                                  이전 · {row.previous?.taskName || '없음'}
+                                </span>
+                                <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-emerald-300">
+                                  지금 · {row.current?.taskName || '없음'}
+                                </span>
+                                <span className="rounded-full bg-base/70 px-2 py-0.5 text-secondary">
+                                  다음 · {row.next?.taskName || '없음'}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="grid min-w-[220px] gap-1.5 text-[10px] xl:w-[240px]">
+                              <div className="rounded-xl border border-border bg-base/50 px-3 py-2">
+                                <div className="mb-0.5 uppercase tracking-wider text-muted">현재 액션</div>
+                                <div className="truncate font-medium text-primary">
+                                  {row.current?.currentStepName || row.currentStepName || row.current?.taskName || '대기 중'}
+                                </div>
+                              </div>
+                              <div className="rounded-xl border border-border bg-base/50 px-3 py-2">
+                                <div className="mb-0.5 uppercase tracking-wider text-muted">점유 Resource</div>
+                                <div className="truncate font-medium text-primary">
+                                  {row.heldResources.length > 0
+                                    ? row.heldResources.slice(0, 3).map(item => item.resource).join(', ')
+                                    : '없음'}
+                                </div>
+                              </div>
+                            </div>
                           </div>
+
+                          {row.timeline.length === 0 ? (
+                            <div className="mt-2 rounded-xl border border-dashed border-border bg-base/20 px-4 py-5 text-center text-sm text-muted">
+                              현재 큐에 표시할 task가 없습니다.
+                            </div>
+                          ) : (
+                            <div className="mt-2 overflow-x-auto pb-1">
+                              <div className="flex min-w-max items-stretch gap-3 pr-2">
+                                {row.timeline.map((task, index) => {
+                                  const isFocused = task.taskId === row.current?.taskId || task.status === 'running'
+                                  const completedCount = task.completedStepCount || task.completedStepIds?.length || 0
+                                  const totalCount = task.totalStepCount || 0
+                                  return (
+                                    <div key={`${row.agentId}:${task.taskId}:${index}`} className="flex items-stretch gap-3">
+                                      <button
+                                        onClick={() => handleOpenTaskFlow(task)}
+                                        title={task.taskId}
+                                        className={`group relative w-[210px] rounded-xl border px-3 py-2.5 text-left transition ${
+                                          isFocused
+                                            ? 'border-cyan-400/30 bg-cyan-500/8 shadow-[0_10px_24px_rgba(34,211,238,0.08)]'
+                                            : statusBadgeClass(task.status)
+                                        } ${task.status === 'completed' ? 'opacity-80' : ''}`}
+                                      >
+                                        <div className="mb-2 flex items-start justify-between gap-2">
+                                          <div className="inline-flex items-center gap-2">
+                                            <span className="rounded-lg border border-border bg-base/70 px-2 py-1 text-[10px] font-semibold text-secondary">
+                                              #{task.order}
+                                            </span>
+                                            {isFocused && (
+                                              <span className="inline-flex h-2.5 w-2.5 rounded-full bg-cyan-300 shadow-[0_0_14px_rgba(34,211,238,0.8)]" />
+                                            )}
+                                          </div>
+                                            <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase ${statusBadgeClass(task.status)}`}>
+                                              {task.status}
+                                            </span>
+                                        </div>
+
+                                        <div className="line-clamp-2 min-h-[34px] text-sm font-semibold leading-5 text-primary">
+                                          {task.taskName}
+                                        </div>
+                                        <div className="mt-2 space-y-1.5">
+                                          <div className="rounded-lg border border-border bg-base/55 px-2.5 py-2">
+                                            <div className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted">
+                                              <Clock3 size={11} />
+                                              step
+                                            </div>
+                                            <div className="truncate text-xs font-medium text-primary">
+                                              {task.currentStepName || (task.status === 'completed' ? '모든 step 완료' : '대기 중')}
+                                            </div>
+                                          </div>
+
+                                          {totalCount > 0 && (
+                                            <div className="flex items-center justify-between gap-2 text-[11px] text-secondary">
+                                              <span className="inline-flex items-center gap-1">
+                                                <CheckCircle2 size={11} />
+                                                progress
+                                              </span>
+                                              <span className="font-mono text-primary">
+                                                {completedCount}/{totalCount}
+                                              </span>
+                                            </div>
+                                          )}
+
+                                          {task.error && (
+                                            <div className="line-clamp-2 rounded-lg border border-red-500/20 bg-red-500/8 px-2.5 py-2 text-[11px] text-red-300">
+                                              {task.error}
+                                            </div>
+                                          )}
+                                        </div>
+                                      </button>
+
+                                      {index < row.timeline.length - 1 && (
+                                        <div className="flex items-center justify-center text-secondary/70">
+                                          <ArrowRight size={16} />
+                                        </div>
+                                      )}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )
                     })}
@@ -3173,11 +3538,33 @@ export default function PDDL() {
               <div>
                 <div className="text-sm font-semibold text-primary">Task BT Flow</div>
                 <div className="text-xs text-secondary">{selectedFlowLabel}</div>
+                {selectedFlowBlock && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+                    <span className="rounded-full bg-surface px-2 py-1 text-secondary">
+                      {(realtimeTaskRows.find(row => row.agentId === selectedFlowBlock.agentId)?.agent?.name) || selectedFlowBlock.agentId}
+                    </span>
+                    <span className={`rounded-full border px-2 py-1 ${statusBadgeClass(selectedFlowBlock.status)}`}>
+                      {selectedFlowBlock.status}
+                    </span>
+                    {selectedFlowLiveStepName && (
+                      <span className="rounded-full bg-cyan-500/10 px-2 py-1 text-cyan-300">
+                        live BT step · {selectedFlowLiveStepName}
+                      </span>
+                    )}
+                    {selectedFlowBlock.totalStepCount ? (
+                      <span className="rounded-full bg-base px-2 py-1 text-secondary">
+                        progress {selectedFlowBlock.completedStepCount || 0}/{selectedFlowBlock.totalStepCount}
+                      </span>
+                    ) : null}
+                  </div>
+                )}
               </div>
               <button
                 onClick={() => {
                   setSelectedFlowTree(null)
                   setSelectedFlowLabel('Task flow')
+                  setSelectedFlowAgentId(null)
+                  setSelectedFlowTaskId(null)
                   setIsLoadingFlowTree(false)
                 }}
                 className="rounded-lg border border-border bg-base px-2 py-1 text-xs text-secondary transition hover:text-primary"
@@ -3194,6 +3581,9 @@ export default function PDDL() {
                 <div className="h-full overflow-hidden rounded-xl border border-border bg-base">
                   <ActionGraphViewer
                     actionGraph={selectedFlowTree}
+                    currentStepId={selectedFlowLiveStepId}
+                    completedSteps={selectedFlowCompletedSteps}
+                    failedSteps={selectedFlowFailedSteps}
                     className="h-full"
                     showControls={true}
                     showMiniMap={true}
