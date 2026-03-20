@@ -2,7 +2,7 @@ import { type ChangeEvent, useState, useEffect, useCallback, useMemo, useRef } f
 import {
   RefreshCw, Play, Eye, Square, ChevronDown, ChevronRight, Info, Target,
   Database, Workflow, AlertTriangle, Link2, Plus, Trash2, Check, X, Layers,
-  Circle, Edit, Gem, ToggleLeft, Bot, Download, Upload, ArrowRight, Activity, CheckCircle2, Clock3,
+  Circle, Edit, Gem, ToggleLeft, Bot, Download, Upload, ArrowRight, Activity, CheckCircle2, Clock3, RotateCcw,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { behaviorTreeApi, agentApi, capabilityApi, pddlApi, taskDistributorApi, fleetApi } from '../../api/client'
@@ -125,6 +125,43 @@ const TYPE_BADGE: Record<string, { bg: string; text: string }> = {
 }
 
 const PDDL_DRAFT_STORAGE_KEY = 'mcs.pddl.draft.v2'
+const PDDL_SCOPED_DRAFT_STORAGE_PREFIX = 'mcs.pddl.draft.v3:'
+const PDDL_LAST_DISTRIBUTOR_STORAGE_KEY = 'mcs.pddl.lastDistributorId.v1'
+const PDDL_NO_DISTRIBUTOR_SCOPE = '__none__'
+
+interface PDDLDraftState {
+  selectedBTIds: string[]
+  selectedDistributorId: string | null
+  selectedAgentIds: string[]
+  goalState: Record<string, string>
+  initialState: Record<string, string>
+  showInitialState: boolean
+  plan: PlanResult | null
+  executionId: string | null
+  realtimeGoals: RealtimeGoalRule[]
+  realtimeTickIntervalSec: number
+  realtimeSessionId: string | null
+}
+
+function getPddlDraftScopeKey(distributorId?: string | null) {
+  return `${PDDL_SCOPED_DRAFT_STORAGE_PREFIX}${distributorId || PDDL_NO_DISTRIBUTOR_SCOPE}`
+}
+
+function normalizePddlDraft(raw?: Partial<PDDLDraftState> | null): PDDLDraftState {
+  return {
+    selectedBTIds: Array.isArray(raw?.selectedBTIds) ? raw!.selectedBTIds : [],
+    selectedDistributorId: raw?.selectedDistributorId || null,
+    selectedAgentIds: Array.isArray(raw?.selectedAgentIds) ? raw!.selectedAgentIds : [],
+    goalState: raw?.goalState || {},
+    initialState: raw?.initialState || {},
+    showInitialState: Boolean(raw?.showInitialState),
+    plan: raw?.plan || null,
+    executionId: raw?.executionId || null,
+    realtimeGoals: Array.isArray(raw?.realtimeGoals) ? raw!.realtimeGoals : [],
+    realtimeTickIntervalSec: typeof raw?.realtimeTickIntervalSec === 'number' ? raw.realtimeTickIntervalSec : 2,
+    realtimeSessionId: raw?.realtimeSessionId || null,
+  }
+}
 
 function slugifyFileName(value: string) {
   return value
@@ -147,6 +184,21 @@ function toStringRecord(value?: Record<string, unknown> | null): Record<string, 
     acc[key] = toStringValue(raw)
     return acc
   }, {})
+}
+
+function normalizePlanningStateInitialValue(value?: string | null): string {
+  const raw = value ?? ''
+  const trimmed = raw.trim()
+  if (!trimmed) return ''
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || trimmed === 'null') {
+    try {
+      const parsed = JSON.parse(trimmed)
+      return parsed == null ? '' : String(parsed)
+    } catch {
+      return raw
+    }
+  }
+  return raw
 }
 
 function buildInstanceNames(typeName: string, count: number) {
@@ -390,11 +442,16 @@ function stateValueClass(value: string) {
   return 'bg-sky-500/10 text-sky-300 border-sky-500/20'
 }
 
-interface GroupedStateSection {
+interface RealtimeMonitoringCard {
   id: string
   label: string
-  kind: 'agent' | 'resource' | 'misc'
-  entries: Array<[string, string]>
+  kind: 'agent' | 'resource'
+  statusKey?: string
+  statusValue: string
+  msgKey?: string
+  msgValue: string
+  resetValues: Record<string, string>
+  resetKeys: string[]
 }
 
 function normalizeSequenceStatus(status?: string): SequenceTaskStatus {
@@ -584,6 +641,7 @@ export default function PDDL() {
   const [realtimeSession, setRealtimeSession] = useState<RealtimeSession | null>(null)
   const [isStartingRealtime, setIsStartingRealtime] = useState(false)
   const [isStoppingRealtime, setIsStoppingRealtime] = useState(false)
+  const [isResettingMonitorKey, setIsResettingMonitorKey] = useState<string | null>(null)
   const [realtimeNotice, setRealtimeNotice] = useState<string | null>(null)
   const [showPlanningConfig, setShowPlanningConfig] = useState(true)
   const [selectedFlowTree, setSelectedFlowTree] = useState<BehaviorTree | null>(null)
@@ -628,6 +686,7 @@ export default function PDDL() {
   const didRestoreDraftRef = useRef(false)
   const skipNextSelectionResetRef = useRef(false)
   const restoredSelectionKeyRef = useRef<string | null>(null)
+  const isApplyingScopedDraftRef = useRef(false)
   const profileFileInputRef = useRef<HTMLInputElement | null>(null)
 
   // -----------------------------------------------------------------------
@@ -698,6 +757,98 @@ export default function PDDL() {
     () => buildInstanceNames(resourceTypeName, resourceTypeCount),
     [resourceTypeName, resourceTypeCount]
   )
+
+  const buildCurrentDraft = useCallback((distributorIdOverride?: string | null): PDDLDraftState => ({
+    selectedBTIds,
+    selectedDistributorId: distributorIdOverride ?? selectedDistributorId,
+    selectedAgentIds,
+    goalState,
+    initialState,
+    showInitialState,
+    plan,
+    executionId,
+    realtimeGoals,
+    realtimeTickIntervalSec,
+    realtimeSessionId,
+  }), [
+    selectedBTIds,
+    selectedDistributorId,
+    selectedAgentIds,
+    goalState,
+    initialState,
+    showInitialState,
+    plan,
+    executionId,
+    realtimeGoals,
+    realtimeTickIntervalSec,
+    realtimeSessionId,
+  ])
+
+  const readStoredDraft = useCallback((distributorId?: string | null): PDDLDraftState | null => {
+    if (typeof window === 'undefined') return null
+    try {
+      const scopedRaw = window.localStorage.getItem(getPddlDraftScopeKey(distributorId))
+      if (scopedRaw) {
+        return normalizePddlDraft(JSON.parse(scopedRaw) as Partial<PDDLDraftState>)
+      }
+    } catch (err) {
+      console.error('Failed to read scoped PDDL draft:', err)
+    }
+    return null
+  }, [])
+
+  const writeStoredDraft = useCallback((distributorId: string | null, draft: PDDLDraftState) => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem(getPddlDraftScopeKey(distributorId), JSON.stringify({
+        ...draft,
+        selectedDistributorId: distributorId,
+      }))
+      if (distributorId) {
+        window.localStorage.setItem(PDDL_LAST_DISTRIBUTOR_STORAGE_KEY, distributorId)
+      }
+    } catch (err) {
+      console.error('Failed to persist scoped PDDL draft:', err)
+    }
+  }, [])
+
+  const applyStoredDraft = useCallback((distributorId: string | null, rawDraft?: Partial<PDDLDraftState> | null) => {
+    const draft = normalizePddlDraft(rawDraft)
+    skipNextSelectionResetRef.current = true
+    restoredSelectionKeyRef.current = `${[...draft.selectedBTIds].sort().join(',')}|${distributorId || ''}`
+    isApplyingScopedDraftRef.current = true
+    setSelectedDistributorId(distributorId)
+    setSelectedBTIds(draft.selectedBTIds)
+    setSelectedAgentIds(draft.selectedAgentIds)
+    setGoalState(draft.goalState)
+    setInitialState(draft.initialState)
+    setShowInitialState(draft.showInitialState)
+    setPlan(draft.plan)
+    setExecutionId(draft.executionId)
+    setExecution(null)
+    setRealtimeExecutionMap({})
+    setResourceAllocations([])
+    setRealtimeGoals(draft.realtimeGoals)
+    setRealtimeTickIntervalSec(draft.realtimeTickIntervalSec)
+    setRealtimeSessionId(draft.realtimeSessionId)
+    setRealtimeSession(null)
+    setRealtimeNotice(null)
+    setResourceBuilderMessage(null)
+    setStateBuilderMessage(null)
+    setTypeInstanceDrafts({})
+  }, [])
+
+  const switchDistributorScope = useCallback((nextDistributorId: string | null) => {
+    writeStoredDraft(selectedDistributorId, buildCurrentDraft())
+    const nextDraft = readStoredDraft(nextDistributorId)
+    if (nextDraft) {
+      applyStoredDraft(nextDistributorId, nextDraft)
+      return
+    }
+    applyStoredDraft(nextDistributorId, {
+      selectedDistributorId: nextDistributorId,
+    })
+  }, [selectedDistributorId, buildCurrentDraft, writeStoredDraft, readStoredDraft, applyStoredDraft])
 
   const selectedTaskPlanningByTaskId = useMemo(
     () => Object.fromEntries(selectedBTs.map(bt => [bt.id, bt.planning_task || EMPTY_PLANNING_TASK])),
@@ -793,40 +944,31 @@ export default function PDDL() {
     didRestoreDraftRef.current = true
 
     try {
-      const raw = window.localStorage.getItem(PDDL_DRAFT_STORAGE_KEY)
-      if (!raw) return
-
-      const draft = JSON.parse(raw) as {
-        selectedBTIds?: string[]
-        selectedDistributorId?: string | null
-        selectedAgentIds?: string[]
-        goalState?: Record<string, string>
-        initialState?: Record<string, string>
-        showInitialState?: boolean
-        plan?: PlanResult | null
-        executionId?: string | null
-        realtimeGoals?: RealtimeGoalRule[]
-        realtimeTickIntervalSec?: number
-        realtimeSessionId?: string | null
+      const legacyRaw = window.localStorage.getItem(PDDL_DRAFT_STORAGE_KEY)
+      let legacyDraft: PDDLDraftState | null = null
+      if (legacyRaw) {
+        legacyDraft = normalizePddlDraft(JSON.parse(legacyRaw) as Partial<PDDLDraftState>)
+        const legacyScopeId = legacyDraft.selectedDistributorId || null
+        const legacyScopedKey = getPddlDraftScopeKey(legacyScopeId)
+        if (!window.localStorage.getItem(legacyScopedKey)) {
+          window.localStorage.setItem(legacyScopedKey, JSON.stringify(legacyDraft))
+        }
+        if (legacyScopeId && !window.localStorage.getItem(PDDL_LAST_DISTRIBUTOR_STORAGE_KEY)) {
+          window.localStorage.setItem(PDDL_LAST_DISTRIBUTOR_STORAGE_KEY, legacyScopeId)
+        }
       }
 
-      skipNextSelectionResetRef.current = true
-      restoredSelectionKeyRef.current = `${[...(Array.isArray(draft.selectedBTIds) ? draft.selectedBTIds : [])].sort().join(',')}|${draft.selectedDistributorId || ''}`
-      setSelectedBTIds(Array.isArray(draft.selectedBTIds) ? draft.selectedBTIds : [])
-      setSelectedDistributorId(draft.selectedDistributorId || null)
-      setSelectedAgentIds(Array.isArray(draft.selectedAgentIds) ? draft.selectedAgentIds : [])
-      setGoalState(draft.goalState || {})
-      setInitialState(draft.initialState || {})
-      setShowInitialState(Boolean(draft.showInitialState))
-      setPlan(draft.plan || null)
-      setExecutionId(draft.executionId || null)
-      setRealtimeGoals(Array.isArray(draft.realtimeGoals) ? draft.realtimeGoals : [])
-      setRealtimeTickIntervalSec(typeof draft.realtimeTickIntervalSec === 'number' ? draft.realtimeTickIntervalSec : 2)
-      setRealtimeSessionId(draft.realtimeSessionId || null)
+      const lastDistributorId = window.localStorage.getItem(PDDL_LAST_DISTRIBUTOR_STORAGE_KEY) || legacyDraft?.selectedDistributorId || null
+      const draft = readStoredDraft(lastDistributorId) || legacyDraft
+      if (draft) {
+        applyStoredDraft(draft.selectedDistributorId || lastDistributorId || null, draft)
+      } else if (lastDistributorId) {
+        setSelectedDistributorId(lastDistributorId)
+      }
     } catch (err) {
       console.error('Failed to restore PDDL draft:', err)
     }
-  }, [])
+  }, [readStoredDraft, applyStoredDraft])
 
   useEffect(() => {
     if (selectedBTIds.length === 0) return
@@ -859,24 +1001,21 @@ export default function PDDL() {
   }, [selectedBTIds, btCache])
 
   useEffect(() => {
+    if (isApplyingScopedDraftRef.current) {
+      isApplyingScopedDraftRef.current = false
+      return
+    }
     try {
-      window.localStorage.setItem(PDDL_DRAFT_STORAGE_KEY, JSON.stringify({
-        selectedBTIds,
-        selectedDistributorId,
-        selectedAgentIds,
-        goalState,
-        initialState,
-        showInitialState,
-        plan,
-        executionId,
-        realtimeGoals,
-        realtimeTickIntervalSec,
-        realtimeSessionId,
-      }))
+      const draft = buildCurrentDraft()
+      window.localStorage.setItem(PDDL_DRAFT_STORAGE_KEY, JSON.stringify(draft))
+      writeStoredDraft(selectedDistributorId, draft)
+      if (selectedDistributorId) {
+        window.localStorage.setItem(PDDL_LAST_DISTRIBUTOR_STORAGE_KEY, selectedDistributorId)
+      }
     } catch (err) {
       console.error('Failed to persist PDDL draft:', err)
     }
-  }, [selectedBTIds, selectedDistributorId, selectedAgentIds, goalState, initialState, showInitialState, plan, executionId, realtimeGoals, realtimeTickIntervalSec, realtimeSessionId])
+  }, [selectedBTIds, selectedDistributorId, selectedAgentIds, goalState, initialState, showInitialState, plan, executionId, realtimeGoals, realtimeTickIntervalSec, realtimeSessionId, buildCurrentDraft, writeStoredDraft])
 
   // -----------------------------------------------------------------------
   // Effects
@@ -1175,7 +1314,9 @@ export default function PDDL() {
   }
 
   const handleSelectDistributor = useCallback(async (distributorId: string) => {
-    setSelectedDistributorId(distributorId)
+    if (distributorId !== selectedDistributorId) {
+      switchDistributorScope(distributorId)
+    }
 
     const targets = selectedBTs.filter(bt => bt.task_distributor_id !== distributorId)
     if (targets.length === 0) {
@@ -1207,7 +1348,7 @@ export default function PDDL() {
       setAssignmentNotice(t('pddl.distributorAssignError'))
       setTimeout(() => setAssignmentNotice(null), 4000)
     }
-  }, [selectedBTs, distributors, t])
+  }, [selectedBTs, distributors, t, selectedDistributorId, switchDistributorScope])
 
   // -----------------------------------------------------------------------
   // TD CRUD handlers
@@ -1219,11 +1360,11 @@ export default function PDDL() {
       const created = await taskDistributorApi.create({ name: newTdName.trim() })
       setNewTdName('')
       await loadDistributors()
-      setSelectedDistributorId(created.id)
+      switchDistributorScope(created.id)
     } catch (err) {
       console.error('Failed to create distributor:', err)
     }
-  }, [newTdName, loadDistributors])
+  }, [newTdName, loadDistributors, switchDistributorScope])
 
   const handleRenameTd = useCallback(async (id: string) => {
     if (!editTdName.trim()) return
@@ -1239,12 +1380,14 @@ export default function PDDL() {
   const handleDeleteTd = useCallback(async (id: string) => {
     try {
       await taskDistributorApi.delete(id)
-      if (selectedDistributorId === id) setSelectedDistributorId(null)
+      if (selectedDistributorId === id) {
+        switchDistributorScope(null)
+      }
       loadDistributors()
     } catch (err) {
       console.error('Failed to delete distributor:', err)
     }
-  }, [selectedDistributorId, loadDistributors])
+  }, [selectedDistributorId, loadDistributors, switchDistributorScope])
 
   // -----------------------------------------------------------------------
   // Resource CRUD handlers
@@ -1867,6 +2010,25 @@ export default function PDDL() {
     }
   }
 
+  const handleResetRealtimeMonitorCard = useCallback(async (card: RealtimeMonitoringCard) => {
+    if (!realtimeSessionId || !realtimeSession) return
+    if (Object.keys(card.resetValues).length === 0) return
+    setIsResettingMonitorKey(card.id)
+    setRealtimeNotice(null)
+    try {
+      const session = await pddlApi.resetRealtimeSessionState(realtimeSessionId, {
+        values: card.resetValues,
+        clear_live_keys: card.resetKeys,
+      })
+      setRealtimeSession(session)
+      setRealtimeNotice(`${card.label} 상태/msg를 기본값으로 되돌렸습니다.`)
+    } catch (err) {
+      setRealtimeNotice(`${card.label} 상태 초기화 실패: ${getApiErrorMessage(err)}`)
+    } finally {
+      setIsResettingMonitorKey(null)
+    }
+  }, [realtimeSession, realtimeSessionId])
+
   // -----------------------------------------------------------------------
   // Computed helpers
   // -----------------------------------------------------------------------
@@ -2055,53 +2217,57 @@ export default function PDDL() {
     [agents, selectedAgentIds, recommendedSet]
   )
 
-  const effectiveStateSections = useMemo<GroupedStateSection[]>(() => {
-    const effectiveState = realtimeSession?.effective_state || realtimeSession?.live_state || realtimeSession?.current_state
-    const entries = sortStateEntries(effectiveState)
-    if (entries.length === 0) return []
+  const realtimeMonitoringCards = useMemo<RealtimeMonitoringCard[]>(() => {
+    const effectiveState = realtimeSession?.effective_state || realtimeSession?.live_state || realtimeSession?.current_state || {}
+    const defaultsByKey = new Map(stateVars.map(stateVar => [
+      stateVar.name,
+      normalizePlanningStateInitialValue(stateVar.initial_value),
+    ]))
 
-    const sections: GroupedStateSection[] = []
-    const consumed = new Set<string>()
-
-    const selectedAgentRows = sortedAgents.filter(({ agent }) => realtimeSession?.agent_ids?.includes(agent.id) || selectedAgentIds.includes(agent.id))
-    for (const row of selectedAgentRows) {
-      const prefix = `${row.agent.name}_`
-      const items = entries.filter(([key]) => key.startsWith(prefix))
-      if (items.length === 0) continue
-      items.forEach(([key]) => consumed.add(key))
-      sections.push({
-        id: `agent:${row.agent.id}`,
+    const cards: RealtimeMonitoringCard[] = []
+    const agentRows = sortedAgents.filter(({ agent }) => realtimeSession?.agent_ids?.includes(agent.id) || selectedAgentIds.includes(agent.id))
+    for (const row of agentRows) {
+      const statusKey = `${row.agent.name}_status`
+      const msgKey = `${row.agent.name}_msg`
+      const resetKeys = [statusKey, msgKey].filter(key => defaultsByKey.has(key))
+      cards.push({
+        id: `monitor-agent:${row.agent.id}`,
         label: row.agent.name,
         kind: 'agent',
-        entries: items,
+        statusKey: defaultsByKey.has(statusKey) || statusKey in effectiveState ? statusKey : undefined,
+        statusValue: effectiveState[statusKey] ?? normalizePlanningStateInitialValue(defaultsByKey.get(statusKey)),
+        msgKey: defaultsByKey.has(msgKey) || msgKey in effectiveState ? msgKey : undefined,
+        msgValue: effectiveState[msgKey] ?? normalizePlanningStateInitialValue(defaultsByKey.get(msgKey)),
+        resetValues: resetKeys.reduce<Record<string, string>>((acc, key) => {
+          acc[key] = normalizePlanningStateInitialValue(defaultsByKey.get(key))
+          return acc
+        }, {}),
+        resetKeys,
       })
     }
 
     for (const resource of aggregatedResources) {
-      const prefix = `${resource.name}_`
-      const items = entries.filter(([key]) => key.startsWith(prefix))
-      if (items.length === 0) continue
-      items.forEach(([key]) => consumed.add(key))
-      sections.push({
-        id: `resource:${resource.id}`,
+      const statusKey = `${resource.name}_status`
+      const msgKey = `${resource.name}_msg`
+      const resetKeys = [statusKey, msgKey].filter(key => defaultsByKey.has(key))
+      cards.push({
+        id: `monitor-resource:${resource.id}`,
         label: resource.name,
         kind: 'resource',
-        entries: items,
+        statusKey: defaultsByKey.has(statusKey) || statusKey in effectiveState ? statusKey : undefined,
+        statusValue: effectiveState[statusKey] ?? normalizePlanningStateInitialValue(defaultsByKey.get(statusKey)),
+        msgKey: defaultsByKey.has(msgKey) || msgKey in effectiveState ? msgKey : undefined,
+        msgValue: effectiveState[msgKey] ?? normalizePlanningStateInitialValue(defaultsByKey.get(msgKey)),
+        resetValues: resetKeys.reduce<Record<string, string>>((acc, key) => {
+          acc[key] = normalizePlanningStateInitialValue(defaultsByKey.get(key))
+          return acc
+        }, {}),
+        resetKeys,
       })
     }
 
-    const miscEntries = entries.filter(([key]) => !consumed.has(key))
-    if (miscEntries.length > 0) {
-      sections.push({
-        id: 'misc',
-        label: '기타 / alias',
-        kind: 'misc',
-        entries: miscEntries,
-      })
-    }
-
-    return sections
-  }, [aggregatedResources, realtimeSession, selectedAgentIds, sortedAgents])
+    return cards
+  }, [aggregatedResources, realtimeSession, selectedAgentIds, sortedAgents, stateVars])
 
   const plannedTaskBlocksByAgent = useMemo(() => {
     const grouped = new Map<string, SequenceTaskBlock[]>()
@@ -3041,6 +3207,176 @@ export default function PDDL() {
             </div>
 
             <ThemedSection
+              icon={Activity}
+              title="Realtime Control Room"
+              count={realtimeMonitoringCards.length}
+              theme={SECTION_THEME.plan}
+            >
+              {!realtimeSession ? (
+                <div className="rounded-xl border border-dashed border-border bg-base/30 px-4 py-8 text-center text-sm text-muted">
+                  Realtime 세션을 시작하면 agent / resource 상태와 메시지를 여기서 바로 볼 수 있습니다.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="rounded-2xl border border-border bg-base/40 p-4">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-wider text-secondary">
+                          Monitoring overview
+                        </div>
+                        <div className="mt-1 text-[11px] text-muted">
+                          Effective state 기준으로 agent / resource의 핵심 status, msg만 요약해서 보여줍니다.
+                        </div>
+                      </div>
+                      <span className="rounded-full bg-surface px-3 py-1 text-[11px] text-secondary">
+                        session · {realtimeSession.id}
+                      </span>
+                    </div>
+
+                    {realtimeMonitoringCards.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-border bg-base/30 px-4 py-8 text-center text-sm text-muted">
+                        표시할 agent/resource 카드가 없습니다.
+                      </div>
+                    ) : (
+                      <div className="grid gap-3 xl:grid-cols-2">
+                        {realtimeMonitoringCards.map((card) => {
+                          const msgDisplay = String(card.msgValue ?? '').trim()
+                          const hasMsg = msgDisplay !== ''
+                          return (
+                            <div
+                              key={card.id}
+                              className="rounded-2xl border border-border bg-gradient-to-br from-base/90 to-surface/90 p-4 shadow-[0_8px_20px_rgba(0,0,0,0.10)]"
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <div className="truncate text-sm font-semibold text-primary">{card.label}</div>
+                                    <span className={`rounded-full px-2 py-0.5 text-[10px] ${
+                                      card.kind === 'agent'
+                                        ? 'bg-emerald-500/10 text-emerald-300'
+                                        : 'bg-amber-500/10 text-amber-300'
+                                    }`}>
+                                      {card.kind}
+                                    </span>
+                                  </div>
+                                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                                    <span className="text-[10px] font-semibold uppercase tracking-wider text-secondary">
+                                      status
+                                    </span>
+                                    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-mono ${stateValueClass(card.statusValue)}`}>
+                                      {card.statusValue || '-'}
+                                    </span>
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={() => handleResetRealtimeMonitorCard(card)}
+                                  disabled={isResettingMonitorKey === card.id || Object.keys(card.resetValues).length === 0}
+                                  className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-border bg-surface px-3 py-2 text-[11px] font-medium text-secondary transition hover:border-accent/20 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                                  title={Object.keys(card.resetValues).length === 0 ? '초기값이 정의된 status/msg state가 없습니다.' : 'status와 msg를 distributor 기본값으로 되돌립니다.'}
+                                >
+                                  <RotateCcw size={12} />
+                                  {isResettingMonitorKey === card.id ? 'Resetting...' : 'Reset default'}
+                                </button>
+                              </div>
+
+                              <div className="mt-4 rounded-xl border border-border bg-base/60 px-3 py-3">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[10px] font-semibold uppercase tracking-wider text-secondary">
+                                    msg
+                                  </span>
+                                  {card.msgKey && (
+                                    <span className="rounded-full bg-base px-2 py-0.5 text-[10px] text-muted">
+                                      {card.msgKey}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className={`mt-2 rounded-xl border px-3 py-2 text-xs font-mono ${hasMsg ? 'border-amber-500/20 bg-amber-500/5 text-amber-100' : 'border-border bg-surface/60 text-muted'}`}>
+                                  {hasMsg ? msgDisplay : '""'}
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <details className="rounded-2xl border border-border bg-base/40 p-4">
+                    <summary className="cursor-pointer list-none">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-wider text-secondary">
+                            Raw state details
+                          </div>
+                          <div className="mt-1 text-[11px] text-muted">
+                            필요할 때만 펼쳐서 effective/current/live 원본 값을 확인합니다.
+                          </div>
+                        </div>
+                        <span className="rounded-full bg-surface px-3 py-1 text-[11px] text-secondary">
+                          effective {sortStateEntries(realtimeSession.effective_state || realtimeSession.live_state || realtimeSession.current_state).length}
+                          {' · '}
+                          current {sortStateEntries(realtimeSession.current_state).length}
+                          {' · '}
+                          live {sortStateEntries(realtimeSession.live_state).length}
+                        </span>
+                      </div>
+                    </summary>
+
+                    <div className="mt-4 grid gap-4 xl:grid-cols-3">
+                      <div className="rounded-2xl border border-border bg-base/50 p-4">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-secondary">
+                          Effective state
+                        </div>
+                        <div className="space-y-2">
+                          {sortStateEntries(realtimeSession.effective_state || realtimeSession.live_state || realtimeSession.current_state).length === 0 ? (
+                            <div className="text-sm text-muted">표시할 merged state가 없습니다.</div>
+                          ) : sortStateEntries(realtimeSession.effective_state || realtimeSession.live_state || realtimeSession.current_state).map(([key, value]) => (
+                            <div key={`rt-effective:${key}`} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface/60 px-3 py-2 text-sm">
+                              <span className="font-mono text-primary">{key}</span>
+                              <span className="font-mono text-secondary">{value}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-border bg-base/50 p-4">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-secondary">
+                          Current state
+                        </div>
+                        <div className="space-y-2">
+                          {sortStateEntries(realtimeSession.current_state).length === 0 ? (
+                            <div className="text-sm text-muted">저장된 planner state 없음</div>
+                          ) : sortStateEntries(realtimeSession.current_state).map(([key, value]) => (
+                            <div key={`rt-current:${key}`} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface/60 px-3 py-2 text-sm">
+                              <span className="font-mono text-primary">{key}</span>
+                              <span className="font-mono text-secondary">{value}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-border bg-base/50 p-4">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-secondary">
+                          Live state
+                        </div>
+                        <div className="space-y-2">
+                          {sortStateEntries(realtimeSession.live_state).length === 0 ? (
+                            <div className="text-sm text-muted">실시간 overlay state 없음</div>
+                          ) : sortStateEntries(realtimeSession.live_state).map(([key, value]) => (
+                            <div key={`rt-live:${key}`} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface/60 px-3 py-2 text-sm">
+                              <span className="font-mono text-primary">{key}</span>
+                              <span className="font-mono text-secondary">{value}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </details>
+                </div>
+              )}
+            </ThemedSection>
+
+            <ThemedSection
               icon={Workflow}
               title="Realtime PDDL Loop"
               count={validRealtimeGoals.length}
@@ -3144,117 +3480,6 @@ export default function PDDL() {
                   onChange={setRealtimeGoals}
                 />
 
-                {realtimeSession && (
-                  <div className="space-y-4">
-                    <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4">
-                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <div className="text-xs font-semibold uppercase tracking-wider text-sky-200">
-                            Effective state
-                          </div>
-                          <div className="mt-1 text-[11px] text-sky-100/70">
-                            planner가 실제 판단에 사용하는 merged state 입니다. (current + live overlay)
-                          </div>
-                        </div>
-                        <span className="rounded-full bg-sky-500/10 px-3 py-1 text-[11px] text-sky-200">
-                          {sortStateEntries(realtimeSession.effective_state || realtimeSession.live_state || realtimeSession.current_state).length} vars
-                        </span>
-                      </div>
-
-                      {sortStateEntries(realtimeSession.effective_state || realtimeSession.live_state || realtimeSession.current_state).length === 0 ? (
-                        <div className="rounded-xl border border-dashed border-border bg-base/30 px-4 py-8 text-center text-sm text-muted">
-                          표시할 merged state가 없습니다.
-                        </div>
-                      ) : (
-                        <div className="space-y-4">
-                          {effectiveStateSections.map((section) => (
-                            <div key={section.id} className="rounded-2xl border border-border bg-surface/40 p-3">
-                              <div className="mb-3 flex items-center justify-between gap-2">
-                                <div className="text-sm font-semibold text-primary">{section.label}</div>
-                                <span className={`rounded-full px-2 py-0.5 text-[10px] ${
-                                  section.kind === 'agent' ? 'bg-violet-500/10 text-violet-300'
-                                    : section.kind === 'resource' ? 'bg-amber-500/10 text-amber-300'
-                                    : 'bg-slate-500/10 text-slate-300'
-                                }`}>
-                                  {section.kind === 'agent' ? 'agent' : section.kind === 'resource' ? 'resource' : 'misc'} · {section.entries.length}
-                                </span>
-                              </div>
-                              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                                {section.entries.map(([key, value]) => (
-                                  <div
-                                    key={`rt-effective:${section.id}:${key}`}
-                                    className="rounded-xl border border-border bg-base/70 px-3 py-3"
-                                  >
-                                    <div className="truncate text-[11px] font-semibold uppercase tracking-wider text-secondary">
-                                      {section.kind === 'misc'
-                                        ? key
-                                        : (key.startsWith(`${section.label}_`) ? key.slice(section.label.length + 1) : key)}
-                                    </div>
-                                    <div className={`mt-2 inline-flex max-w-full items-center rounded-full border px-2.5 py-1 text-xs font-mono ${stateValueClass(value)}`}>
-                                      <span className="truncate">{value}</span>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    <details className="rounded-2xl border border-border bg-base/40 p-4">
-                      <summary className="cursor-pointer list-none">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div>
-                            <div className="text-xs font-semibold uppercase tracking-wider text-secondary">
-                              Raw state details
-                            </div>
-                            <div className="mt-1 text-[11px] text-muted">
-                              필요할 때만 펼쳐서 current_state 와 live_state 원본 값을 확인합니다.
-                            </div>
-                          </div>
-                          <span className="rounded-full bg-surface px-3 py-1 text-[11px] text-secondary">
-                            current {sortStateEntries(realtimeSession.current_state).length} · live {sortStateEntries(realtimeSession.live_state).length}
-                          </span>
-                        </div>
-                      </summary>
-
-                      <div className="mt-4 grid gap-4 xl:grid-cols-2">
-                        <div className="rounded-2xl border border-border bg-base/50 p-4">
-                          <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-secondary">
-                            Current state
-                          </div>
-                          <div className="space-y-2">
-                            {sortStateEntries(realtimeSession.current_state).length === 0 ? (
-                              <div className="text-sm text-muted">저장된 planner state 없음</div>
-                            ) : sortStateEntries(realtimeSession.current_state).map(([key, value]) => (
-                              <div key={`rt-current:${key}`} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface/60 px-3 py-2 text-sm">
-                                <span className="font-mono text-primary">{key}</span>
-                                <span className="font-mono text-secondary">{value}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-
-                        <div className="rounded-2xl border border-border bg-base/50 p-4">
-                          <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-secondary">
-                            Live state
-                          </div>
-                          <div className="space-y-2">
-                            {sortStateEntries(realtimeSession.live_state).length === 0 ? (
-                              <div className="text-sm text-muted">실시간 overlay state 없음</div>
-                            ) : sortStateEntries(realtimeSession.live_state).map(([key, value]) => (
-                              <div key={`rt-live:${key}`} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface/60 px-3 py-2 text-sm">
-                                <span className="font-mono text-primary">{key}</span>
-                                <span className="font-mono text-secondary">{value}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    </details>
-                  </div>
-                )}
               </div>
             </ThemedSection>
 

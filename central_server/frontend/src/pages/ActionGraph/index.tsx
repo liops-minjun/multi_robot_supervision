@@ -93,6 +93,10 @@ const emptyPlanningTask = (): PlanningTaskSpec => ({
   required_resources: [],
   during_state: [],
   result_states: [],
+  warning_result_states: [],
+  error_result_states: [],
+  warning_message_variable: '',
+  error_message_variable: '',
 })
 
 interface PlanningAgentOption {
@@ -313,6 +317,16 @@ function filterPlanningTaskForDistributor(
       .slice(0, 1),
     result_states: (spec.result_states || [])
       .filter(effect => isPlanningStateReferenceAllowed(effect.variable, states)),
+    warning_result_states: (spec.warning_result_states || [])
+      .filter(effect => isPlanningStateReferenceAllowed(effect.variable, states)),
+    error_result_states: (spec.error_result_states || [])
+      .filter(effect => isPlanningStateReferenceAllowed(effect.variable, states)),
+    warning_message_variable: isPlanningStateReferenceAllowed(spec.warning_message_variable || '', states)
+      ? (spec.warning_message_variable || '')
+      : '',
+    error_message_variable: isPlanningStateReferenceAllowed(spec.error_message_variable || '', states)
+      ? (spec.error_message_variable || '')
+      : '',
   }
 }
 
@@ -1101,11 +1115,21 @@ function ActionGraphEditor() {
     const normalizedResults = (spec?.result_states || [])
       .filter(effect => effect.variable)
       .map(effect => ({ variable: effect.variable, value: effect.value }))
+    const normalizedWarningResults = (spec?.warning_result_states || [])
+      .filter(effect => effect.variable)
+      .map(effect => ({ variable: effect.variable, value: effect.value }))
+    const normalizedErrorResults = (spec?.error_result_states || [])
+      .filter(effect => effect.variable)
+      .map(effect => ({ variable: effect.variable, value: effect.value }))
     return {
       preconditions: normalizedPreconditions,
       required_resources: Array.from(new Set((spec?.required_resources || []).filter(Boolean))),
       during_state: normalizedDuring,
       result_states: normalizedResults,
+      warning_result_states: normalizedWarningResults,
+      error_result_states: normalizedErrorResults,
+      warning_message_variable: (spec?.warning_message_variable || '').trim(),
+      error_message_variable: (spec?.error_message_variable || '').trim(),
     }
   }, [])
 
@@ -4318,6 +4342,10 @@ function TaskPddlConfigModal({
   const [pendingPreconditionValue, setPendingPreconditionValue] = useState('')
   const [pendingResultVariable, setPendingResultVariable] = useState('')
   const [pendingResultValue, setPendingResultValue] = useState('')
+  const [pendingWarningResultVariable, setPendingWarningResultVariable] = useState('')
+  const [pendingWarningResultValue, setPendingWarningResultValue] = useState('')
+  const [pendingErrorResultVariable, setPendingErrorResultVariable] = useState('')
+  const [pendingErrorResultValue, setPendingErrorResultValue] = useState('')
   const [pendingResourceToken, setPendingResourceToken] = useState('')
   const [isSaving, setIsSaving] = useState(false)
 
@@ -4353,6 +4381,14 @@ function TaskPddlConfigModal({
     () => inferPlanningStateVar(pendingResultVariable, distributorStates, distributorResources, planningAgents),
     [distributorResources, distributorStates, pendingResultVariable, planningAgents]
   )
+  const pendingWarningResultStateVar = useMemo(
+    () => inferPlanningStateVar(pendingWarningResultVariable, distributorStates, distributorResources, planningAgents),
+    [distributorResources, distributorStates, pendingWarningResultVariable, planningAgents]
+  )
+  const pendingErrorResultStateVar = useMemo(
+    () => inferPlanningStateVar(pendingErrorResultVariable, distributorStates, distributorResources, planningAgents),
+    [distributorResources, distributorStates, pendingErrorResultVariable, planningAgents]
+  )
 
   useEffect(() => {
     if (!selectedDistributorId) {
@@ -4362,6 +4398,10 @@ function TaskPddlConfigModal({
       setPendingPreconditionValue('')
       setPendingResultVariable('')
       setPendingResultValue('')
+      setPendingWarningResultVariable('')
+      setPendingWarningResultValue('')
+      setPendingErrorResultVariable('')
+      setPendingErrorResultValue('')
       setPendingResourceToken('')
       return
     }
@@ -4387,6 +4427,18 @@ function TaskPddlConfigModal({
     setPendingResultVariable(variable)
     const stateVar = inferPlanningStateVar(variable, distributorStates, distributorResources, planningAgents)
     setPendingResultValue(getStateDefaultValue(stateVar))
+  }, [distributorResources, distributorStates, planningAgents])
+
+  const applyPendingWarningResultVariable = useCallback((variable: string) => {
+    setPendingWarningResultVariable(variable)
+    const stateVar = inferPlanningStateVar(variable, distributorStates, distributorResources, planningAgents)
+    setPendingWarningResultValue(getStateDefaultValue(stateVar))
+  }, [distributorResources, distributorStates, planningAgents])
+
+  const applyPendingErrorResultVariable = useCallback((variable: string) => {
+    setPendingErrorResultVariable(variable)
+    const stateVar = inferPlanningStateVar(variable, distributorStates, distributorResources, planningAgents)
+    setPendingErrorResultValue(getStateDefaultValue(stateVar))
   }, [distributorResources, distributorStates, planningAgents])
 
   const handleAddPrecondition = useCallback(() => {
@@ -4436,6 +4488,54 @@ function TaskPddlConfigModal({
     setLocalPlanningTask((current) => ({
       ...current,
       result_states: (current.result_states || []).filter(effect => effect.variable !== variable),
+    }))
+  }, [])
+
+  const handleAddWarningResultState = useCallback(() => {
+    if (!pendingWarningResultVariable) return
+    const nextEffect: PlanningEffect = {
+      variable: pendingWarningResultVariable,
+      value: pendingWarningResultValue || getStateDefaultValue(pendingWarningResultStateVar),
+    }
+    setLocalPlanningTask((current) => ({
+      ...current,
+      warning_result_states: [
+        ...(current.warning_result_states || []).filter(effect => effect.variable !== nextEffect.variable),
+        nextEffect,
+      ],
+    }))
+    setPendingWarningResultVariable('')
+    setPendingWarningResultValue('')
+  }, [pendingWarningResultStateVar, pendingWarningResultValue, pendingWarningResultVariable])
+
+  const handleDeleteWarningResultState = useCallback((variable: string) => {
+    setLocalPlanningTask((current) => ({
+      ...current,
+      warning_result_states: (current.warning_result_states || []).filter(effect => effect.variable !== variable),
+    }))
+  }, [])
+
+  const handleAddErrorResultState = useCallback(() => {
+    if (!pendingErrorResultVariable) return
+    const nextEffect: PlanningEffect = {
+      variable: pendingErrorResultVariable,
+      value: pendingErrorResultValue || getStateDefaultValue(pendingErrorResultStateVar),
+    }
+    setLocalPlanningTask((current) => ({
+      ...current,
+      error_result_states: [
+        ...(current.error_result_states || []).filter(effect => effect.variable !== nextEffect.variable),
+        nextEffect,
+      ],
+    }))
+    setPendingErrorResultVariable('')
+    setPendingErrorResultValue('')
+  }, [pendingErrorResultStateVar, pendingErrorResultValue, pendingErrorResultVariable])
+
+  const handleDeleteErrorResultState = useCallback((variable: string) => {
+    setLocalPlanningTask((current) => ({
+      ...current,
+      error_result_states: (current.error_result_states || []).filter(effect => effect.variable !== variable),
     }))
   }, [])
 
@@ -4708,6 +4808,152 @@ function TaskPddlConfigModal({
                           </button>
                         </span>
                       ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-amber-200">Warning Result States</div>
+                    <p className="mb-2 text-[11px] text-secondary">
+                      액션 결과 메시지가 <span className="font-mono text-amber-200">w:</span> 로 시작하면 일반 Result States 대신 이 값을 적용합니다.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <PlanningVariableInput
+                        value={pendingWarningResultVariable}
+                        onChange={applyPendingWarningResultVariable}
+                        suggestions={planningVariableSuggestions}
+                        placeholder="warning 시 반영할 state 변수"
+                      />
+                      {(() => {
+                        if (pendingWarningResultStateVar?.type === 'bool') {
+                          return (
+                            <select
+                              className="w-[90px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+                              value={pendingWarningResultValue || 'true'}
+                              onChange={(e) => setPendingWarningResultValue(e.target.value)}
+                              disabled={!pendingWarningResultVariable}
+                            >
+                              <option value="true">true</option>
+                              <option value="false">false</option>
+                            </select>
+                          )
+                        }
+                        return (
+                          <input
+                            type={pendingWarningResultStateVar?.type === 'int' ? 'number' : 'text'}
+                            className="w-[120px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none disabled:opacity-40"
+                            value={pendingWarningResultValue}
+                            onChange={(e) => setPendingWarningResultValue(e.target.value)}
+                            disabled={!pendingWarningResultVariable}
+                          />
+                        )
+                      })()}
+                      <button
+                        onClick={handleAddWarningResultState}
+                        disabled={!pendingWarningResultVariable}
+                        className="shrink-0 rounded bg-amber-500/20 px-3 py-2 text-sm text-amber-200 disabled:opacity-40"
+                      >
+                        추가
+                      </button>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(localPlanningTask.warning_result_states || []).length === 0 ? (
+                        <span className="text-xs text-muted">warning 결과 상태 없음</span>
+                      ) : (localPlanningTask.warning_result_states || []).map((effect) => (
+                        <span
+                          key={effect.variable}
+                          className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-1 text-xs text-amber-200"
+                        >
+                          {effect.variable} = {effect.value}
+                          <button onClick={() => handleDeleteWarningResultState(effect.variable)}>
+                            <X size={10} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                    <div className="mt-3">
+                      <div className="mb-1 text-[11px] font-medium text-amber-200">Warning Message Variable</div>
+                      <PlanningVariableInput
+                        value={localPlanningTask.warning_message_variable || ''}
+                        onChange={(value) => setLocalPlanningTask((current) => ({
+                          ...current,
+                          warning_message_variable: value,
+                        }))}
+                        suggestions={planningVariableSuggestions}
+                        placeholder="예: {{resource.name}}_msg"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-red-300">Error Result States</div>
+                    <p className="mb-2 text-[11px] text-secondary">
+                      액션 결과 메시지가 <span className="font-mono text-red-300">e:</span> 로 시작하거나 error end로 종료되면 일반 Result States 대신 이 값을 적용합니다.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <PlanningVariableInput
+                        value={pendingErrorResultVariable}
+                        onChange={applyPendingErrorResultVariable}
+                        suggestions={planningVariableSuggestions}
+                        placeholder="error 시 반영할 state 변수"
+                      />
+                      {(() => {
+                        if (pendingErrorResultStateVar?.type === 'bool') {
+                          return (
+                            <select
+                              className="w-[90px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+                              value={pendingErrorResultValue || 'true'}
+                              onChange={(e) => setPendingErrorResultValue(e.target.value)}
+                              disabled={!pendingErrorResultVariable}
+                            >
+                              <option value="true">true</option>
+                              <option value="false">false</option>
+                            </select>
+                          )
+                        }
+                        return (
+                          <input
+                            type={pendingErrorResultStateVar?.type === 'int' ? 'number' : 'text'}
+                            className="w-[120px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none disabled:opacity-40"
+                            value={pendingErrorResultValue}
+                            onChange={(e) => setPendingErrorResultValue(e.target.value)}
+                            disabled={!pendingErrorResultVariable}
+                          />
+                        )
+                      })()}
+                      <button
+                        onClick={handleAddErrorResultState}
+                        disabled={!pendingErrorResultVariable}
+                        className="shrink-0 rounded bg-red-500/20 px-3 py-2 text-sm text-red-300 disabled:opacity-40"
+                      >
+                        추가
+                      </button>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(localPlanningTask.error_result_states || []).length === 0 ? (
+                        <span className="text-xs text-muted">error 결과 상태 없음</span>
+                      ) : (localPlanningTask.error_result_states || []).map((effect) => (
+                        <span
+                          key={effect.variable}
+                          className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-1 text-xs text-red-300"
+                        >
+                          {effect.variable} = {effect.value}
+                          <button onClick={() => handleDeleteErrorResultState(effect.variable)}>
+                            <X size={10} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                    <div className="mt-3">
+                      <div className="mb-1 text-[11px] font-medium text-red-300">Error Message Variable</div>
+                      <PlanningVariableInput
+                        value={localPlanningTask.error_message_variable || ''}
+                        onChange={(value) => setLocalPlanningTask((current) => ({
+                          ...current,
+                          error_message_variable: value,
+                        }))}
+                        suggestions={planningVariableSuggestions}
+                        placeholder="예: {{agent.name}}_msg"
+                      />
                     </div>
                   </div>
                 </div>

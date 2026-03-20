@@ -12,17 +12,21 @@ type ResourceInfo struct {
 // PlanTask represents a single plannable task.
 // In the current model a behavior tree is the task execution unit.
 type PlanTask struct {
-	TaskID              string
-	TaskName            string
-	BehaviorTreeID      string
-	RequiredActionTypes []string
-	Preconditions       []db.PlanningCondition
-	RequiredResources   []string
-	ResultStates        []db.PlanningEffect
-	DuringState         []db.PlanningEffect
-	RuntimeParams       map[string]string
-	BoundAgentID        string
-	BoundAgentName      string
+	TaskID                 string
+	TaskName               string
+	BehaviorTreeID         string
+	RequiredActionTypes    []string
+	Preconditions          []db.PlanningCondition
+	RequiredResources      []string
+	ResultStates           []db.PlanningEffect
+	WarningResultStates    []db.PlanningEffect
+	ErrorResultStates      []db.PlanningEffect
+	DuringState            []db.PlanningEffect
+	WarningMessageVariable string
+	ErrorMessageVariable   string
+	RuntimeParams          map[string]string
+	BoundAgentID           string
+	BoundAgentName         string
 }
 
 // AgentInfo describes an agent available for task assignment.
@@ -46,17 +50,21 @@ type PlanProblem struct {
 // TaskAssignment maps a task to an agent with execution order.
 // step_* fields remain as compatibility aliases for older consumers.
 type TaskAssignment struct {
-	TaskID         string `json:"task_id"`
-	TaskName       string `json:"task_name"`
-	BehaviorTreeID string `json:"behavior_tree_id,omitempty"`
-	StepID         string `json:"step_id,omitempty"`
-	StepName       string `json:"step_name,omitempty"`
-	AgentID        string `json:"agent_id"`
-	AgentName      string `json:"agent_name"`
-	Order          int    `json:"order"`
-	Reason         string `json:"reason"`
-	RuntimeParams  map[string]string `json:"runtime_params,omitempty"`
-	ResultStates   []db.PlanningEffect `json:"result_states,omitempty"`
+	TaskID                 string              `json:"task_id"`
+	TaskName               string              `json:"task_name"`
+	BehaviorTreeID         string              `json:"behavior_tree_id,omitempty"`
+	StepID                 string              `json:"step_id,omitempty"`
+	StepName               string              `json:"step_name,omitempty"`
+	AgentID                string              `json:"agent_id"`
+	AgentName              string              `json:"agent_name"`
+	Order                  int                 `json:"order"`
+	Reason                 string              `json:"reason"`
+	RuntimeParams          map[string]string   `json:"runtime_params,omitempty"`
+	ResultStates           []db.PlanningEffect `json:"result_states,omitempty"`
+	WarningResultStates    []db.PlanningEffect `json:"warning_result_states,omitempty"`
+	ErrorResultStates      []db.PlanningEffect `json:"error_result_states,omitempty"`
+	WarningMessageVariable string              `json:"warning_message_variable,omitempty"`
+	ErrorMessageVariable   string              `json:"error_message_variable,omitempty"`
 }
 
 // StepAssignment is kept as an internal compatibility alias during the refactor.

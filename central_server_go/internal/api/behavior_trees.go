@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"central_server_go/internal/db"
@@ -406,14 +407,14 @@ func (s *Server) CheckExecutability(w http.ResponseWriter, r *http.Request) {
 	isOnline := s.stateManager.IsAgentOnline(agentID)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"behavior_tree_id":      graphID,
-		"agent_id":              agentID,
-		"can_execute":           result.Valid && isOnline,
-		"capabilities_valid":    result.Valid,
-		"agent_online":          isOnline,
-		"missing_capabilities":  result.MissingCapabilities,
-		"unavailable_servers":   result.UnavailableServers,
-		"message":               result.Message,
+		"behavior_tree_id":     graphID,
+		"agent_id":             agentID,
+		"can_execute":          result.Valid && isOnline,
+		"capabilities_valid":   result.Valid,
+		"agent_online":         isOnline,
+		"missing_capabilities": result.MissingCapabilities,
+		"unavailable_servers":  result.UnavailableServers,
+		"message":              result.Message,
 	})
 }
 
@@ -457,11 +458,11 @@ func (s *Server) ExecuteBehaviorTree(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"task_id":           taskID,
-		"behavior_tree_id":  graphID,
-		"agent_id":          req.AgentID,
-		"status":            "running",
-		"message":           "Behavior Tree execution started",
+		"task_id":          taskID,
+		"behavior_tree_id": graphID,
+		"agent_id":         req.AgentID,
+		"status":           "running",
+		"message":          "Behavior Tree execution started",
 	})
 }
 
@@ -675,12 +676,12 @@ func behaviorTreeToListResponse(graph *db.BehaviorTree, repo *db.Repository) Beh
 
 func behaviorTreeToResponse(graph *db.BehaviorTree, repo *db.Repository) BehaviorTreeResponse {
 	response := BehaviorTreeResponse{
-		ID:                 graph.ID,
-		Name:               graph.Name,
+		ID:         graph.ID,
+		Name:       graph.Name,
 		Version:    graph.Version,
 		IsTemplate: graph.IsTemplate,
 		CreatedAt:  graph.CreatedAt,
-		UpdatedAt:          graph.UpdatedAt,
+		UpdatedAt:  graph.UpdatedAt,
 	}
 
 	if graph.Description.Valid {
@@ -767,8 +768,10 @@ func planningTaskRequestToJSON(task *PlanningTaskResponse) []byte {
 	}
 
 	spec := db.PlanningTaskSpec{
-		Preconditions:     make([]db.PlanningCondition, 0, len(task.Preconditions)),
-		RequiredResources: append([]string{}, task.RequiredResources...),
+		Preconditions:          make([]db.PlanningCondition, 0, len(task.Preconditions)),
+		RequiredResources:      append([]string{}, task.RequiredResources...),
+		WarningMessageVariable: strings.TrimSpace(task.WarningMessageVariable),
+		ErrorMessageVariable:   strings.TrimSpace(task.ErrorMessageVariable),
 	}
 	if len(task.Preconditions) > 0 {
 		for _, cond := range task.Preconditions {
@@ -797,6 +800,24 @@ func planningTaskRequestToJSON(task *PlanningTaskResponse) []byte {
 			})
 		}
 	}
+	if len(task.WarningResultStates) > 0 {
+		spec.WarningResultStates = make([]db.PlanningEffect, 0, len(task.WarningResultStates))
+		for _, effect := range task.WarningResultStates {
+			spec.WarningResultStates = append(spec.WarningResultStates, db.PlanningEffect{
+				Variable: effect.Variable,
+				Value:    effect.Value,
+			})
+		}
+	}
+	if len(task.ErrorResultStates) > 0 {
+		spec.ErrorResultStates = make([]db.PlanningEffect, 0, len(task.ErrorResultStates))
+		for _, effect := range task.ErrorResultStates {
+			spec.ErrorResultStates = append(spec.ErrorResultStates, db.PlanningEffect{
+				Variable: effect.Variable,
+				Value:    effect.Value,
+			})
+		}
+	}
 
 	encoded, _ := json.Marshal(spec)
 	return encoded
@@ -813,8 +834,10 @@ func planningTaskJSONToResponse(raw []byte) *PlanningTaskResponse {
 	}
 
 	response := &PlanningTaskResponse{
-		Preconditions:     make([]PlanningConditionResponse, 0, len(spec.Preconditions)),
-		RequiredResources: append([]string{}, spec.RequiredResources...),
+		Preconditions:          make([]PlanningConditionResponse, 0, len(spec.Preconditions)),
+		RequiredResources:      append([]string{}, spec.RequiredResources...),
+		WarningMessageVariable: strings.TrimSpace(spec.WarningMessageVariable),
+		ErrorMessageVariable:   strings.TrimSpace(spec.ErrorMessageVariable),
 	}
 	if len(spec.Preconditions) > 0 {
 		for _, cond := range spec.Preconditions {
@@ -838,6 +861,24 @@ func planningTaskJSONToResponse(raw []byte) *PlanningTaskResponse {
 		response.ResultStates = make([]PlanningEffectResponse, 0, len(spec.ResultStates))
 		for _, effect := range spec.ResultStates {
 			response.ResultStates = append(response.ResultStates, PlanningEffectResponse{
+				Variable: effect.Variable,
+				Value:    effect.Value,
+			})
+		}
+	}
+	if len(spec.WarningResultStates) > 0 {
+		response.WarningResultStates = make([]PlanningEffectResponse, 0, len(spec.WarningResultStates))
+		for _, effect := range spec.WarningResultStates {
+			response.WarningResultStates = append(response.WarningResultStates, PlanningEffectResponse{
+				Variable: effect.Variable,
+				Value:    effect.Value,
+			})
+		}
+	}
+	if len(spec.ErrorResultStates) > 0 {
+		response.ErrorResultStates = make([]PlanningEffectResponse, 0, len(spec.ErrorResultStates))
+		for _, effect := range spec.ErrorResultStates {
+			response.ErrorResultStates = append(response.ErrorResultStates, PlanningEffectResponse{
 				Variable: effect.Variable,
 				Value:    effect.Value,
 			})
@@ -958,13 +999,13 @@ func (s *Server) ValidateCanonicalGraph(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"valid":         len(errors) == 0,
-		"errors":        errors,
-		"warnings":      warnings,
-		"vertex_count":  len(canonicalGraph.Vertices),
-		"edge_count":    len(canonicalGraph.Edges),
-		"checksum":      canonicalGraph.Checksum,
-		"entry_point":   canonicalGraph.EntryPoint,
+		"valid":          len(errors) == 0,
+		"errors":         errors,
+		"warnings":       warnings,
+		"vertex_count":   len(canonicalGraph.Vertices),
+		"edge_count":     len(canonicalGraph.Edges),
+		"checksum":       canonicalGraph.Checksum,
+		"entry_point":    canonicalGraph.EntryPoint,
 		"terminal_count": len(terminals),
 	})
 }

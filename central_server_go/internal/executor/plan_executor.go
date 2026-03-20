@@ -29,34 +29,34 @@ const (
 
 // StepExecutionStatus tracks execution of a single task assignment within a plan.
 type StepExecutionStatus struct {
-	TaskID        string     `json:"task_id"`
-	TaskName      string     `json:"task_name,omitempty"`
+	TaskID         string     `json:"task_id"`
+	TaskName       string     `json:"task_name,omitempty"`
 	BehaviorTreeID string     `json:"behavior_tree_id,omitempty"`
-	RuntimeTaskID string     `json:"runtime_task_id,omitempty"`
-	StepID        string     `json:"step_id"`
-	StepName      string     `json:"step_name"`
-	AgentID       string     `json:"agent_id"`
-	AgentName     string     `json:"agent_name"`
-	Order         int        `json:"order"`
-	Status        TaskStatus `json:"status"`
-	StartedAt     time.Time  `json:"started_at,omitempty"`
-	EndedAt       time.Time  `json:"ended_at,omitempty"`
-	Error         string     `json:"error,omitempty"`
+	RuntimeTaskID  string     `json:"runtime_task_id,omitempty"`
+	StepID         string     `json:"step_id"`
+	StepName       string     `json:"step_name"`
+	AgentID        string     `json:"agent_id"`
+	AgentName      string     `json:"agent_name"`
+	Order          int        `json:"order"`
+	Status         TaskStatus `json:"status"`
+	StartedAt      time.Time  `json:"started_at,omitempty"`
+	EndedAt        time.Time  `json:"ended_at,omitempty"`
+	Error          string     `json:"error,omitempty"`
 }
 
 // PlanExecution represents a running plan execution
 type PlanExecution struct {
-	ID             string                          `json:"id"`
-	ProblemID      string                          `json:"problem_id"`
-	BehaviorTreeID string                          `json:"behavior_tree_id"`
+	ID              string                          `json:"id"`
+	ProblemID       string                          `json:"problem_id"`
+	BehaviorTreeID  string                          `json:"behavior_tree_id"`
 	BehaviorTreeIDs []string                        `json:"behavior_tree_ids,omitempty"`
-	Status         PlanExecutionStatus             `json:"status"`
-	CurrentOrder   int                             `json:"current_order"`
-	TotalOrders    int                             `json:"total_orders"`
-	StepStatuses   map[string]*StepExecutionStatus `json:"step_statuses"`
-	StartedAt      time.Time                       `json:"started_at"`
-	CompletedAt    time.Time                       `json:"completed_at,omitempty"`
-	Error          string                          `json:"error,omitempty"`
+	Status          PlanExecutionStatus             `json:"status"`
+	CurrentOrder    int                             `json:"current_order"`
+	TotalOrders     int                             `json:"total_orders"`
+	StepStatuses    map[string]*StepExecutionStatus `json:"step_statuses"`
+	StartedAt       time.Time                       `json:"started_at"`
+	CompletedAt     time.Time                       `json:"completed_at,omitempty"`
+	Error           string                          `json:"error,omitempty"`
 
 	// Internal
 	orderGroups [][]pddl.TaskAssignment
@@ -66,6 +66,19 @@ type PlanExecution struct {
 	persistProblemStatus   bool
 	runtimeInitialState    map[string]string
 	runtimeTaskDistributor string
+}
+
+type taskResultMessageClass string
+
+const (
+	taskResultMessageNone    taskResultMessageClass = "none"
+	taskResultMessageWarning taskResultMessageClass = "warning"
+	taskResultMessageError   taskResultMessageClass = "error"
+)
+
+type taskCompletionOutcome struct {
+	Status  TaskStatus
+	Message string
 }
 
 // PlanExecutor orchestrates PDDL plan execution
@@ -175,17 +188,17 @@ func (pe *PlanExecutor) startPlanExecution(
 	execCtx, cancel := context.WithCancel(ctx)
 
 	execution := &PlanExecution{
-		ID:              execID,
-		ProblemID:       problemID,
-		BehaviorTreeID:  primaryBehaviorTreeID,
-		BehaviorTreeIDs: append([]string{}, behaviorTreeIDs...),
-		Status:          PlanExecPending,
-		CurrentOrder:    0,
-		TotalOrders:     maxOrder + 1,
-		StepStatuses:    stepStatuses,
-		StartedAt:       time.Now(),
-		orderGroups:     groups,
-		cancelFunc:      cancel,
+		ID:                     execID,
+		ProblemID:              problemID,
+		BehaviorTreeID:         primaryBehaviorTreeID,
+		BehaviorTreeIDs:        append([]string{}, behaviorTreeIDs...),
+		Status:                 PlanExecPending,
+		CurrentOrder:           0,
+		TotalOrders:            maxOrder + 1,
+		StepStatuses:           stepStatuses,
+		StartedAt:              time.Now(),
+		orderGroups:            groups,
+		cancelFunc:             cancel,
 		persistProblemStatus:   persistProblemStatus,
 		runtimeInitialState:    cloneStringMap(initialState),
 		runtimeTaskDistributor: strings.TrimSpace(taskDistributorID),
@@ -388,19 +401,72 @@ func (pe *PlanExecutor) dispatchStep(ctx context.Context, exec *PlanExecution, a
 
 	// Wait for task completion
 	err = pe.waitForTask(ctx, taskID)
+	outcome := pe.resolveTaskCompletionOutcome(taskID, err)
+	messageClass, normalizedMessage := classifyTaskResultMessage(outcome.Message)
 
 	exec.mu.Lock()
 	stepStatus.EndedAt = time.Now()
 	if err != nil {
+		rawMessage := strings.TrimSpace(outcome.Message)
+		errorMessage := normalizedMessage
+		if strings.TrimSpace(errorMessage) == "" {
+			errorMessage = rawMessage
+		}
+		baseEffects := clonePlanningEffects(assignment.ResultStates)
+		errorEffects := append(baseEffects, clonePlanningEffects(assignment.ErrorResultStates)...)
+		pe.applyPlanningEffects(exec.ProblemID, appendPlanningMessageEffect(
+			errorEffects,
+			assignment.ErrorMessageVariable,
+			errorMessage,
+		))
 		if ctx.Err() != nil || strings.Contains(strings.ToLower(err.Error()), "cancel") {
 			stepStatus.Status = TaskCancelled
 		} else {
 			stepStatus.Status = TaskFailed
 		}
-		stepStatus.Error = err.Error()
+		if rawMessage != "" {
+			stepStatus.Error = rawMessage
+		} else if errorMessage != "" {
+			stepStatus.Error = errorMessage
+		} else {
+			stepStatus.Error = err.Error()
+		}
 	} else {
-		pe.applyPlanningEffects(exec.ProblemID, assignment.ResultStates)
-		stepStatus.Status = TaskCompleted
+		switch messageClass {
+		case taskResultMessageWarning:
+			baseEffects := clonePlanningEffects(assignment.ResultStates)
+			warningEffects := append(baseEffects, clonePlanningEffects(assignment.WarningResultStates)...)
+			pe.applyPlanningEffects(exec.ProblemID, appendPlanningMessageEffect(
+				warningEffects,
+				assignment.WarningMessageVariable,
+				normalizedMessage,
+			))
+			stepStatus.Status = TaskCompleted
+			if rawMessage := strings.TrimSpace(outcome.Message); rawMessage != "" {
+				stepStatus.Error = rawMessage
+			} else {
+				stepStatus.Error = normalizedMessage
+			}
+		case taskResultMessageError:
+			baseEffects := clonePlanningEffects(assignment.ResultStates)
+			errorEffects := append(baseEffects, clonePlanningEffects(assignment.ErrorResultStates)...)
+			pe.applyPlanningEffects(exec.ProblemID, appendPlanningMessageEffect(
+				errorEffects,
+				assignment.ErrorMessageVariable,
+				normalizedMessage,
+			))
+			stepStatus.Status = TaskFailed
+			if rawMessage := strings.TrimSpace(outcome.Message); rawMessage != "" {
+				stepStatus.Error = rawMessage
+			} else {
+				stepStatus.Error = normalizedMessage
+			}
+			err = fmt.Errorf("task error: %s", normalizedMessage)
+		default:
+			pe.applyPlanningEffects(exec.ProblemID, assignment.ResultStates)
+			stepStatus.Status = TaskCompleted
+			stepStatus.Error = ""
+		}
 	}
 	exec.mu.Unlock()
 	pe.broadcastPlanUpdate(exec)
@@ -535,6 +601,83 @@ func (pe *PlanExecutor) applyPlanningEffects(planID string, effectsInput []db.Pl
 	if len(effects) > 0 {
 		pe.stateManager.UpdatePlanningState(planID, effects)
 	}
+}
+
+func appendPlanningMessageEffect(effectsInput []db.PlanningEffect, variable, message string) []db.PlanningEffect {
+	effects := clonePlanningEffects(effectsInput)
+	trimmedVariable := strings.TrimSpace(variable)
+	if trimmedVariable == "" {
+		return effects
+	}
+
+	trimmedMessage := strings.TrimSpace(message)
+	for i := range effects {
+		if strings.TrimSpace(effects[i].Variable) == trimmedVariable {
+			effects[i].Value = trimmedMessage
+			return effects
+		}
+	}
+
+	effects = append(effects, db.PlanningEffect{
+		Variable: trimmedVariable,
+		Value:    trimmedMessage,
+	})
+	return effects
+}
+
+func clonePlanningEffects(values []db.PlanningEffect) []db.PlanningEffect {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make([]db.PlanningEffect, len(values))
+	copy(cloned, values)
+	return cloned
+}
+
+func classifyTaskResultMessage(message string) (taskResultMessageClass, string) {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		return taskResultMessageNone, ""
+	}
+
+	if len(trimmed) >= 2 {
+		prefix := strings.ToLower(trimmed[:2])
+		payload := strings.TrimSpace(trimmed[2:])
+		switch prefix {
+		case "w:":
+			return taskResultMessageWarning, payload
+		case "e:":
+			return taskResultMessageError, payload
+		}
+	}
+
+	return taskResultMessageNone, trimmed
+}
+
+func (pe *PlanExecutor) resolveTaskCompletionOutcome(taskID string, fallbackErr error) taskCompletionOutcome {
+	if pe.scheduler != nil {
+		if task, exists := pe.scheduler.GetTask(taskID); exists && task != nil {
+			return taskCompletionOutcome{
+				Status:  task.Status,
+				Message: strings.TrimSpace(task.ErrorMessage),
+			}
+		}
+	}
+	if pe.repo != nil {
+		if dbTask, err := pe.repo.GetTask(taskID); err == nil && dbTask != nil {
+			return taskCompletionOutcome{
+				Status:  TaskStatus(strings.TrimSpace(dbTask.Status)),
+				Message: strings.TrimSpace(dbTask.ErrorMessage.String),
+			}
+		}
+	}
+	if fallbackErr != nil {
+		return taskCompletionOutcome{
+			Status:  TaskFailed,
+			Message: strings.TrimSpace(fallbackErr.Error()),
+		}
+	}
+	return taskCompletionOutcome{Status: TaskCompleted}
 }
 
 func (pe *PlanExecutor) updateResourceOccupancyState(planID, resourceID string, occupied bool) {
@@ -849,32 +992,32 @@ func (pe *PlanExecutor) cancelExecution(exec *PlanExecution) {
 
 // PlanExecutionSnapshot is a thread-safe copy of PlanExecution state
 type PlanExecutionSnapshot struct {
-	ID             string
-	ProblemID      string
-	BehaviorTreeID string
+	ID              string
+	ProblemID       string
+	BehaviorTreeID  string
 	BehaviorTreeIDs []string
-	Status         string
-	CurrentOrder   int
-	TotalOrders    int
-	StartedAt      time.Time
-	CompletedAt    *time.Time
-	Error          string
-	Steps          []StepStatusSnapshot
+	Status          string
+	CurrentOrder    int
+	TotalOrders     int
+	StartedAt       time.Time
+	CompletedAt     *time.Time
+	Error           string
+	Steps           []StepStatusSnapshot
 }
 
 // StepStatusSnapshot is a thread-safe copy of step status
 type StepStatusSnapshot struct {
-	StepID        string
-	StepName      string
+	StepID         string
+	StepName       string
 	BehaviorTreeID string
-	AgentID       string
-	AgentName     string
-	Order         int
-	Status        string
-	TaskID        string
-	TaskName      string
-	RuntimeTaskID string
-	Error         string
+	AgentID        string
+	AgentName      string
+	Order          int
+	Status         string
+	TaskID         string
+	TaskName       string
+	RuntimeTaskID  string
+	Error          string
 }
 
 // Snapshot returns a thread-safe copy of the execution state

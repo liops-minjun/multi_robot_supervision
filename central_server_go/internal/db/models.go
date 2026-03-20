@@ -377,15 +377,26 @@ type PlanningStateVar struct {
 // The behavior tree itself is the runtime task; the planner only needs the
 // task's resource requirements and state transitions.
 type PlanningTaskSpec struct {
-	Preconditions     []PlanningCondition `json:"preconditions,omitempty"`
-	RequiredResources []string            `json:"required_resources,omitempty"`
-	DuringState       []PlanningEffect    `json:"during_state,omitempty"`
-	ResultStates      []PlanningEffect    `json:"result_states,omitempty"`
+	Preconditions          []PlanningCondition `json:"preconditions,omitempty"`
+	RequiredResources      []string            `json:"required_resources,omitempty"`
+	DuringState            []PlanningEffect    `json:"during_state,omitempty"`
+	ResultStates           []PlanningEffect    `json:"result_states,omitempty"`
+	WarningResultStates    []PlanningEffect    `json:"warning_result_states,omitempty"`
+	ErrorResultStates      []PlanningEffect    `json:"error_result_states,omitempty"`
+	WarningMessageVariable string              `json:"warning_message_variable,omitempty"`
+	ErrorMessageVariable   string              `json:"error_message_variable,omitempty"`
 }
 
 // HasData reports whether the task spec contains any planning metadata.
 func (spec PlanningTaskSpec) HasData() bool {
-	return len(spec.Preconditions) > 0 || len(spec.RequiredResources) > 0 || len(spec.DuringState) > 0 || len(spec.ResultStates) > 0
+	return len(spec.Preconditions) > 0 ||
+		len(spec.RequiredResources) > 0 ||
+		len(spec.DuringState) > 0 ||
+		len(spec.ResultStates) > 0 ||
+		len(spec.WarningResultStates) > 0 ||
+		len(spec.ErrorResultStates) > 0 ||
+		spec.WarningMessageVariable != "" ||
+		spec.ErrorMessageVariable != ""
 }
 
 // DecodePlanningTaskSpec parses task-level planning metadata from stored JSON.

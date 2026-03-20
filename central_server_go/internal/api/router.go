@@ -279,6 +279,7 @@ func (s *Server) setupRouter() {
 				r.Get("/", s.ListRealtimeSessions)
 				r.Post("/", s.StartRealtimeSession)
 				r.Get("/{sessionID}", s.GetRealtimeSession)
+				r.Post("/{sessionID}/reset-state", s.ResetRealtimeSessionState)
 				r.Post("/{sessionID}/stop", s.StopRealtimeSession)
 			})
 

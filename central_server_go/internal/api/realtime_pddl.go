@@ -78,6 +78,11 @@ type RealtimeSessionResponse struct {
 	UpdatedAt             time.Time              `json:"updated_at"`
 }
 
+type RealtimeSessionStateResetRequest struct {
+	Values        map[string]string `json:"values"`
+	ClearLiveKeys []string          `json:"clear_live_keys,omitempty"`
+}
+
 type realtimeGoal struct {
 	ID                   string
 	Name                 string
@@ -279,6 +284,70 @@ func (m *RealtimePddlManager) Stop(id string) error {
 	}
 	m.cancelExecutionsByProblemPrefix("realtime:" + id + ":")
 	return nil
+}
+
+func (m *RealtimePddlManager) ResetSessionState(
+	id string,
+	values map[string]string,
+	clearLiveKeys []string,
+) (*realtimeSession, error) {
+	session, ok := m.Get(strings.TrimSpace(id))
+	if !ok || session == nil {
+		return nil, fmt.Errorf("realtime session %s not found", id)
+	}
+
+	normalizedValues := normalizeRuntimeStateValues(values)
+	if len(normalizedValues) == 0 {
+		return nil, fmt.Errorf("values is required")
+	}
+
+	clearKeySet := make(map[string]struct{}, len(clearLiveKeys))
+	for _, key := range clearLiveKeys {
+		trimmed := strings.TrimSpace(key)
+		if trimmed == "" {
+			continue
+		}
+		clearKeySet[trimmed] = struct{}{}
+	}
+	for key := range normalizedValues {
+		clearKeySet[key] = struct{}{}
+	}
+
+	now := time.Now().UTC()
+	session.mu.Lock()
+	if session.CurrentState == nil {
+		session.CurrentState = map[string]string{}
+	}
+	for key, value := range normalizedValues {
+		session.CurrentState[key] = value
+	}
+	if len(clearKeySet) > 0 {
+		for source, runtime := range session.RuntimeStateSources {
+			if len(runtime.Values) == 0 {
+				delete(session.RuntimeStateSources, source)
+				continue
+			}
+			changed := false
+			for key := range clearKeySet {
+				if _, exists := runtime.Values[key]; exists {
+					delete(runtime.Values, key)
+					changed = true
+				}
+			}
+			if len(runtime.Values) == 0 {
+				delete(session.RuntimeStateSources, source)
+				continue
+			}
+			if changed {
+				runtime.UpdatedAt = now
+				session.RuntimeStateSources[source] = runtime
+			}
+		}
+	}
+	session.UpdatedAt = now
+	session.mu.Unlock()
+
+	return session, nil
 }
 
 func (m *RealtimePddlManager) cancelExecutionsByProblemPrefix(prefix string) {
@@ -900,13 +969,7 @@ func (m *RealtimePddlManager) syncExecutions(session *realtimeSession) bool {
 			}
 		case executor.PlanExecCompleted:
 			if executionCtx.Plan != nil {
-				for _, assignment := range executionCtx.Plan.Assignments {
-					for _, effect := range assignment.ResultStates {
-						if key := strings.TrimSpace(effect.Variable); key != "" {
-							nextState[key] = effect.Value
-						}
-					}
-				}
+				applyRealtimeExecutionEffects(nextState, executionCtx.Plan, snapshot.Steps)
 			}
 			if executionCtx.Goal != nil {
 				completedGoalIDs[executionCtx.Goal.ID] = true
@@ -984,29 +1047,150 @@ func applyRealtimePartialEffects(
 		return
 	}
 
-	completedTasks := map[string]bool{}
-	for _, step := range stepSnapshots {
-		if strings.EqualFold(strings.TrimSpace(step.Status), "completed") {
-			taskID := strings.TrimSpace(step.TaskID)
-			if taskID != "" {
-				completedTasks[taskID] = true
-			}
-		}
+	applyRealtimeExecutionEffects(state, plan, stepSnapshots)
+}
+
+func applyRealtimeExecutionEffects(
+	state map[string]string,
+	plan *pddl.Plan,
+	stepSnapshots []executor.StepStatusSnapshot,
+) {
+	if state == nil || plan == nil || len(plan.Assignments) == 0 {
+		return
 	}
-	if len(completedTasks) == 0 {
+
+	stepByTaskID := make(map[string]executor.StepStatusSnapshot, len(stepSnapshots))
+	for _, step := range stepSnapshots {
+		taskID := strings.TrimSpace(step.TaskID)
+		if taskID == "" {
+			continue
+		}
+		status := strings.ToLower(strings.TrimSpace(step.Status))
+		switch status {
+		case "completed", "failed", "cancelled":
+		default:
+			continue
+		}
+		stepByTaskID[taskID] = step
+	}
+	if len(stepByTaskID) == 0 {
 		return
 	}
 
 	for _, assignment := range plan.Assignments {
-		if !completedTasks[strings.TrimSpace(assignment.TaskID)] {
+		step, ok := stepByTaskID[strings.TrimSpace(assignment.TaskID)]
+		if !ok {
 			continue
 		}
-		for _, effect := range assignment.ResultStates {
+		effects := realtimePlanningEffectsForStep(assignment, step)
+		for _, effect := range effects {
 			if key := strings.TrimSpace(effect.Variable); key != "" {
 				state[key] = effect.Value
 			}
 		}
 	}
+}
+
+func realtimePlanningEffectsForStep(
+	assignment pddl.TaskAssignment,
+	step executor.StepStatusSnapshot,
+) []db.PlanningEffect {
+	stepStatus := strings.ToLower(strings.TrimSpace(step.Status))
+	rawMessage := strings.TrimSpace(step.Error)
+	messageClass, normalizedMessage := classifyRealtimeTaskResultMessage(step.Error)
+	baseEffects := cloneRealtimePlanningEffects(assignment.ResultStates)
+
+	switch stepStatus {
+	case "failed", "cancelled":
+		errorEffects := append(baseEffects, cloneRealtimePlanningEffects(assignment.ErrorResultStates)...)
+		message := normalizedMessage
+		if strings.TrimSpace(message) == "" {
+			message = rawMessage
+		}
+		return appendRealtimePlanningMessageEffect(
+			errorEffects,
+			assignment.ErrorMessageVariable,
+			message,
+		)
+	}
+
+	switch messageClass {
+	case taskResultMessageWarning:
+		warningEffects := append(baseEffects, cloneRealtimePlanningEffects(assignment.WarningResultStates)...)
+		return appendRealtimePlanningMessageEffect(
+			warningEffects,
+			assignment.WarningMessageVariable,
+			normalizedMessage,
+		)
+	case taskResultMessageError:
+		errorEffects := append(baseEffects, cloneRealtimePlanningEffects(assignment.ErrorResultStates)...)
+		return appendRealtimePlanningMessageEffect(
+			errorEffects,
+			assignment.ErrorMessageVariable,
+			normalizedMessage,
+		)
+	default:
+		return baseEffects
+	}
+}
+
+type taskResultMessageClass string
+
+const (
+	taskResultMessageNone    taskResultMessageClass = "none"
+	taskResultMessageWarning taskResultMessageClass = "warning"
+	taskResultMessageError   taskResultMessageClass = "error"
+)
+
+func classifyRealtimeTaskResultMessage(message string) (taskResultMessageClass, string) {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		return taskResultMessageNone, ""
+	}
+
+	if len(trimmed) >= 2 {
+		prefix := strings.ToLower(trimmed[:2])
+		payload := strings.TrimSpace(trimmed[2:])
+		switch prefix {
+		case "w:":
+			return taskResultMessageWarning, payload
+		case "e:":
+			return taskResultMessageError, payload
+		}
+	}
+
+	return taskResultMessageNone, trimmed
+}
+
+func cloneRealtimePlanningEffects(values []db.PlanningEffect) []db.PlanningEffect {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make([]db.PlanningEffect, len(values))
+	copy(cloned, values)
+	return cloned
+}
+
+func appendRealtimePlanningMessageEffect(effectsInput []db.PlanningEffect, variable, message string) []db.PlanningEffect {
+	effects := cloneRealtimePlanningEffects(effectsInput)
+	trimmedVariable := strings.TrimSpace(variable)
+	if trimmedVariable == "" {
+		return effects
+	}
+
+	trimmedMessage := strings.TrimSpace(message)
+	for i := range effects {
+		if strings.TrimSpace(effects[i].Variable) == trimmedVariable {
+			effects[i].Value = trimmedMessage
+			return effects
+		}
+	}
+
+	effects = append(effects, db.PlanningEffect{
+		Variable: trimmedVariable,
+		Value:    trimmedMessage,
+	})
+	return effects
 }
 
 func (m *RealtimePddlManager) collectBusyAgentsAndResources(session *realtimeSession) (map[string]bool, map[string]bool) {
@@ -1233,6 +1417,25 @@ func agentLocationFromState(current map[string]string, agent pddl.AgentInfo) str
 	for _, key := range candidates {
 		if value, ok := current[key]; ok {
 			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func agentLocationStateKey(current map[string]string, agent pddl.AgentInfo) string {
+	if len(current) == 0 {
+		return ""
+	}
+	agentID := strings.TrimSpace(agent.ID)
+	agentName := strings.TrimSpace(agent.Name)
+	candidates := uniqueNonEmptyStrings([]string{
+		agentName + "_location",
+		agentID + "_location",
+		strings.ReplaceAll(agentID, "-", "_") + "_location",
+	})
+	for _, key := range candidates {
+		if _, ok := current[key]; ok {
+			return key
 		}
 	}
 	return ""
@@ -1833,12 +2036,23 @@ func reconcileRealtimeReservationState(
 		return false
 	}
 
+	changed := false
 	locationByCanonical := map[string]string{}
 	for _, alias := range aliases {
-		locationByCanonical[alias.Canonical] = strings.TrimSpace(agentLocationFromState(merged, alias.Agent))
+		mergedLocation := strings.TrimSpace(agentLocationFromState(merged, alias.Agent))
+		currentLocation := strings.TrimSpace(agentLocationFromState(current, alias.Agent))
+		if (mergedLocation == "" || strings.EqualFold(mergedLocation, "none")) &&
+			currentLocation != "" &&
+			!strings.EqualFold(currentLocation, "none") {
+			mergedLocation = currentLocation
+			if key := agentLocationStateKey(merged, alias.Agent); key != "" {
+				merged[key] = currentLocation
+				changed = true
+			}
+		}
+		locationByCanonical[alias.Canonical] = mergedLocation
 	}
 
-	changed := false
 	for _, resource := range resources {
 		if strings.EqualFold(strings.TrimSpace(resource.Kind), "type") {
 			continue
@@ -2409,6 +2623,31 @@ func (s *Server) StopRealtimeSession(w http.ResponseWriter, r *http.Request) {
 	session, _ := s.realtimePddl.Get(id)
 	if session == nil {
 		writeJSON(w, http.StatusOK, map[string]string{"message": "realtime session stopped"})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.realtimePddl.toResponse(session))
+}
+
+func (s *Server) ResetRealtimeSessionState(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(chi.URLParam(r, "sessionID"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "sessionID is required")
+		return
+	}
+
+	var req RealtimeSessionStateResetRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(req.Values) == 0 {
+		writeError(w, http.StatusBadRequest, "values is required")
+		return
+	}
+
+	session, err := s.realtimePddl.ResetSessionState(id, req.Values, req.ClearLiveKeys)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, s.realtimePddl.toResponse(session))

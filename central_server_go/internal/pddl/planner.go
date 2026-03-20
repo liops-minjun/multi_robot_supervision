@@ -122,16 +122,20 @@ func Solve(problem *PlanProblem) *Plan {
 		runtimeParams["agent.id"] = agentID
 		runtimeParams["agent.name"] = agentName
 		assignments = append(assignments, TaskAssignment{
-			TaskID:         task.TaskID,
-			TaskName:       task.TaskName,
-			BehaviorTreeID: task.BehaviorTreeID,
-			StepID:         task.TaskID,
-			StepName:       task.TaskName,
-			AgentID:        agentID,
-			AgentName:      agentName,
-			Reason:         reason,
-			RuntimeParams:  runtimeParams,
-			ResultStates:   cloneEffects(task.ResultStates),
+			TaskID:                 task.TaskID,
+			TaskName:               task.TaskName,
+			BehaviorTreeID:         task.BehaviorTreeID,
+			StepID:                 task.TaskID,
+			StepName:               task.TaskName,
+			AgentID:                agentID,
+			AgentName:              agentName,
+			Reason:                 reason,
+			RuntimeParams:          runtimeParams,
+			ResultStates:           cloneEffects(task.ResultStates),
+			WarningResultStates:    cloneEffects(task.WarningResultStates),
+			ErrorResultStates:      cloneEffects(task.ErrorResultStates),
+			WarningMessageVariable: task.WarningMessageVariable,
+			ErrorMessageVariable:   task.ErrorMessageVariable,
 		})
 		agentLoad[agentID]++
 	}

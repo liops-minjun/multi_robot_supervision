@@ -253,6 +253,10 @@ export interface PlanningTaskSpec {
   required_resources?: string[]
   during_state?: PlanningEffect[]
   result_states?: PlanningEffect[]
+  warning_result_states?: PlanningEffect[]
+  error_result_states?: PlanningEffect[]
+  warning_message_variable?: string
+  error_message_variable?: string
 }
 
 export interface PlanningStateVar {

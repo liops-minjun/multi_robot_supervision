@@ -643,14 +643,18 @@ func (s *Server) solveProblem(pp *db.PlanningProblem) (*pddl.Plan, error) {
 		}
 
 		tasks = append(tasks, pddl.PlanTask{
-			TaskID:              bt.ID,
-			TaskName:            bt.Name,
-			BehaviorTreeID:      bt.ID,
-			RequiredActionTypes: decodeStringSlice(bt.RequiredActionTypes),
-			Preconditions:       append([]db.PlanningCondition{}, taskSpec.Preconditions...),
-			RequiredResources:   append([]string{}, taskSpec.RequiredResources...),
-			ResultStates:        append([]db.PlanningEffect{}, taskSpec.ResultStates...),
-			DuringState:         append([]db.PlanningEffect{}, taskSpec.DuringState...),
+			TaskID:                 bt.ID,
+			TaskName:               bt.Name,
+			BehaviorTreeID:         bt.ID,
+			RequiredActionTypes:    decodeStringSlice(bt.RequiredActionTypes),
+			Preconditions:          append([]db.PlanningCondition{}, taskSpec.Preconditions...),
+			RequiredResources:      append([]string{}, taskSpec.RequiredResources...),
+			ResultStates:           append([]db.PlanningEffect{}, taskSpec.ResultStates...),
+			WarningResultStates:    append([]db.PlanningEffect{}, taskSpec.WarningResultStates...),
+			ErrorResultStates:      append([]db.PlanningEffect{}, taskSpec.ErrorResultStates...),
+			DuringState:            append([]db.PlanningEffect{}, taskSpec.DuringState...),
+			WarningMessageVariable: taskSpec.WarningMessageVariable,
+			ErrorMessageVariable:   taskSpec.ErrorMessageVariable,
 		})
 	}
 

@@ -187,7 +187,11 @@ func instantiateGroundTask(task PlanTask, bindings map[string]groundedResource) 
 	grounded.Preconditions = cloneConditions(task.Preconditions)
 	grounded.RequiredResources = cloneStringSlice(task.RequiredResources)
 	grounded.ResultStates = cloneEffects(task.ResultStates)
+	grounded.WarningResultStates = cloneEffects(task.WarningResultStates)
+	grounded.ErrorResultStates = cloneEffects(task.ErrorResultStates)
 	grounded.DuringState = cloneEffects(task.DuringState)
+	grounded.WarningMessageVariable = strings.TrimSpace(task.WarningMessageVariable)
+	grounded.ErrorMessageVariable = strings.TrimSpace(task.ErrorMessageVariable)
 	grounded.RuntimeParams = buildRuntimeParams(primary)
 
 	for i, token := range grounded.RequiredResources {
@@ -204,10 +208,20 @@ func instantiateGroundTask(task PlanTask, bindings map[string]groundedResource) 
 		grounded.ResultStates[i].Variable = substituteResourcePlaceholders(grounded.ResultStates[i].Variable, primary)
 		grounded.ResultStates[i].Value = substituteResourcePlaceholders(grounded.ResultStates[i].Value, primary)
 	}
+	for i := range grounded.WarningResultStates {
+		grounded.WarningResultStates[i].Variable = substituteResourcePlaceholders(grounded.WarningResultStates[i].Variable, primary)
+		grounded.WarningResultStates[i].Value = substituteResourcePlaceholders(grounded.WarningResultStates[i].Value, primary)
+	}
+	for i := range grounded.ErrorResultStates {
+		grounded.ErrorResultStates[i].Variable = substituteResourcePlaceholders(grounded.ErrorResultStates[i].Variable, primary)
+		grounded.ErrorResultStates[i].Value = substituteResourcePlaceholders(grounded.ErrorResultStates[i].Value, primary)
+	}
 	for i := range grounded.DuringState {
 		grounded.DuringState[i].Variable = substituteResourcePlaceholders(grounded.DuringState[i].Variable, primary)
 		grounded.DuringState[i].Value = substituteResourcePlaceholders(grounded.DuringState[i].Value, primary)
 	}
+	grounded.WarningMessageVariable = substituteResourcePlaceholders(grounded.WarningMessageVariable, primary)
+	grounded.ErrorMessageVariable = substituteResourcePlaceholders(grounded.ErrorMessageVariable, primary)
 
 	if primary != nil {
 		grounded.TaskID = grounded.TaskID + "::" + primary.Resource.ID
@@ -231,12 +245,22 @@ func usesGenericResourcePlaceholderTask(task PlanTask) bool {
 			return true
 		}
 	}
+	for _, effect := range task.WarningResultStates {
+		if contains(effect.Variable) || contains(effect.Value) {
+			return true
+		}
+	}
+	for _, effect := range task.ErrorResultStates {
+		if contains(effect.Variable) || contains(effect.Value) {
+			return true
+		}
+	}
 	for _, effect := range task.DuringState {
 		if contains(effect.Variable) || contains(effect.Value) {
 			return true
 		}
 	}
-	return false
+	return contains(task.WarningMessageVariable) || contains(task.ErrorMessageVariable)
 }
 
 func usesGenericAgentPlaceholderTask(task PlanTask) bool {
@@ -253,12 +277,22 @@ func usesGenericAgentPlaceholderTask(task PlanTask) bool {
 			return true
 		}
 	}
+	for _, effect := range task.WarningResultStates {
+		if contains(effect.Variable) || contains(effect.Value) {
+			return true
+		}
+	}
+	for _, effect := range task.ErrorResultStates {
+		if contains(effect.Variable) || contains(effect.Value) {
+			return true
+		}
+	}
 	for _, effect := range task.DuringState {
 		if contains(effect.Variable) || contains(effect.Value) {
 			return true
 		}
 	}
-	return false
+	return contains(task.WarningMessageVariable) || contains(task.ErrorMessageVariable)
 }
 
 func substituteResourcePlaceholders(value string, primary *groundedResource) string {
@@ -267,11 +301,11 @@ func substituteResourcePlaceholders(value string, primary *groundedResource) str
 	}
 
 	replacements := map[string]string{
-		"{{resource}}":          primary.Resource.Name,
-		"{{resource.id}}":       primary.Resource.ID,
-		"{{resource.name}}":     primary.Resource.Name,
-		"{{resource.kind}}":     primary.Resource.Kind,
-		"{{resource.type_id}}":  primary.TypeID,
+		"{{resource}}":           primary.Resource.Name,
+		"{{resource.id}}":        primary.Resource.ID,
+		"{{resource.name}}":      primary.Resource.Name,
+		"{{resource.kind}}":      primary.Resource.Kind,
+		"{{resource.type_id}}":   primary.TypeID,
 		"{{resource.type_name}}": primary.TypeName,
 	}
 
@@ -307,7 +341,11 @@ func instantiateAgentTask(task PlanTask, agent AgentInfo) PlanTask {
 	bound := task
 	bound.Preconditions = cloneConditions(task.Preconditions)
 	bound.ResultStates = cloneEffects(task.ResultStates)
+	bound.WarningResultStates = cloneEffects(task.WarningResultStates)
+	bound.ErrorResultStates = cloneEffects(task.ErrorResultStates)
 	bound.DuringState = cloneEffects(task.DuringState)
+	bound.WarningMessageVariable = strings.TrimSpace(task.WarningMessageVariable)
+	bound.ErrorMessageVariable = strings.TrimSpace(task.ErrorMessageVariable)
 	bound.RuntimeParams = cloneStringMap(task.RuntimeParams)
 
 	for i := range bound.Preconditions {
@@ -318,10 +356,20 @@ func instantiateAgentTask(task PlanTask, agent AgentInfo) PlanTask {
 		bound.ResultStates[i].Variable = substituteAgentPlaceholders(bound.ResultStates[i].Variable, agent)
 		bound.ResultStates[i].Value = substituteAgentPlaceholders(bound.ResultStates[i].Value, agent)
 	}
+	for i := range bound.WarningResultStates {
+		bound.WarningResultStates[i].Variable = substituteAgentPlaceholders(bound.WarningResultStates[i].Variable, agent)
+		bound.WarningResultStates[i].Value = substituteAgentPlaceholders(bound.WarningResultStates[i].Value, agent)
+	}
+	for i := range bound.ErrorResultStates {
+		bound.ErrorResultStates[i].Variable = substituteAgentPlaceholders(bound.ErrorResultStates[i].Variable, agent)
+		bound.ErrorResultStates[i].Value = substituteAgentPlaceholders(bound.ErrorResultStates[i].Value, agent)
+	}
 	for i := range bound.DuringState {
 		bound.DuringState[i].Variable = substituteAgentPlaceholders(bound.DuringState[i].Variable, agent)
 		bound.DuringState[i].Value = substituteAgentPlaceholders(bound.DuringState[i].Value, agent)
 	}
+	bound.WarningMessageVariable = substituteAgentPlaceholders(bound.WarningMessageVariable, agent)
+	bound.ErrorMessageVariable = substituteAgentPlaceholders(bound.ErrorMessageVariable, agent)
 
 	agentName := strings.TrimSpace(agent.Name)
 	if agentName == "" {
@@ -349,13 +397,13 @@ func buildRuntimeParams(primary *groundedResource) map[string]string {
 	}
 
 	params := map[string]string{
-		"resource":       primary.Resource.Name,
-		"resource_id":    primary.Resource.ID,
-		"resource_name":  primary.Resource.Name,
-		"resource_kind":  primary.Resource.Kind,
-		"resource.id":    primary.Resource.ID,
-		"resource.name":  primary.Resource.Name,
-		"resource.kind":  primary.Resource.Kind,
+		"resource":           primary.Resource.Name,
+		"resource_id":        primary.Resource.ID,
+		"resource_name":      primary.Resource.Name,
+		"resource_kind":      primary.Resource.Kind,
+		"resource.id":        primary.Resource.ID,
+		"resource.name":      primary.Resource.Name,
+		"resource.kind":      primary.Resource.Kind,
 		"resource.type_id":   primary.TypeID,
 		"resource.type_name": primary.TypeName,
 	}

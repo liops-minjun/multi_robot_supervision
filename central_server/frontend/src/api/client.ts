@@ -866,6 +866,17 @@ export const pddlApi = {
     return data
   },
 
+  resetRealtimeSessionState: async (
+    id: string,
+    req: {
+      values: Record<string, string>
+      clear_live_keys?: string[]
+    }
+  ): Promise<RealtimeSession> => {
+    const { data } = await api.post(`/pddl/realtime-sessions/${id}/reset-state`, req)
+    return data
+  },
+
   // Resources
   getResources: async (): Promise<ResourceAllocation[]> => {
     const { data } = await api.get('/pddl/resources')
