@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -27,6 +28,7 @@ type RealtimeGoalRequest struct {
 	Enabled              bool                   `json:"enabled"`
 	ActivationConditions []db.PlanningCondition `json:"activation_conditions,omitempty"`
 	ResourceTypeID       string                 `json:"resource_type_id,omitempty"`
+	ResourceTypeIDs      []string               `json:"resource_type_ids,omitempty"`
 	GoalState            map[string]string      `json:"goal_state"`
 }
 
@@ -48,6 +50,7 @@ type RealtimeGoalResponse struct {
 	Enabled              bool                   `json:"enabled"`
 	ActivationConditions []db.PlanningCondition `json:"activation_conditions,omitempty"`
 	ResourceTypeID       string                 `json:"resource_type_id,omitempty"`
+	ResourceTypeIDs      []string               `json:"resource_type_ids,omitempty"`
 	GoalState            map[string]string      `json:"goal_state"`
 }
 
@@ -90,6 +93,7 @@ type realtimeGoal struct {
 	Enabled              bool
 	ActivationConditions []db.PlanningCondition
 	ResourceTypeID       string
+	ResourceTypeIDs      []string
 	GoalState            map[string]string
 }
 
@@ -122,6 +126,7 @@ type realtimeSession struct {
 	Name                 string
 	BehaviorTreeIDs      []string
 	TaskDistributorID    string
+	StateMergePolicies   []db.TaskDistributorStateMergePolicy
 	AgentIDs             []string
 	Agents               []pddl.AgentInfo
 	Resources            []pddl.ResourceInfo
@@ -171,6 +176,18 @@ func NewRealtimePddlManager(server *Server) *RealtimePddlManager {
 	}
 }
 
+var defaultStateMergePolicies = []db.TaskDistributorStateMergePolicy{
+	{Pattern: "{{agent.name}}_status", Priority: "live"},
+	{Pattern: "{{agent.name}}_mode", Priority: "live"},
+	{Pattern: "{{agent.name}}_location", Priority: "live"},
+	{Pattern: "{{agent.name}}_battery_*", Priority: "live"},
+	{Pattern: "{{agent.name}}_*msg*", Priority: "planner"},
+	{Pattern: "{{resource.name}}_status", Priority: "live"},
+	{Pattern: "{{resource.name}}_location", Priority: "live"},
+	{Pattern: "{{resource.name}}_reserved_by", Priority: "planner"},
+	{Pattern: "{{resource.name}}_*msg*", Priority: "planner"},
+}
+
 func (m *RealtimePddlManager) Start(req RealtimeSessionRequest) (*realtimeSession, error) {
 	behaviorTreeIDs := normalizeBehaviorTreeIDs(req.BehaviorTreeID, req.BehaviorTreeIDs)
 	if len(behaviorTreeIDs) == 0 {
@@ -208,6 +225,10 @@ func (m *RealtimePddlManager) Start(req RealtimeSessionRequest) (*realtimeSessio
 	if err != nil {
 		return nil, err
 	}
+	stateMergePolicies, err := m.server.loadRealtimeStateMergePolicies(req.TaskDistributorID)
+	if err != nil {
+		return nil, err
+	}
 
 	tickInterval := 2 * time.Second
 	if req.TickIntervalSec > 0 {
@@ -224,6 +245,7 @@ func (m *RealtimePddlManager) Start(req RealtimeSessionRequest) (*realtimeSessio
 		Name:                strings.TrimSpace(req.Name),
 		BehaviorTreeIDs:     behaviorTreeIDs,
 		TaskDistributorID:   strings.TrimSpace(req.TaskDistributorID),
+		StateMergePolicies:  cloneStateMergePolicies(stateMergePolicies),
 		AgentIDs:            append([]string{}, req.AgentIDs...),
 		Agents:              append([]pddl.AgentInfo{}, agents...),
 		Resources:           append([]pddl.ResourceInfo{}, resources...),
@@ -284,6 +306,30 @@ func (m *RealtimePddlManager) Stop(id string) error {
 	}
 	m.cancelExecutionsByProblemPrefix("realtime:" + id + ":")
 	return nil
+}
+
+func (m *RealtimePddlManager) UpdateStateMergePolicies(taskDistributorID string, policies []db.TaskDistributorStateMergePolicy) {
+	taskDistributorID = strings.TrimSpace(taskDistributorID)
+	if taskDistributorID == "" {
+		return
+	}
+	normalized := normalizeStateMergePolicies(policies)
+
+	m.mu.RLock()
+	sessions := make([]*realtimeSession, 0, len(m.sessions))
+	for _, session := range m.sessions {
+		if strings.TrimSpace(session.TaskDistributorID) == taskDistributorID {
+			sessions = append(sessions, session)
+		}
+	}
+	m.mu.RUnlock()
+
+	for _, session := range sessions {
+		session.mu.Lock()
+		session.StateMergePolicies = cloneStateMergePolicies(normalized)
+		session.UpdatedAt = time.Now().UTC()
+		session.mu.Unlock()
+	}
 }
 
 func (m *RealtimePddlManager) ResetSessionState(
@@ -507,6 +553,38 @@ func (m *RealtimePddlManager) ClearRuntimeStateByDistributor(taskDistributorID s
 	return cleared
 }
 
+// ClearRuntimeStateByAgent removes runtime overlay state from sessions containing the agent.
+// If source is empty, it defaults to "agent:<agentID>".
+func (m *RealtimePddlManager) ClearRuntimeStateByAgent(agentID string, source string) int {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return 0
+	}
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = "agent:" + agentID
+	}
+	now := time.Now().UTC()
+	cleared := 0
+
+	m.mu.RLock()
+	for _, session := range m.sessions {
+		if session == nil || !sessionContainsAgent(session, agentID) {
+			continue
+		}
+		session.mu.Lock()
+		if _, ok := session.RuntimeStateSources[source]; ok {
+			delete(session.RuntimeStateSources, source)
+			cleared++
+		}
+		session.UpdatedAt = now
+		session.mu.Unlock()
+	}
+	m.mu.RUnlock()
+
+	return cleared
+}
+
 func (m *RealtimePddlManager) Get(id string) (*realtimeSession, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -568,6 +646,7 @@ func (m *RealtimePddlManager) tick(session *realtimeSession) {
 			Enabled:              goal.Enabled,
 			ActivationConditions: cloneConditions(goal.ActivationConditions),
 			ResourceTypeID:       goal.ResourceTypeID,
+			ResourceTypeIDs:      append([]string{}, goal.ResourceTypeIDs...),
 			GoalState:            cloneStringMap(goal.GoalState),
 		})
 	}
@@ -763,7 +842,7 @@ func (m *RealtimePddlManager) buildDispatchCandidateForAgent(
 			currentState,
 			goalCandidate.ActivationConditions,
 			goalCandidate.GoalState,
-			goalCandidate.ResourceTypeID,
+			goalCandidate.ResourceTypeIDs,
 			[]pddl.AgentInfo{agent},
 			availableResources,
 			agentID,
@@ -1594,7 +1673,8 @@ func normalizeRealtimeGoals(goals []RealtimeGoalRequest) []realtimeGoal {
 			Priority:             goal.Priority,
 			Enabled:              goal.Enabled,
 			ActivationConditions: cloneConditions(goal.ActivationConditions),
-			ResourceTypeID:       strings.TrimSpace(goal.ResourceTypeID),
+			ResourceTypeID:       firstRealtimeResourceTypeID(goal.ResourceTypeID, goal.ResourceTypeIDs),
+			ResourceTypeIDs:      normalizeRealtimeResourceTypeIDs(goal.ResourceTypeID, goal.ResourceTypeIDs),
 			GoalState:            cloneStringMap(goal.GoalState),
 		})
 	}
@@ -1605,6 +1685,39 @@ func normalizeRealtimeGoals(goals []RealtimeGoalRequest) []realtimeGoal {
 		return result[i].Name < result[j].Name
 	})
 	return result
+}
+
+func normalizeRealtimeResourceTypeIDs(primary string, extras []string) []string {
+	values := make([]string, 0, len(extras)+1)
+	if trimmed := strings.TrimSpace(primary); trimmed != "" {
+		values = append(values, trimmed)
+	}
+	for _, raw := range extras {
+		if trimmed := strings.TrimSpace(raw); trimmed != "" {
+			values = append(values, trimmed)
+		}
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func firstRealtimeResourceTypeID(primary string, extras []string) string {
+	normalized := normalizeRealtimeResourceTypeIDs(primary, extras)
+	if len(normalized) == 0 {
+		return ""
+	}
+	return normalized[0]
 }
 
 func goalUsesAgentPlaceholders(conditions []db.PlanningCondition, goalState map[string]string) bool {
@@ -1635,9 +1748,14 @@ func goalUsesResourcePlaceholders(conditions []db.PlanningCondition, goalState m
 	return false
 }
 
-func filterRealtimeResourcesByType(resources []pddl.ResourceInfo, resourceTypeID string) []pddl.ResourceInfo {
-	resourceTypeID = strings.TrimSpace(resourceTypeID)
-	if resourceTypeID == "" {
+func filterRealtimeResourcesByType(resources []pddl.ResourceInfo, resourceTypeIDs []string) []pddl.ResourceInfo {
+	typeSet := make(map[string]struct{})
+	for _, id := range resourceTypeIDs {
+		if trimmed := strings.TrimSpace(id); trimmed != "" {
+			typeSet[trimmed] = struct{}{}
+		}
+	}
+	if len(typeSet) == 0 {
 		return append([]pddl.ResourceInfo{}, resources...)
 	}
 
@@ -1646,7 +1764,7 @@ func filterRealtimeResourcesByType(resources []pddl.ResourceInfo, resourceTypeID
 		if strings.EqualFold(strings.TrimSpace(resource.Kind), "type") {
 			continue
 		}
-		if strings.TrimSpace(resource.ParentResourceID) != resourceTypeID {
+		if _, ok := typeSet[strings.TrimSpace(resource.ParentResourceID)]; !ok {
 			continue
 		}
 		filtered = append(filtered, resource)
@@ -1670,7 +1788,7 @@ func selectRealtimeGoal(
 			currentState,
 			goal.ActivationConditions,
 			goal.GoalState,
-			goal.ResourceTypeID,
+			goal.ResourceTypeIDs,
 			agents,
 			resources,
 			preferredAgentID,
@@ -1690,7 +1808,7 @@ func realtimeActivationConditionsMet(
 	current map[string]string,
 	conditions []db.PlanningCondition,
 	goalState map[string]string,
-	resourceTypeID string,
+	resourceTypeIDs []string,
 	agents []pddl.AgentInfo,
 	resources []pddl.ResourceInfo,
 	preferredAgentID string,
@@ -1716,7 +1834,7 @@ func realtimeActivationConditionsMet(
 
 	resourceCandidates := []pddl.ResourceInfo{{}}
 	if needsResource {
-		instances := filterRealtimeResourcesByType(resourceInstances(resources), resourceTypeID)
+		instances := filterRealtimeResourcesByType(resourceInstances(resources), resourceTypeIDs)
 		if len(instances) == 0 {
 			return false, realtimeGoalBinding{}
 		}
@@ -1962,6 +2080,181 @@ func (m *RealtimePddlManager) sessionLiveState(session *realtimeSession) map[str
 	return live
 }
 
+func cloneStateMergePolicies(values []db.TaskDistributorStateMergePolicy) []db.TaskDistributorStateMergePolicy {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make([]db.TaskDistributorStateMergePolicy, 0, len(values))
+	for _, value := range values {
+		pattern := strings.TrimSpace(value.Pattern)
+		priority := strings.ToLower(strings.TrimSpace(value.Priority))
+		if pattern == "" || (priority != "live" && priority != "planner") {
+			continue
+		}
+		cloned = append(cloned, db.TaskDistributorStateMergePolicy{
+			Pattern:  pattern,
+			Priority: priority,
+		})
+	}
+	if len(cloned) == 0 {
+		return nil
+	}
+	return cloned
+}
+
+func normalizeStateMergePolicies(values []db.TaskDistributorStateMergePolicy) []db.TaskDistributorStateMergePolicy {
+	base := cloneStateMergePolicies(defaultStateMergePolicies)
+	if len(values) == 0 {
+		return base
+	}
+
+	indexByPattern := make(map[string]int, len(base))
+	for idx, item := range base {
+		indexByPattern[item.Pattern] = idx
+	}
+
+	for _, value := range cloneStateMergePolicies(values) {
+		if idx, ok := indexByPattern[value.Pattern]; ok {
+			base[idx] = value
+			continue
+		}
+		indexByPattern[value.Pattern] = len(base)
+		base = append(base, value)
+	}
+	return base
+}
+
+func stateMergePoliciesForSession(session *realtimeSession) []db.TaskDistributorStateMergePolicy {
+	if session == nil {
+		return normalizeStateMergePolicies(nil)
+	}
+	session.mu.RLock()
+	policies := cloneStateMergePolicies(session.StateMergePolicies)
+	session.mu.RUnlock()
+	return normalizeStateMergePolicies(policies)
+}
+
+func stateMergePriorityForKey(
+	key string,
+	policies []db.TaskDistributorStateMergePolicy,
+	agents []pddl.AgentInfo,
+	resources []pddl.ResourceInfo,
+) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "live"
+	}
+	bestPriority := "live"
+	bestScore := -1
+	for index, policy := range policies {
+		if !stateMergePatternMatches(key, policy.Pattern, agents, resources) {
+			continue
+		}
+		score := stateMergePatternSpecificity(policy.Pattern)*100 - index
+		if score > bestScore {
+			bestScore = score
+			bestPriority = policy.Priority
+		}
+	}
+	return bestPriority
+}
+
+func stateMergePatternSpecificity(pattern string) int {
+	normalized := strings.TrimSpace(pattern)
+	if normalized == "" {
+		return 0
+	}
+	normalized = strings.ReplaceAll(normalized, "{{agent.name}}", "")
+	normalized = strings.ReplaceAll(normalized, "{{agent.id}}", "")
+	normalized = strings.ReplaceAll(normalized, "{{agent}}", "")
+	normalized = strings.ReplaceAll(normalized, "{{resource.name}}", "")
+	normalized = strings.ReplaceAll(normalized, "{{resource.id}}", "")
+	normalized = strings.ReplaceAll(normalized, "{{resource}}", "")
+	normalized = strings.ReplaceAll(normalized, "*", "")
+	return len(normalized)
+}
+
+func stateMergePatternMatches(
+	key string,
+	pattern string,
+	agents []pddl.AgentInfo,
+	resources []pddl.ResourceInfo,
+) bool {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return false
+	}
+	candidates := expandStateMergePattern(pattern, agents, resources)
+	for _, candidate := range candidates {
+		matched, err := path.Match(candidate, key)
+		if err == nil && matched {
+			return true
+		}
+	}
+	return false
+}
+
+func expandStateMergePattern(pattern string, agents []pddl.AgentInfo, resources []pddl.ResourceInfo) []string {
+	variants := []string{strings.TrimSpace(pattern)}
+	if len(variants[0]) == 0 {
+		return nil
+	}
+
+	if strings.Contains(pattern, "{{agent.name}}") || strings.Contains(pattern, "{{agent.id}}") || strings.Contains(pattern, "{{agent}}") {
+		tokens := collectStateMergeAgentTokens(agents)
+		if len(tokens) == 0 {
+			return nil
+		}
+		next := make([]string, 0, len(variants)*len(tokens))
+		for _, variant := range variants {
+			for _, token := range tokens {
+				next = append(next,
+					strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(variant, "{{agent.name}}", token), "{{agent.id}}", token), "{{agent}}", token),
+				)
+			}
+		}
+		variants = next
+	}
+
+	if strings.Contains(pattern, "{{resource.name}}") || strings.Contains(pattern, "{{resource.id}}") || strings.Contains(pattern, "{{resource}}") {
+		tokens := collectStateMergeResourceTokens(resources)
+		if len(tokens) == 0 {
+			return nil
+		}
+		next := make([]string, 0, len(variants)*len(tokens))
+		for _, variant := range variants {
+			for _, token := range tokens {
+				next = append(next,
+					strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(variant, "{{resource.name}}", token), "{{resource.id}}", token), "{{resource}}", token),
+				)
+			}
+		}
+		variants = next
+	}
+
+	return uniqueNonEmptyStrings(variants)
+}
+
+func collectStateMergeAgentTokens(agents []pddl.AgentInfo) []string {
+	tokens := make([]string, 0, len(agents)*4)
+	for _, agent := range agents {
+		id := strings.TrimSpace(agent.ID)
+		name := strings.TrimSpace(agent.Name)
+		tokens = append(tokens, name, id, strings.ReplaceAll(name, "-", "_"), strings.ReplaceAll(id, "-", "_"))
+	}
+	return uniqueNonEmptyStrings(tokens)
+}
+
+func collectStateMergeResourceTokens(resources []pddl.ResourceInfo) []string {
+	tokens := make([]string, 0, len(resources)*4)
+	for _, resource := range resources {
+		id := strings.TrimSpace(resource.ID)
+		name := strings.TrimSpace(resource.Name)
+		tokens = append(tokens, name, id, strings.ReplaceAll(name, "-", "_"), strings.ReplaceAll(id, "-", "_"))
+	}
+	return uniqueNonEmptyStrings(tokens)
+}
+
 func (m *RealtimePddlManager) sessionMergedState(session *realtimeSession) map[string]string {
 	if session == nil {
 		return nil
@@ -1969,6 +2262,8 @@ func (m *RealtimePddlManager) sessionMergedState(session *realtimeSession) map[s
 	now := time.Now().UTC()
 	session.mu.Lock()
 	defer session.mu.Unlock()
+
+	policies := normalizeStateMergePolicies(session.StateMergePolicies)
 
 	merged := cloneStringMap(session.CurrentState)
 	if merged == nil {
@@ -1981,7 +2276,9 @@ func (m *RealtimePddlManager) sessionMergedState(session *realtimeSession) map[s
 			continue
 		}
 		for key, value := range runtime.Values {
-			merged[key] = value
+			if _, exists := merged[key]; !exists || stateMergePriorityForKey(key, policies, session.Agents, session.Resources) == "live" {
+				merged[key] = value
+			}
 		}
 	}
 
@@ -2037,6 +2334,19 @@ func reconcileRealtimeReservationState(
 	}
 
 	changed := false
+	resourceTypeNameByID := map[string]string{}
+	for _, resource := range resources {
+		if !strings.EqualFold(strings.TrimSpace(resource.Kind), "type") {
+			continue
+		}
+		resourceID := strings.TrimSpace(resource.ID)
+		resourceName := strings.TrimSpace(resource.Name)
+		if resourceID == "" || resourceName == "" {
+			continue
+		}
+		resourceTypeNameByID[resourceID] = resourceName
+	}
+
 	locationByCanonical := map[string]string{}
 	for _, alias := range aliases {
 		mergedLocation := strings.TrimSpace(agentLocationFromState(merged, alias.Agent))
@@ -2055,6 +2365,9 @@ func reconcileRealtimeReservationState(
 
 	for _, resource := range resources {
 		if strings.EqualFold(strings.TrimSpace(resource.Kind), "type") {
+			continue
+		}
+		if shouldSkipRealtimeReservationReconcile(resource, resourceTypeNameByID) {
 			continue
 		}
 
@@ -2087,24 +2400,27 @@ func reconcileRealtimeReservationState(
 			}
 		}
 
-		// 2) If not reserved, auto-claim when exactly one agent is currently there.
-		if holder == "" {
-			candidates := make([]string, 0, 2)
-			for canonical, location := range locationByCanonical {
-				if strings.EqualFold(strings.TrimSpace(location), resourceName) {
-					candidates = append(candidates, canonical)
-				}
-			}
-			if len(candidates) == 1 {
-				if !strings.EqualFold(holderRaw, candidates[0]) {
-					merged[stateKey] = candidates[0]
-					changed = true
-				}
-			}
-		}
+		// NOTE:
+		// Do NOT auto-claim reservation from location.
+		// reservation(*_reserved_by) must be planner/task-result owned only.
+		// (We still keep stale-release behavior above.)
 	}
 
 	return changed
+}
+
+func shouldSkipRealtimeReservationReconcile(resource pddl.ResourceInfo, resourceTypeNameByID map[string]string) bool {
+	resourceName := strings.ToLower(strings.TrimSpace(resource.Name))
+	if strings.HasPrefix(resourceName, "worker_slot") {
+		return true
+	}
+
+	parentID := strings.TrimSpace(resource.ParentResourceID)
+	if parentID == "" {
+		return false
+	}
+	parentName := strings.ToLower(strings.TrimSpace(resourceTypeNameByID[parentID]))
+	return parentName == "worker_slot"
 }
 
 func reservationStateKeyForResource(resource pddl.ResourceInfo, current map[string]string) string {
@@ -2305,6 +2621,7 @@ func cloneRealtimeGoalPtr(goal *realtimeGoal) *realtimeGoal {
 	cloned := *goal
 	cloned.ActivationConditions = cloneConditions(goal.ActivationConditions)
 	cloned.GoalState = cloneStringMap(goal.GoalState)
+	cloned.ResourceTypeIDs = append([]string{}, goal.ResourceTypeIDs...)
 	return &cloned
 }
 
@@ -2316,6 +2633,8 @@ func (m *RealtimePddlManager) toResponse(session *realtimeSession) RealtimeSessi
 	behaviorTreeIDs := append([]string{}, session.BehaviorTreeIDs...)
 	taskDistributorID := session.TaskDistributorID
 	agentIDs := append([]string{}, session.AgentIDs...)
+	agents := append([]pddl.AgentInfo{}, session.Agents...)
+	resources := append([]pddl.ResourceInfo{}, session.Resources...)
 	tickIntervalSec := session.TickInterval.Seconds()
 	selectedGoalID := session.SelectedGoalID
 	selectedGoalName := session.SelectedGoalName
@@ -2343,6 +2662,7 @@ func (m *RealtimePddlManager) toResponse(session *realtimeSession) RealtimeSessi
 			Enabled:              goal.Enabled,
 			ActivationConditions: cloneConditions(goal.ActivationConditions),
 			ResourceTypeID:       goal.ResourceTypeID,
+			ResourceTypeIDs:      append([]string{}, goal.ResourceTypeIDs...),
 			GoalState:            cloneStringMap(goal.GoalState),
 		})
 	}
@@ -2377,7 +2697,9 @@ func (m *RealtimePddlManager) toResponse(session *realtimeSession) RealtimeSessi
 
 	effectiveState := m.sessionMergedState(session)
 	currentState := sessionCurrentState(session)
-	liveState := m.sessionLiveState(session)
+	runtimeLiveState := m.sessionLiveState(session)
+	liveState := cloneStringMap(runtimeLiveState)
+	policies := stateMergePoliciesForSession(session)
 	response.CurrentState = currentState
 
 	for _, executionID := range uniqueNonEmptyStrings(append([]string{activeExecutionID}, activeExecutionIDs...)) {
@@ -2398,7 +2720,14 @@ func (m *RealtimePddlManager) toResponse(session *realtimeSession) RealtimeSessi
 			}
 			for key, value := range planningLive {
 				liveState[key] = value
-				effectiveState[key] = value
+				priority := stateMergePriorityForKey(key, policies, agents, resources)
+				if priority == "planner" {
+					effectiveState[key] = value
+					continue
+				}
+				if runtimeOverlayValue, exists := runtimeLiveState[key]; !exists || strings.TrimSpace(runtimeOverlayValue) == "" {
+					effectiveState[key] = value
+				}
 			}
 		}
 	}
@@ -2418,6 +2747,7 @@ func (m *RealtimePddlManager) toResponse(session *realtimeSession) RealtimeSessi
 			Enabled:              goal.Enabled,
 			ActivationConditions: cloneConditions(goal.ActivationConditions),
 			ResourceTypeID:       goal.ResourceTypeID,
+			ResourceTypeIDs:      append([]string{}, goal.ResourceTypeIDs...),
 			GoalState:            cloneStringMap(goal.GoalState),
 		})
 	}
@@ -2439,6 +2769,21 @@ func (s *Server) buildRealtimeInitialState(taskDistributorID string, overrides m
 		initial[key] = value
 	}
 	return initial, nil
+}
+
+func (s *Server) loadRealtimeStateMergePolicies(taskDistributorID string) ([]db.TaskDistributorStateMergePolicy, error) {
+	taskDistributorID = strings.TrimSpace(taskDistributorID)
+	if taskDistributorID == "" {
+		return normalizeStateMergePolicies(nil), nil
+	}
+	td, err := s.repo.GetTaskDistributor(taskDistributorID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load task distributor merge policies: %w", err)
+	}
+	if td == nil {
+		return normalizeStateMergePolicies(nil), nil
+	}
+	return normalizeStateMergePolicies(td.StateMergePolicies), nil
 }
 
 func (s *Server) loadRealtimeAgents(agentIDs []string) ([]pddl.AgentInfo, error) {

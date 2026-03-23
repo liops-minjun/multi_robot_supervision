@@ -61,6 +61,39 @@ export default function RealtimeGoalEditor({ stateVars, resourceTypes, goals, on
     onChange(goals.map(goal => (goal.id === goalID ? updater(goal) : goal)))
   }
 
+  const getGoalResourceTypeIDs = (goal: RealtimeGoalRule): string[] => {
+    const ids = Array.isArray(goal.resource_type_ids) ? goal.resource_type_ids : []
+    if (ids.length > 0) {
+      return Array.from(new Set(ids.map(id => id.trim()).filter(Boolean)))
+    }
+    if (typeof goal.resource_type_id === 'string' && goal.resource_type_id.trim()) {
+      return [goal.resource_type_id.trim()]
+    }
+    return []
+  }
+
+  const addGoalResourceTypeID = (goalID: string, resourceTypeID: string) => {
+    const nextID = resourceTypeID.trim()
+    if (!nextID) return
+    updateGoal(goalID, (goal) => {
+      const current = getGoalResourceTypeIDs(goal)
+      if (current.includes(nextID)) return goal
+      return {
+        ...goal,
+        resource_type_ids: [...current, nextID],
+        resource_type_id: undefined,
+      }
+    })
+  }
+
+  const removeGoalResourceTypeID = (goalID: string, resourceTypeID: string) => {
+    updateGoal(goalID, (goal) => ({
+      ...goal,
+      resource_type_ids: getGoalResourceTypeIDs(goal).filter(id => id !== resourceTypeID),
+      resource_type_id: undefined,
+    }))
+  }
+
   const addGoal = () => {
     onChange([...goals, createEmptyGoal(goals.length)])
   }
@@ -100,6 +133,20 @@ export default function RealtimeGoalEditor({ stateVars, resourceTypes, goals, on
         </div>
       ) : goals.map((goal, goalIndex) => (
         <div key={goal.id} className="rounded-2xl border border-border bg-base/60 p-4 space-y-3">
+          {(() => {
+            const selectedResourceTypeIDs = getGoalResourceTypeIDs(goal)
+            const selectedResourceTypes = selectedResourceTypeIDs.map((id) => {
+              const matched = (resourceTypes || []).find(resourceType => resourceType.id === id)
+              return matched || {
+                id,
+                name: id,
+                instanceCount: undefined,
+              }
+            })
+            const availableResourceTypes = (resourceTypes || []).filter(resourceType => !selectedResourceTypeIDs.includes(resourceType.id))
+
+            return (
+              <>
           <div className="flex flex-wrap items-center gap-2">
             <input
               className="min-w-[180px] flex-1 rounded-xl border border-border bg-surface px-3 py-2 text-sm text-primary outline-none"
@@ -135,24 +182,66 @@ export default function RealtimeGoalEditor({ stateVars, resourceTypes, goals, on
             <div className="mb-2">
               <div className="text-xs font-semibold text-primary">Resource 범위</div>
               <div className="text-[11px] text-secondary">
-                {'{{resource.name}}'} 를 쓰는 goal이라면 어떤 resource type 인스턴스들에만 바인딩할지 제한합니다.
+                {'{{resource.name}}'} 를 쓰는 goal이라면 사용할 resource type을 여러 개 추가해 바인딩 범위를 제한합니다.
               </div>
             </div>
-            <select
-              className="w-full rounded-xl border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
-              value={goal.resource_type_id || ''}
-              onChange={(e) => updateGoal(goal.id, current => ({
-                ...current,
-                resource_type_id: e.target.value || undefined,
-              }))}
-            >
-              <option value="">모든 resource</option>
-              {(resourceTypes || []).map((resourceType) => (
-                <option key={resourceType.id} value={resourceType.id}>
-                  {resourceType.name}{resourceType.instanceCount != null ? ` (${resourceType.instanceCount})` : ''}
-                </option>
-              ))}
-            </select>
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {selectedResourceTypes.length === 0 ? (
+                  <span className="rounded-full border border-border bg-base px-3 py-1 text-[11px] text-secondary">
+                    모든 resource
+                  </span>
+                ) : selectedResourceTypes.map((resourceType) => (
+                  <span
+                    key={resourceType.id}
+                    className="inline-flex items-center gap-1 rounded-full border border-cyan-400/20 bg-cyan-500/10 px-3 py-1 text-[11px] text-cyan-100"
+                  >
+                    <span>
+                      {resourceType.name}
+                      {resourceType.instanceCount != null ? ` (${resourceType.instanceCount})` : ''}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeGoalResourceTypeID(goal.id, resourceType.id)}
+                      className="text-cyan-200/80 hover:text-white"
+                      title={`${resourceType.name} 제거`}
+                    >
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  className="min-w-[220px] flex-1 rounded-xl border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+                  defaultValue=""
+                  onChange={(e) => {
+                    addGoalResourceTypeID(goal.id, e.target.value)
+                    e.target.value = ''
+                  }}
+                >
+                  <option value="">resource type 추가</option>
+                  {availableResourceTypes.map((resourceType) => (
+                    <option key={resourceType.id} value={resourceType.id}>
+                      {resourceType.name}{resourceType.instanceCount != null ? ` (${resourceType.instanceCount})` : ''}
+                    </option>
+                  ))}
+                </select>
+                {selectedResourceTypeIDs.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => updateGoal(goal.id, current => ({
+                      ...current,
+                      resource_type_ids: [],
+                      resource_type_id: undefined,
+                    }))}
+                    className="inline-flex items-center gap-1 rounded-xl border border-border bg-base px-3 py-2 text-xs text-secondary"
+                  >
+                    전체 해제
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
 
           <div className="rounded-xl border border-border bg-surface/60 p-3">
@@ -262,6 +351,9 @@ export default function RealtimeGoalEditor({ stateVars, resourceTypes, goals, on
               onChange={(nextGoalState) => updateGoal(goal.id, current => ({ ...current, goal_state: nextGoalState }))}
             />
           </div>
+              </>
+            )
+          })()}
         </div>
       ))}
 

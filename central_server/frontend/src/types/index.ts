@@ -1436,6 +1436,11 @@ export interface TaskDistributorState {
   description?: string
 }
 
+export interface TaskDistributorStateMergePolicy {
+  pattern: string
+  priority: 'live' | 'planner' | string
+}
+
 export interface TaskDistributorResource {
   id: string
   task_distributor_id: string
@@ -1451,6 +1456,7 @@ export interface TaskDistributor {
   description?: string
   created_at: string
   updated_at: string
+  state_merge_policies?: TaskDistributorStateMergePolicy[]
   states?: TaskDistributorState[]
   resources?: TaskDistributorResource[]
 }
@@ -1506,6 +1512,7 @@ export interface RealtimeGoalRule {
   priority: number
   enabled: boolean
   resource_type_id?: string
+  resource_type_ids?: string[]
   activation_conditions?: PlanningCondition[]
   goal_state: Record<string, string>
 }

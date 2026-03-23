@@ -627,15 +627,23 @@ func (PlanningProblem) TableName() string {
 
 // TaskDistributor represents an entity that owns states and resources for PDDL planning
 type TaskDistributor struct {
-	ID          string    `gorm:"primaryKey;size:50"`
-	Name        string    `gorm:"size:200;not null"`
-	Description string    `gorm:"type:text"`
-	CreatedAt   time.Time `gorm:"autoCreateTime"`
-	UpdatedAt   time.Time `gorm:"autoUpdateTime"`
+	ID                 string                            `gorm:"primaryKey;size:50"`
+	Name               string                            `gorm:"size:200;not null"`
+	Description        string                            `gorm:"type:text"`
+	StateMergePolicies []TaskDistributorStateMergePolicy `gorm:"-"`
+	CreatedAt          time.Time                         `gorm:"autoCreateTime"`
+	UpdatedAt          time.Time                         `gorm:"autoUpdateTime"`
 }
 
 func (TaskDistributor) TableName() string {
 	return "task_distributors"
+}
+
+// TaskDistributorStateMergePolicy controls which source wins when effective_state
+// merges planner/current values with runtime/live values for a state variable.
+type TaskDistributorStateMergePolicy struct {
+	Pattern  string `json:"pattern"`
+	Priority string `json:"priority"` // live, planner
 }
 
 // TaskDistributorState represents a state variable owned by a TaskDistributor

@@ -25,6 +25,7 @@ type Server struct {
 	wsHub           *WebSocketHub
 	quicHandler     *fleetgrpc.RawQUICHandler
 	definitionsPath string
+	saveFilesRoot   string
 }
 
 // NewServer creates a new API server
@@ -37,6 +38,7 @@ func NewServer(repo *db.Repository, stateManager *state.GlobalStateManager, sche
 		wsHub:           wsHub,
 		quicHandler:     quicHandler,
 		definitionsPath: definitionsPath,
+		saveFilesRoot:   resolveSaveFilesRoot(),
 	}
 	s.planExecutor = executor.NewPlanExecutor(scheduler, stateManager, repo, func(msg interface{}) {
 		wsHub.Broadcast(msg)
@@ -44,9 +46,10 @@ func NewServer(repo *db.Repository, stateManager *state.GlobalStateManager, sche
 	s.realtimePddl = NewRealtimePddlManager(s)
 	if quicHandler != nil {
 		quicHandler.SetPlanningStateCallback(func(agentID string, values map[string]string) {
+			sanitized := s.stateManager.NormalizePlanningRuntimeStateForManualReset(agentID, values)
 			// Agent telemetry runtime-state updates are ephemeral.
 			// Keep a short TTL so stale values disappear automatically.
-			_ = s.realtimePddl.UpsertRuntimeStateByAgent(agentID, "agent:"+agentID, values, 5.0)
+			_ = s.realtimePddl.UpsertRuntimeStateByAgent(agentID, "agent:"+agentID, sanitized, 5.0)
 		})
 	}
 
@@ -97,10 +100,10 @@ func (s *Server) setupRouter() {
 		// Robots (Zero-Config Architecture)
 		r.Route("/robots", func(r chi.Router) {
 			r.Get("/", s.ListRobots)
-			r.Post("/", s.RegisterRobot)          // New: Zero-config registration
-			r.Post("/connect", s.ConnectRobot)    // Legacy: Keep for backward compatibility
+			r.Post("/", s.RegisterRobot)       // New: Zero-config registration
+			r.Post("/connect", s.ConnectRobot) // Legacy: Keep for backward compatibility
 			r.Get("/{robotID}", s.GetRobot)
-			r.Patch("/{robotID}", s.UpdateRobot)  // New: Update robot metadata
+			r.Patch("/{robotID}", s.UpdateRobot) // New: Update robot metadata
 			r.Delete("/{robotID}", s.DeleteRobot)
 			r.Get("/{robotID}/commands", s.GetCommands)
 			r.Post("/{robotID}/commands/{commandID}/result", s.ReportCommandResult)
@@ -117,7 +120,7 @@ func (s *Server) setupRouter() {
 			r.Get("/action-types", s.GetAllActionTypesWithStats)
 			r.Get("/changed", s.GetCapabilitiesChangedSince) // Incremental sync endpoint
 			r.Get("/by-category/{category}", s.GetCapabilitiesByCategoryAPI)
-			r.Get("/{capabilityID}", s.GetCapabilityByID)    // Get single capability
+			r.Get("/{capabilityID}", s.GetCapabilityByID)          // Get single capability
 			r.Patch("/{capabilityID}", s.UpdateCapabilityMetadata) // Update capability metadata
 			r.Get("/action-type/*", s.GetCapabilitiesByActionType) // Moved to explicit path
 		})
@@ -155,7 +158,7 @@ func (s *Server) setupRouter() {
 			r.Post("/", s.CreateAgent)
 			r.Get("/connection-status", s.GetAgentConnectionStatus) // Heartbeat monitoring for all agents
 			r.Get("/{agentID}", s.GetAgent)
-			r.Patch("/{agentID}", s.UpdateAgent)   // Update agent (rename)
+			r.Patch("/{agentID}", s.UpdateAgent) // Update agent (rename)
 			r.Delete("/{agentID}", s.DeleteAgent)
 			r.Post("/{agentID}/capability-template", s.SaveAgentCapabilityTemplate)
 			r.Get("/{agentID}/capabilities", s.GetAgentCapabilities)
@@ -295,6 +298,8 @@ func (s *Server) setupRouter() {
 			r.Get("/{distributorID}/full", s.GetTaskDistributorFull)
 			r.Put("/{distributorID}", s.UpdateTaskDistributor)
 			r.Delete("/{distributorID}", s.DeleteTaskDistributor)
+			r.Get("/{distributorID}/state-merge-policies", s.GetTaskDistributorStateMergePolicies)
+			r.Put("/{distributorID}/state-merge-policies", s.UpdateTaskDistributorStateMergePolicies)
 			r.Get("/{distributorID}/states", s.ListTaskDistributorStates)
 			r.Post("/{distributorID}/states", s.CreateTaskDistributorState)
 			r.Put("/{distributorID}/states/{stateID}", s.UpdateTaskDistributorState)
@@ -306,6 +311,20 @@ func (s *Server) setupRouter() {
 			r.Get("/{distributorID}/runtime-state", s.ListTaskDistributorRuntimeState)
 			r.Post("/{distributorID}/runtime-state", s.UpsertTaskDistributorRuntimeState)
 			r.Delete("/{distributorID}/runtime-state", s.ClearTaskDistributorRuntimeState)
+		})
+
+		// Saved JSON Files (Task sets / PDDL profiles)
+		r.Route("/save-files", func(r chi.Router) {
+			r.Route("/task-sets", func(r chi.Router) {
+				r.Get("/", s.ListTaskSetSaveFiles)
+				r.Post("/", s.SaveTaskSetFile)
+				r.Get("/{fileName}", s.LoadTaskSetFile)
+			})
+			r.Route("/pddl-profiles", func(r chi.Router) {
+				r.Get("/", s.ListPddlProfileSaveFiles)
+				r.Post("/", s.SavePddlProfileFile)
+				r.Get("/{fileName}", s.LoadPddlProfileFile)
+			})
 		})
 
 		// System/Internal endpoints

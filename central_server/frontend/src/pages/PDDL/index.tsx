@@ -1,15 +1,16 @@
-import { type ChangeEvent, useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   RefreshCw, Play, Eye, Square, ChevronDown, ChevronRight, Info, Target,
   Database, Workflow, AlertTriangle, Link2, Plus, Trash2, Check, X, Layers,
   Circle, Edit, Gem, ToggleLeft, Bot, Download, Upload, ArrowRight, Activity, CheckCircle2, Clock3, RotateCcw,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
-import { behaviorTreeApi, agentApi, capabilityApi, pddlApi, taskDistributorApi, fleetApi } from '../../api/client'
+import { behaviorTreeApi, agentApi, capabilityApi, pddlApi, taskDistributorApi, fleetApi, saveFilesApi } from '../../api/client'
 import type {
   BehaviorTree, Agent, PlanResult, PlanExecution, ResourceAllocation,
   TaskDistributor, GraphListItem, TaskDistributorState, TaskDistributorResource, RobotStateSnapshot, PlanningTaskSpec,
-  RealtimeGoalRule, RealtimeSession,
+  RealtimeGoalRule, RealtimeSession, TaskDistributorStateMergePolicy,
 } from '../../types'
 import GoalEditor from './components/GoalEditor'
 import PlanVisualization from './components/PlanVisualization'
@@ -34,6 +35,7 @@ interface DistributorProfileState {
 }
 
 interface DistributorProfileResource {
+  id?: string
   name: string
   kind?: 'type' | 'instance' | string
   parent_name?: string
@@ -60,6 +62,7 @@ interface TaskDistributorProfile {
   }
   states: DistributorProfileState[]
   resources: DistributorProfileResource[]
+  state_merge_policies?: TaskDistributorStateMergePolicy[]
   selected_tasks?: DistributorProfileTaskRef[]
   selected_agents?: DistributorProfileAgentRef[]
   initial_state?: Record<string, string>
@@ -69,6 +72,72 @@ interface TaskDistributorProfile {
     goals?: RealtimeGoalRule[]
   }
 }
+
+type StateMergePriority = 'live' | 'planner'
+
+interface StateMergePolicyPreset {
+  pattern: string
+  defaultPriority: StateMergePriority
+  titleKey: string
+  descriptionKey: string
+}
+
+const STATE_MERGE_POLICY_PRESETS: StateMergePolicyPreset[] = [
+  {
+    pattern: '{{agent.name}}_status',
+    defaultPriority: 'live',
+    titleKey: 'pddl.mergePolicyAgentStatusTitle',
+    descriptionKey: 'pddl.mergePolicyAgentStatusDesc',
+  },
+  {
+    pattern: '{{agent.name}}_mode',
+    defaultPriority: 'live',
+    titleKey: 'pddl.mergePolicyAgentModeTitle',
+    descriptionKey: 'pddl.mergePolicyAgentModeDesc',
+  },
+  {
+    pattern: '{{agent.name}}_location',
+    defaultPriority: 'live',
+    titleKey: 'pddl.mergePolicyAgentLocationTitle',
+    descriptionKey: 'pddl.mergePolicyAgentLocationDesc',
+  },
+  {
+    pattern: '{{agent.name}}_battery_*',
+    defaultPriority: 'live',
+    titleKey: 'pddl.mergePolicyAgentBatteryTitle',
+    descriptionKey: 'pddl.mergePolicyAgentBatteryDesc',
+  },
+  {
+    pattern: '{{agent.name}}_*msg*',
+    defaultPriority: 'planner',
+    titleKey: 'pddl.mergePolicyAgentMsgTitle',
+    descriptionKey: 'pddl.mergePolicyAgentMsgDesc',
+  },
+  {
+    pattern: '{{resource.name}}_status',
+    defaultPriority: 'live',
+    titleKey: 'pddl.mergePolicyResourceStatusTitle',
+    descriptionKey: 'pddl.mergePolicyResourceStatusDesc',
+  },
+  {
+    pattern: '{{resource.name}}_location',
+    defaultPriority: 'live',
+    titleKey: 'pddl.mergePolicyResourceLocationTitle',
+    descriptionKey: 'pddl.mergePolicyResourceLocationDesc',
+  },
+  {
+    pattern: '{{resource.name}}_reserved_by',
+    defaultPriority: 'planner',
+    titleKey: 'pddl.mergePolicyResourceReservedTitle',
+    descriptionKey: 'pddl.mergePolicyResourceReservedDesc',
+  },
+  {
+    pattern: '{{resource.name}}_*msg*',
+    defaultPriority: 'planner',
+    titleKey: 'pddl.mergePolicyResourceMsgTitle',
+    descriptionKey: 'pddl.mergePolicyResourceMsgDesc',
+  },
+]
 
 
 // ---------------------------------------------------------------------------
@@ -247,6 +316,102 @@ function isResourceType(resource: TaskDistributorResource) {
 
 function isResourceInstance(resource: TaskDistributorResource) {
   return !resource.kind || resource.kind === 'instance'
+}
+
+function normalizeStateMergePolicies(
+  policies?: TaskDistributorStateMergePolicy[] | null
+): TaskDistributorStateMergePolicy[] {
+  const byPattern = new Map<string, TaskDistributorStateMergePolicy>()
+  STATE_MERGE_POLICY_PRESETS.forEach(preset => {
+    byPattern.set(preset.pattern, {
+      pattern: preset.pattern,
+      priority: preset.defaultPriority,
+    })
+  })
+  ;(policies || []).forEach(policy => {
+    const pattern = policy.pattern?.trim()
+    const priority = policy.priority === 'planner' ? 'planner' : 'live'
+    if (!pattern) return
+    byPattern.set(pattern, { pattern, priority })
+  })
+
+  const orderedPatterns = [
+    ...STATE_MERGE_POLICY_PRESETS.map(preset => preset.pattern),
+    ...Array.from(byPattern.keys()).filter(pattern => !STATE_MERGE_POLICY_PRESETS.some(preset => preset.pattern === pattern)),
+  ]
+
+  return orderedPatterns
+    .map(pattern => byPattern.get(pattern))
+    .filter((policy): policy is TaskDistributorStateMergePolicy => Boolean(policy))
+}
+
+function collectStateMergeAgentTokens(agents: AgentWithCaps[]) {
+  return Array.from(new Set(
+    agents.flatMap(item => {
+      const id = item.agent.id?.trim() || ''
+      const name = (item.agent.name || id).trim()
+      return [name, id, name.replace(/-/g, '_'), id.replace(/-/g, '_')].filter(Boolean)
+    })
+  ))
+}
+
+function collectStateMergeResourceTokens(resources: TaskDistributorResource[]) {
+  return Array.from(new Set(
+    resources.flatMap(resource => {
+      const name = resource.name?.trim() || ''
+      const id = resource.id?.trim() || ''
+      return [name, id, name.replace(/-/g, '_'), id.replace(/-/g, '_')].filter(Boolean)
+    })
+  ))
+}
+
+function buildStateMergePatternVariants(
+  pattern: string,
+  resources: TaskDistributorResource[],
+  agents: AgentWithCaps[],
+) {
+  let variants = [pattern.trim()]
+  if (variants[0] === '') return []
+
+  if (pattern.includes('{{agent.name}}') || pattern.includes('{{agent.id}}') || pattern.includes('{{agent}}')) {
+    const tokens = collectStateMergeAgentTokens(agents)
+    if (tokens.length === 0) return []
+    variants = tokens.flatMap(token =>
+      variants.map(variant => variant
+        .split('{{agent.name}}').join(token)
+        .split('{{agent.id}}').join(token)
+        .split('{{agent}}').join(token))
+    )
+  }
+
+  if (pattern.includes('{{resource.name}}') || pattern.includes('{{resource.id}}') || pattern.includes('{{resource}}')) {
+    const tokens = collectStateMergeResourceTokens(resources.filter(isResourceInstance))
+    if (tokens.length === 0) return []
+    variants = tokens.flatMap(token =>
+      variants.map(variant => variant
+        .split('{{resource.name}}').join(token)
+        .split('{{resource.id}}').join(token)
+        .split('{{resource}}').join(token))
+    )
+  }
+
+  return Array.from(new Set(variants.map(value => value.trim()).filter(Boolean)))
+}
+
+function patternVariantToRegex(variant: string) {
+  return new RegExp(`^${escapeRegExp(variant).replace(/\\\*/g, '.*')}$`)
+}
+
+function matchStateMergePolicyStates(
+  pattern: string,
+  states: TaskDistributorState[],
+  resources: TaskDistributorResource[],
+  agents: AgentWithCaps[],
+) {
+  const variants = buildStateMergePatternVariants(pattern, resources, agents)
+  if (variants.length === 0) return []
+  const matchers = variants.map(patternVariantToRegex)
+  return states.filter(state => matchers.some(regex => regex.test(state.name)))
 }
 
 function expandStateNameByTemplate(
@@ -558,6 +723,7 @@ function ThemedSection({
   theme,
   defaultOpen = true,
   compact = false,
+  actions,
   children,
 }: {
   icon: React.ElementType
@@ -566,26 +732,30 @@ function ThemedSection({
   theme: typeof SECTION_THEME[keyof typeof SECTION_THEME]
   defaultOpen?: boolean
   compact?: boolean
+  actions?: React.ReactNode
   children: React.ReactNode
 }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
     <section className={`rounded-2xl border border-border bg-surface shadow-sm shadow-slate-950/5 border-l-[3px] ${theme.barLeft}`}>
-      <button
-        onClick={() => setOpen(v => !v)}
-        className={`flex w-full items-center gap-2 text-left transition hover:bg-base/40 ${compact ? 'px-3 py-2' : 'px-5 py-4 gap-3'}`}
-      >
-        <span className={`flex items-center justify-center rounded-lg ${compact ? 'h-6 w-6' : 'h-8 w-8 rounded-xl'} ${theme.iconBg}`}>
-          <Icon size={compact ? 13 : 16} />
-        </span>
-        <span className={`flex-1 font-semibold text-primary ${compact ? 'text-xs' : 'text-sm'}`}>{title}</span>
-        {count != null && (
-          <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${theme.pillBg}`}>
-            {count}
+      <div className={`flex items-center gap-2 ${compact ? 'px-3 py-2' : 'px-5 py-4 gap-3'}`}>
+        <button
+          onClick={() => setOpen(v => !v)}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left transition hover:text-primary"
+        >
+          <span className={`flex items-center justify-center rounded-lg ${compact ? 'h-6 w-6' : 'h-8 w-8 rounded-xl'} ${theme.iconBg}`}>
+            <Icon size={compact ? 13 : 16} />
           </span>
-        )}
-        {open ? <ChevronDown size={compact ? 12 : 14} className="text-muted" /> : <ChevronRight size={compact ? 12 : 14} className="text-muted" />}
-      </button>
+          <span className={`flex-1 font-semibold text-primary ${compact ? 'text-xs' : 'text-sm'}`}>{title}</span>
+          {count != null && (
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${theme.pillBg}`}>
+              {count}
+            </span>
+          )}
+          {open ? <ChevronDown size={compact ? 12 : 14} className="text-muted" /> : <ChevronRight size={compact ? 12 : 14} className="text-muted" />}
+        </button>
+        {actions && <div className="shrink-0">{actions}</div>}
+      </div>
       {open && <div className={compact ? 'px-3 pb-3' : 'px-5 pb-5'}>{children}</div>}
     </section>
   )
@@ -625,6 +795,9 @@ export default function PDDL() {
 
   const [distributors, setDistributors] = useState<TaskDistributor[]>([])
   const [selectedDistributorId, setSelectedDistributorId] = useState<string | null>(null)
+  const [showStateMergePolicyModal, setShowStateMergePolicyModal] = useState(false)
+  const [stateMergePolicyDraft, setStateMergePolicyDraft] = useState<TaskDistributorStateMergePolicy[]>([])
+  const [isSavingStateMergePolicies, setIsSavingStateMergePolicies] = useState(false)
 
   const [autoLinkNotice, setAutoLinkNotice] = useState<string | null>(null)
   const [assignmentNotice, setAssignmentNotice] = useState<string | null>(null)
@@ -687,7 +860,12 @@ export default function PDDL() {
   const skipNextSelectionResetRef = useRef(false)
   const restoredSelectionKeyRef = useRef<string | null>(null)
   const isApplyingScopedDraftRef = useRef(false)
-  const profileFileInputRef = useRef<HTMLInputElement | null>(null)
+  const [savedProfileFiles, setSavedProfileFiles] = useState<Array<{
+    name: string
+    size_bytes: number
+    updated_at: string
+  }>>([])
+  const [showProfileLoadModal, setShowProfileLoadModal] = useState(false)
 
   // -----------------------------------------------------------------------
   // Derived values
@@ -701,6 +879,10 @@ export default function PDDL() {
   const singleSelectedBT = selectedBTs.length === 1 ? selectedBTs[0] : null
 
   const selectedDistributor = distributors.find(d => d.id === selectedDistributorId) || null
+  const selectedStateMergePolicies = useMemo(
+    () => normalizeStateMergePolicies(selectedDistributor?.state_merge_policies),
+    [selectedDistributor]
+  )
 
   const stateVars = useMemo(
     () => [...(selectedDistributor?.states || [])].sort((a, b) => a.name.localeCompare(b.name)),
@@ -742,6 +924,28 @@ export default function PDDL() {
       }))
       .sort((a, b) => a.typeName.localeCompare(b.typeName))
   }, [selectedDistributor])
+
+  const stateMergePolicyRows = useMemo(() => {
+    if (!selectedDistributor) return []
+    const activePolicies = normalizeStateMergePolicies(showStateMergePolicyModal ? stateMergePolicyDraft : selectedStateMergePolicies)
+    return STATE_MERGE_POLICY_PRESETS.map(preset => {
+      const policy = activePolicies.find(item => item.pattern === preset.pattern) || {
+        pattern: preset.pattern,
+        priority: preset.defaultPriority,
+      }
+      const matchedStates = matchStateMergePolicyStates(
+        preset.pattern,
+        stateVars,
+        selectedDistributor.resources || [],
+        agents
+      )
+      return {
+        ...preset,
+        priority: (policy.priority === 'planner' ? 'planner' : 'live') as StateMergePriority,
+        matchedStates,
+      }
+    })
+  }, [agents, selectedDistributor, selectedStateMergePolicies, showStateMergePolicyModal, stateMergePolicyDraft, stateVars])
 
   const realtimeGoalResourceTypeOptions = useMemo(() => (
     resourceTypeGroups
@@ -1600,11 +1804,44 @@ export default function PDDL() {
     }
   }, [selectedDistributor, editStateInitialValue, loadDistributors])
 
+  const handleOpenStateMergePolicyModal = useCallback(() => {
+    setStateMergePolicyDraft(selectedStateMergePolicies)
+    setShowStateMergePolicyModal(true)
+  }, [selectedStateMergePolicies])
+
+  const handleSetStateMergePriority = useCallback((pattern: string, priority: StateMergePriority) => {
+    setStateMergePolicyDraft(prev => prev.map(policy =>
+      policy.pattern === pattern ? { ...policy, priority } : policy
+    ))
+  }, [])
+
+  const handleSaveStateMergePolicies = useCallback(async () => {
+    if (!selectedDistributor) return
+    setIsSavingStateMergePolicies(true)
+    try {
+      const normalized = normalizeStateMergePolicies(stateMergePolicyDraft).map(policy => ({
+        pattern: policy.pattern,
+        priority: (policy.priority === 'planner' ? 'planner' : 'live') as StateMergePriority,
+      }))
+      await taskDistributorApi.updateStateMergePolicies(selectedDistributor.id, normalized)
+      await loadDistributors()
+      setShowStateMergePolicyModal(false)
+      setStateBuilderMessage(t('pddl.mergePolicySaved'))
+      window.setTimeout(() => setStateBuilderMessage(null), 3000)
+    } catch (err) {
+      console.error('Failed to save state merge policies:', err)
+      setStateBuilderMessage(t('pddl.mergePolicySaveError'))
+      window.setTimeout(() => setStateBuilderMessage(null), 4000)
+    } finally {
+      setIsSavingStateMergePolicies(false)
+    }
+  }, [loadDistributors, selectedDistributor, stateMergePolicyDraft, t])
+
   // -----------------------------------------------------------------------
   // Task Distributor profile import/export (JSON)
   // -----------------------------------------------------------------------
 
-  const handleExportDistributorProfile = useCallback(() => {
+  const handleExportDistributorProfile = useCallback(async () => {
     if (!selectedDistributor) return
 
     const resourceById = new Map((selectedDistributor.resources || []).map(resource => [resource.id, resource]))
@@ -1631,6 +1868,7 @@ export default function PDDL() {
           : undefined,
         description: resource.description,
       })),
+      state_merge_policies: selectedStateMergePolicies,
       selected_tasks: selectedBTs.map(bt => ({ id: bt.id, name: bt.name })),
       selected_agents: selectedAgentIds
         .map(agentId => agents.find(item => item.agent.id === agentId)?.agent)
@@ -1646,16 +1884,17 @@ export default function PDDL() {
 
     const safeName = slugifyFileName(selectedDistributor.name || 'task_distributor_profile')
     const fileName = `${safeName}.json`
-    const blob = new Blob([JSON.stringify(profile, null, 2)], { type: 'application/json' })
-    const url = window.URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = fileName
-    anchor.click()
-    window.URL.revokeObjectURL(url)
-
-    setProfileNotice(`Exported profile: ${fileName}`)
-    setTimeout(() => setProfileNotice(null), 4000)
+    try {
+      const saved = await saveFilesApi.savePddlProfile(fileName, profile)
+      const files = await saveFilesApi.listPddlProfiles()
+      setSavedProfileFiles(files)
+      setProfileNotice(`Exported profile: ${saved.name}`)
+      setTimeout(() => setProfileNotice(null), 4000)
+    } catch (err) {
+      console.error('Failed to export distributor profile:', err)
+      setProfileNotice(`Export failed: ${getApiErrorMessage(err)}`)
+      setTimeout(() => setProfileNotice(null), 5000)
+    }
   }, [
     agents,
     goalState,
@@ -1665,23 +1904,37 @@ export default function PDDL() {
     selectedAgentIds,
     selectedBTs,
     selectedDistributor,
+    selectedStateMergePolicies,
   ])
 
-  const handleOpenProfileImport = useCallback(() => {
-    profileFileInputRef.current?.click()
+  const handleOpenProfileImport = useCallback(async () => {
+    setIsApplyingProfile(true)
+    setProfileNotice(null)
+    try {
+      const files = await saveFilesApi.listPddlProfiles()
+      setSavedProfileFiles(files)
+      if (files.length === 0) {
+        setProfileNotice('Save_files/pddl 폴더에 저장된 프로필 JSON이 없습니다.')
+        setTimeout(() => setProfileNotice(null), 5000)
+        return
+      }
+      setShowProfileLoadModal(true)
+    } catch (err) {
+      console.error('Failed to list profile save files:', err)
+      setProfileNotice(`Import failed: ${getApiErrorMessage(err)}`)
+      setTimeout(() => setProfileNotice(null), 5000)
+    } finally {
+      setIsApplyingProfile(false)
+    }
   }, [])
 
-  const handleImportDistributorProfile = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    event.target.value = ''
-    if (!file) return
-
+  const handleImportDistributorProfile = useCallback(async (fileName: string) => {
+    setShowProfileLoadModal(false)
     setIsApplyingProfile(true)
     setProfileNotice(null)
 
     try {
-      const raw = await file.text()
-      const parsed = JSON.parse(raw) as TaskDistributorProfile
+      const parsed = await saveFilesApi.loadPddlProfile<TaskDistributorProfile>(fileName)
       const distributorName = parsed?.distributor?.name?.trim()
 
       if (!distributorName) {
@@ -1729,6 +1982,7 @@ export default function PDDL() {
       const profileResources = (parsed.resources || [])
         .filter(resource => resource?.name?.trim())
         .map(resource => ({
+          id: resource.id?.trim(),
           name: resource.name.trim(),
           kind: (resource.kind || 'instance').trim().toLowerCase(),
           parent_name: resource.parent_name?.trim(),
@@ -1771,6 +2025,27 @@ export default function PDDL() {
         })
       }
 
+      await taskDistributorApi.updateStateMergePolicies(
+        distributorId,
+        normalizeStateMergePolicies(parsed.state_merge_policies || [])
+      )
+
+      const distributorFull = await taskDistributorApi.getFull(distributorId)
+      const resourceTypeIdByAlias = new Map<string, string>()
+      for (const resource of distributorFull.resources || []) {
+        if (resource.kind !== 'type') continue
+        resourceTypeIdByAlias.set(resource.id, resource.id)
+        resourceTypeIdByAlias.set(resource.name, resource.id)
+      }
+      for (const resource of typeResources) {
+        const createdID = typeResourceByName.get(resource.name)
+        if (!createdID) continue
+        resourceTypeIdByAlias.set(resource.name, createdID)
+        if (resource.id) {
+          resourceTypeIdByAlias.set(resource.id, createdID)
+        }
+      }
+
       await loadDistributors()
 
       const selectedTaskIds = Array.from(new Set((parsed.selected_tasks || [])
@@ -1797,9 +2072,65 @@ export default function PDDL() {
 
       if (selectedTaskIds.length > 0) {
         try {
-          const updatedTrees = await Promise.all(selectedTaskIds.map(taskId =>
-            behaviorTreeApi.update(taskId, { task_distributor_id: distributorId })
-          ))
+          const newResources = distributorFull.resources || []
+          const newResourceTokenSet = new Set(
+            newResources.map(resource => `${resource.kind === 'type' ? 'type' : 'instance'}:${resource.id}`)
+          )
+          const oldDistributorCache = new Map<string, TaskDistributor>()
+
+          const updatedTrees = await Promise.all(selectedTaskIds.map(async (taskId) => {
+            const currentTree = await behaviorTreeApi.get(taskId)
+            const originalDistributorId = currentTree.task_distributor_id || ''
+
+            let oldResources: TaskDistributorResource[] = []
+            if (originalDistributorId && originalDistributorId !== distributorId) {
+              let cached = oldDistributorCache.get(originalDistributorId)
+              if (!cached) {
+                cached = await taskDistributorApi.getFull(originalDistributorId)
+                oldDistributorCache.set(originalDistributorId, cached)
+              }
+              oldResources = cached.resources || []
+            }
+
+            const legacyTokenToName = new Map<string, string>()
+            for (const resource of oldResources) {
+              legacyTokenToName.set(
+                `${resource.kind === 'type' ? 'type' : 'instance'}:${resource.id}`,
+                resource.name
+              )
+            }
+
+            const nextPlanningTask = currentTree.planning_task
+              ? {
+                  ...currentTree.planning_task,
+                  required_resources: Array.from(new Set((currentTree.planning_task.required_resources || [])
+                    .map((token) => {
+                      const trimmed = `${token || ''}`.trim()
+                      if (!trimmed) return ''
+                      if (newResourceTokenSet.has(trimmed)) return trimmed
+
+                      const [prefix, value = ''] = trimmed.split(':', 2)
+                      const resourceKind = prefix === 'instance' ? 'instance' : 'type'
+                      const legacyName = legacyTokenToName.get(trimmed)
+                      const fallbackName = value && !value.includes('-') ? value : ''
+                      const targetName = legacyName || fallbackName
+                      if (!targetName) return ''
+
+                      const matched = newResources.find(resource =>
+                        resource.kind === resourceKind && resource.name === targetName
+                      )
+                      if (!matched) return ''
+                      return `${resourceKind}:${matched.id}`
+                    })
+                    .filter(Boolean))),
+                }
+              : undefined
+
+            return behaviorTreeApi.update(taskId, {
+              task_distributor_id: distributorId,
+              planning_task: nextPlanningTask,
+            })
+          }))
           setBtCache(prev => {
             const next = new Map(prev)
             for (const tree of updatedTrees) {
@@ -1826,14 +2157,34 @@ export default function PDDL() {
       setRealtimeExecutionMap({})
       setResourceAllocations([])
 
-      const importedGoals = (parsed.realtime?.goals || []).map((goal, index) => ({
-        ...goal,
-        id: goal.id || `goal_${Date.now()}_${index}`,
-        name: goal.name || `Goal ${index + 1}`,
-        priority: Number.isFinite(goal.priority) ? goal.priority : (index + 1) * 10,
-        enabled: goal.enabled !== false,
-        goal_state: toStringRecord(goal.goal_state),
-      }))
+      const unresolvedResourceScopes = new Set<string>()
+      const importedGoals = (parsed.realtime?.goals || []).map((goal, index) => {
+        const rawScopeValues = [
+          ...(Array.isArray(goal.resource_type_ids) ? goal.resource_type_ids : []),
+          ...(goal.resource_type_id ? [goal.resource_type_id] : []),
+        ]
+          .map(value => `${value || ''}`.trim())
+          .filter(Boolean)
+
+        const resolvedScopeValues = Array.from(new Set(rawScopeValues
+          .map(value => {
+            const resolved = resourceTypeIdByAlias.get(value)
+            if (!resolved) unresolvedResourceScopes.add(value)
+            return resolved || ''
+          })
+          .filter(Boolean)))
+
+        return {
+          ...goal,
+          id: goal.id || `goal_${Date.now()}_${index}`,
+          name: goal.name || `Goal ${index + 1}`,
+          priority: Number.isFinite(goal.priority) ? goal.priority : (index + 1) * 10,
+          enabled: goal.enabled !== false,
+          resource_type_id: resolvedScopeValues[0] || '',
+          resource_type_ids: resolvedScopeValues,
+          goal_state: toStringRecord(goal.goal_state),
+        }
+      })
       setRealtimeGoals(importedGoals)
       if (typeof parsed.realtime?.tick_interval_sec === 'number' && parsed.realtime.tick_interval_sec > 0) {
         setRealtimeTickIntervalSec(parsed.realtime.tick_interval_sec)
@@ -1842,7 +2193,10 @@ export default function PDDL() {
       setRealtimeSession(null)
       setRealtimeExecutionMap({})
 
-      setProfileNotice(`Imported profile: ${file.name}`)
+      const unresolvedSuffix = unresolvedResourceScopes.size > 0
+        ? ` (resource scope unresolved: ${Array.from(unresolvedResourceScopes).join(', ')})`
+        : ''
+      setProfileNotice(`Imported profile: ${fileName}${unresolvedSuffix}`)
       setTimeout(() => setProfileNotice(null), 5000)
     } catch (err) {
       console.error('Failed to import distributor profile:', err)
@@ -2560,13 +2914,6 @@ export default function PDDL() {
         <div className="flex-1 overflow-y-auto">
           {/* ---- Distributors ---- */}
           <SidebarSection icon={Database} title={t('pddl.taskDistributor')} count={distributors.length}>
-            <input
-              ref={profileFileInputRef}
-              type="file"
-              accept="application/json,.json"
-              className="hidden"
-              onChange={handleImportDistributorProfile}
-            />
             <div className="mb-2 grid grid-cols-2 gap-1.5">
               <button
                 onClick={handleExportDistributorProfile}
@@ -3012,7 +3359,23 @@ export default function PDDL() {
             </ThemedSection>
 
             {/* =================== STATE — violet =================== */}
-            <ThemedSection icon={ToggleLeft} title="State" count={stateVars.length} theme={SECTION_THEME.state} compact>
+            <ThemedSection
+              icon={ToggleLeft}
+              title="State"
+              count={stateVars.length}
+              theme={SECTION_THEME.state}
+              compact
+              actions={selectedDistributor ? (
+                <button
+                  onClick={handleOpenStateMergePolicyModal}
+                  className="inline-flex items-center gap-1 rounded border border-violet-500/20 bg-violet-500/10 px-2 py-1 text-[10px] font-medium text-violet-200 hover:bg-violet-500/15"
+                  title={t('pddl.mergePolicyButton')}
+                >
+                  <SlidersHorizontal size={11} />
+                  {t('pddl.mergePolicyButton')}
+                </button>
+              ) : null}
+            >
               <div className="max-h-[220px] overflow-y-auto space-y-1.5">
                 <div className="flex gap-1">
                   <input
@@ -3755,6 +4118,156 @@ export default function PDDL() {
           </div>
         )}
       </main>
+
+      {showProfileLoadModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-2xl rounded-2xl border border-border bg-surface shadow-2xl">
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <div>
+                <div className="text-sm font-semibold text-primary">Import JSON</div>
+                <div className="text-xs text-secondary">Save_files/pddl 폴더에서 프로필 JSON을 선택하세요.</div>
+              </div>
+              <button
+                onClick={() => setShowProfileLoadModal(false)}
+                className="rounded-lg border border-border bg-base px-2 py-1 text-xs text-secondary transition hover:text-primary"
+              >
+                닫기
+              </button>
+            </div>
+            <div className="max-h-[60vh] space-y-2 overflow-y-auto p-3">
+              {savedProfileFiles.length === 0 ? (
+                <div className="rounded-xl border border-border bg-base px-3 py-4 text-xs text-secondary">
+                  저장된 프로필이 없습니다.
+                </div>
+              ) : (
+                savedProfileFiles.map(file => (
+                  <button
+                    key={file.name}
+                    onClick={() => handleImportDistributorProfile(file.name)}
+                    className="w-full rounded-xl border border-border bg-base px-3 py-2 text-left transition hover:border-accent/30 hover:bg-accent/10"
+                  >
+                    <div className="truncate text-xs font-medium text-primary">{file.name}</div>
+                    <div className="mt-1 text-[10px] text-secondary">
+                      {new Date(file.updated_at).toLocaleString()} · {Math.max(1, Math.round(file.size_bytes / 1024))} KB
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showStateMergePolicyModal && selectedDistributor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="flex w-full max-w-4xl flex-col rounded-2xl border border-border bg-surface shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+              <div>
+                <div className="text-sm font-semibold text-primary">{t('pddl.mergePolicyModalTitle')}</div>
+                <div className="mt-1 text-xs leading-5 text-secondary">
+                  {t('pddl.mergePolicyModalDesc')}
+                </div>
+              </div>
+              <button
+                onClick={() => setShowStateMergePolicyModal(false)}
+                className="rounded-lg border border-border bg-base px-2 py-1 text-xs text-secondary transition hover:text-primary"
+              >
+                {t('common.close')}
+              </button>
+            </div>
+
+            <div className="max-h-[70vh] overflow-y-auto px-5 py-4">
+              <div className="grid gap-3">
+                {stateMergePolicyRows.map(row => {
+                  const draftPolicy = stateMergePolicyDraft.find(policy => policy.pattern === row.pattern)
+                  const priority = (draftPolicy?.priority === 'planner' ? 'planner' : 'live') as StateMergePriority
+                  return (
+                    <div key={row.pattern} className="rounded-2xl border border-border bg-base/60 p-4">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-semibold text-primary">{t(row.titleKey as never)}</div>
+                          <div className="mt-1 font-mono text-[11px] text-violet-300">{row.pattern}</div>
+                          <div className="mt-2 text-[11px] leading-5 text-secondary">{t(row.descriptionKey as never)}</div>
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {row.matchedStates.length > 0 ? row.matchedStates.slice(0, 4).map(state => (
+                              <span key={state.id} className="rounded-full bg-surface px-2 py-0.5 text-[10px] text-secondary">
+                                {state.name}
+                              </span>
+                            )) : (
+                              <span className="rounded-full bg-surface px-2 py-0.5 text-[10px] text-muted">
+                                {t('pddl.mergePolicyNoMatches')}
+                              </span>
+                            )}
+                            {row.matchedStates.length > 4 && (
+                              <span className="rounded-full bg-surface px-2 py-0.5 text-[10px] text-secondary">
+                                +{row.matchedStates.length - 4}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="shrink-0">
+                          <div className="inline-flex rounded-xl border border-border bg-surface p-1">
+                            <button
+                              onClick={() => handleSetStateMergePriority(row.pattern, 'planner')}
+                              className={`rounded-lg px-3 py-1.5 text-[11px] font-medium transition ${
+                                priority === 'planner'
+                                  ? 'bg-base text-primary shadow-sm'
+                                  : 'text-secondary hover:text-primary'
+                              }`}
+                            >
+                              {t('pddl.mergePolicyPlanner')}
+                            </button>
+                            <button
+                              onClick={() => handleSetStateMergePriority(row.pattern, 'live')}
+                              className={`rounded-lg px-3 py-1.5 text-[11px] font-medium transition ${
+                                priority === 'live'
+                                  ? 'bg-violet-500/15 text-violet-200 shadow-sm'
+                                  : 'text-secondary hover:text-primary'
+                              }`}
+                            >
+                              {t('pddl.mergePolicyLive')}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-4">
+              <div className="text-[11px] text-secondary">
+                {t('pddl.mergePolicyFooterHint')}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setStateMergePolicyDraft(normalizeStateMergePolicies(undefined))
+                  }}
+                  className="rounded-xl border border-border bg-base px-3 py-2 text-xs text-secondary transition hover:text-primary"
+                >
+                  {t('pddl.mergePolicyResetDefaults')}
+                </button>
+                <button
+                  onClick={() => setShowStateMergePolicyModal(false)}
+                  className="rounded-xl border border-border bg-base px-3 py-2 text-xs text-secondary transition hover:text-primary"
+                >
+                  {t('common.cancel')}
+                </button>
+                <button
+                  onClick={handleSaveStateMergePolicies}
+                  disabled={isSavingStateMergePolicies}
+                  className="rounded-xl bg-accent px-3 py-2 text-xs font-medium text-white transition hover:bg-accent/80 disabled:opacity-50"
+                >
+                  {isSavingStateMergePolicies ? t('common.saving') : t('common.save')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {(selectedFlowTree || isLoadingFlowTree) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">

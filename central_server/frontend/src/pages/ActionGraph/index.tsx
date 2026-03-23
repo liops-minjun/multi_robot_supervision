@@ -1,4 +1,4 @@
-import React, { type ChangeEvent, useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import ReactFlow, {
   Node,
@@ -24,7 +24,7 @@ import {
   Cpu, FileCode, Users, Link2, Unlink, Check, AlertCircle, Clock, Layout, Save, Radio,
   Edit, Lock, Unlock, Eye, EyeOff, Search, Download, Upload
 } from 'lucide-react'
-import { templateApi, stateDefinitionApi, agentApi, capabilityApi, behaviorTreeLockApi, taskDistributorApi } from '../../api/client'
+import { templateApi, stateDefinitionApi, agentApi, capabilityApi, behaviorTreeLockApi, taskDistributorApi, saveFilesApi } from '../../api/client'
 import { useWebSocket, BehaviorTreeLockMessage, GraphSyncMessage } from '../../contexts/WebSocketContext'
 import { useUserStore } from '../../stores/userStore'
 import type {
@@ -300,6 +300,12 @@ function filterPlanningTaskForDistributor(
   resources: TaskDistributorResource[]
 ): PlanningTaskSpec {
   const validResourceTokens = buildPlanningResourceTokenSet(resources)
+  const normalizedRequiredResources = Array.from(new Set((spec.required_resources || [])
+    .map(token => `${token || ''}`.trim())
+    .filter(Boolean)))
+  const filteredRequiredResources = validResourceTokens.size > 0
+    ? normalizedRequiredResources.filter(token => validResourceTokens.has(token))
+    : normalizedRequiredResources
 
   return {
     preconditions: (spec.preconditions || [])
@@ -309,9 +315,7 @@ function filterPlanningTaskForDistributor(
         operator: condition.operator || '==',
         value: condition.value,
       })),
-    required_resources: (spec.required_resources || []).filter(token =>
-      validResourceTokens.size === 0 ? false : validResourceTokens.has(token)
-    ),
+    required_resources: filteredRequiredResources,
     during_state: (spec.during_state || [])
       .filter(effect => isPlanningStateReferenceAllowed(effect.variable, states))
       .slice(0, 1),
@@ -800,7 +804,12 @@ function ActionGraphEditor() {
   const [showTaskPddlConfigModal, setShowTaskPddlConfigModal] = useState(false)
   const [taskSetNotice, setTaskSetNotice] = useState<string | null>(null)
   const [isTaskSetProcessing, setIsTaskSetProcessing] = useState(false)
-  const taskSetImportInputRef = useRef<HTMLInputElement | null>(null)
+  const [savedTaskSetFiles, setSavedTaskSetFiles] = useState<Array<{
+    name: string
+    size_bytes: number
+    updated_at: string
+  }>>([])
+  const [showTaskSetLoadModal, setShowTaskSetLoadModal] = useState(false)
 
   const [expandedCategories, setExpandedCategories] = useState<string[]>([
     'Start Nodes',
@@ -2695,6 +2704,140 @@ function ActionGraphEditor() {
     setBottomPanelTab(null)
   }, [])
 
+  const importTaskSetBackup = useCallback(async (parsed: TaskSetBackup, sourceLabel?: string) => {
+    const backupTemplates = Array.isArray(parsed?.templates) ? parsed.templates : []
+    if (backupTemplates.length === 0) {
+      throw new Error('유효한 templates 항목이 없습니다.')
+    }
+
+    const confirmed = window.confirm(
+      `태스크 세트 ${backupTemplates.length}개를 불러옵니다.\n` +
+        `동일 ID 태스크는 덮어씁니다. 계속할까요?`
+    )
+    if (!confirmed) {
+      setTaskSetNotice('태스크 세트 불러오기를 취소했습니다.')
+      return
+    }
+
+    const currentTemplates = await templateApi.list()
+    const existingTemplateIds = new Set(currentTemplates.map((template) => template.id))
+
+    const agentIdSet = new Set(agents.map((agent) => agent.id))
+    const agentIdByName = new Map<string, string>()
+    for (const agent of agents) {
+      const rawName = (agent.name || '').trim()
+      const formattedName = formatTaskManagerName(rawName)
+      if (rawName) agentIdByName.set(rawName, agent.id)
+      if (formattedName) agentIdByName.set(formattedName, agent.id)
+    }
+
+    let importedCount = 0
+    let assignmentAppliedCount = 0
+    let missingAgentCount = 0
+    const failedTemplates: string[] = []
+
+    for (const entry of backupTemplates) {
+      const snapshot = entry?.template
+      const templateID = snapshot?.id?.trim()
+      if (!templateID) {
+        continue
+      }
+
+      const steps = Array.isArray(snapshot.steps) ? snapshot.steps : []
+      const templateName = snapshot.name?.trim() || templateID
+
+      try {
+        if (!existingTemplateIds.has(templateID)) {
+          await templateApi.create({
+            id: templateID,
+            name: templateName,
+            description: snapshot.description || undefined,
+            entry_point: snapshot.entry_point || undefined,
+            preconditions: (snapshot.preconditions || undefined) as any,
+            steps: steps as any,
+            states: snapshot.states || undefined,
+            planning_task: snapshot.planning_task || undefined,
+          } as any)
+          existingTemplateIds.add(templateID)
+        }
+
+        await templateApi.update(templateID, {
+          name: templateName,
+          description: snapshot.description || '',
+          entry_point: snapshot.entry_point || '',
+          preconditions: (snapshot.preconditions || undefined) as any,
+          steps: steps as any,
+          states: snapshot.states || undefined,
+          planning_states: snapshot.planning_states || undefined,
+          planning_task: snapshot.planning_task || undefined,
+          task_distributor_id: snapshot.task_distributor_id || '',
+        } as any)
+
+        importedCount += 1
+      } catch (error) {
+        console.error(`Failed to upsert template ${templateID}:`, error)
+        failedTemplates.push(templateID)
+        continue
+      }
+
+      const assignments = Array.isArray(entry.assignments) ? entry.assignments : []
+      try {
+        const currentAssignments = await templateApi.getAssignments(templateID)
+        await Promise.all(
+          currentAssignments.map((assignment) =>
+            templateApi.unassign(templateID, assignment.agent_id)
+          )
+        )
+      } catch (error) {
+        console.error(`Failed to clear assignments for ${templateID}:`, error)
+      }
+
+      for (const assignment of assignments) {
+        const rawAgentID = (assignment.agent_id || '').trim()
+        const rawAgentName = (assignment.agent_name || '').trim()
+        const formattedAgentName = formatTaskManagerName(rawAgentName)
+        const resolvedAgentID = agentIdSet.has(rawAgentID)
+          ? rawAgentID
+          : (agentIdByName.get(rawAgentName) || agentIdByName.get(formattedAgentName) || '')
+
+        if (!resolvedAgentID) {
+          missingAgentCount += 1
+          continue
+        }
+
+        try {
+          await templateApi.assign(
+            templateID,
+            resolvedAgentID,
+            assignment.enabled !== false,
+            Number.isFinite(assignment.priority) ? Number(assignment.priority) : 0
+          )
+          assignmentAppliedCount += 1
+        } catch (error) {
+          console.error(`Failed to assign template ${templateID} to ${resolvedAgentID}:`, error)
+        }
+      }
+    }
+
+    queryClient.invalidateQueries({ queryKey: ['templates'] })
+    queryClient.invalidateQueries({ queryKey: ['templates-all'] })
+    queryClient.invalidateQueries({ queryKey: ['template', selectedTemplateId] })
+    queryClient.invalidateQueries({ queryKey: ['template-assignments'] })
+    queryClient.invalidateQueries({ queryKey: ['agents-overview'] })
+
+    const firstTemplateID = backupTemplates[0]?.template?.id
+    if (firstTemplateID) {
+      setSelectedTemplateId(firstTemplateID)
+    }
+
+    const summary =
+      `불러오기 완료: 태스크 ${importedCount}개, 할당 ${assignmentAppliedCount}개 적용` +
+      (missingAgentCount > 0 ? `, 누락 RTM ${missingAgentCount}개` : '') +
+      (failedTemplates.length > 0 ? `, 실패 태스크 ${failedTemplates.length}개` : '') +
+      (sourceLabel ? ` [${sourceLabel}]` : '')
+    setTaskSetNotice(summary)
+  }, [agents, queryClient, selectedTemplateId])
+
   const handleExportTaskSet = useCallback(async () => {
     setIsTaskSetProcessing(true)
     setTaskSetNotice(null)
@@ -2730,15 +2873,10 @@ function ActionGraphEditor() {
 
       const timeLabel = new Date().toISOString().replace(/[:.]/g, '-')
       const fileName = `task_set_backup_${timeLabel}.json`
-      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' })
-      const url = window.URL.createObjectURL(blob)
-      const anchor = document.createElement('a')
-      anchor.href = url
-      anchor.download = fileName
-      anchor.click()
-      window.URL.revokeObjectURL(url)
-
-      setTaskSetNotice(`태스크 세트 저장 완료: ${snapshotItems.length}개`)
+      const saved = await saveFilesApi.saveTaskSet(fileName, backup)
+      const files = await saveFilesApi.listTaskSets()
+      setSavedTaskSetFiles(files)
+      setTaskSetNotice(`태스크 세트 저장 완료: ${snapshotItems.length}개 (${saved.name})`)
     } catch (error) {
       console.error('Failed to export task set:', error)
       setTaskSetNotice(`태스크 세트 저장 실패: ${extractApiErrorMessage(error, 'unknown error')}`)
@@ -2747,158 +2885,39 @@ function ActionGraphEditor() {
     }
   }, [])
 
-  const handleOpenTaskSetImport = useCallback(() => {
-    taskSetImportInputRef.current?.click()
-  }, [])
-
-  const handleImportTaskSet = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    event.target.value = ''
-    if (!file) return
-
+  const handleOpenTaskSetImport = useCallback(async () => {
     setIsTaskSetProcessing(true)
     setTaskSetNotice(null)
-
     try {
-      const raw = await file.text()
-      const parsed = JSON.parse(raw) as TaskSetBackup
-      const backupTemplates = Array.isArray(parsed?.templates) ? parsed.templates : []
-      if (backupTemplates.length === 0) {
-        throw new Error('유효한 templates 항목이 없습니다.')
-      }
-
-      const confirmed = window.confirm(
-        `태스크 세트 ${backupTemplates.length}개를 불러옵니다.\n` +
-          `동일 ID 태스크는 덮어씁니다. 계속할까요?`
-      )
-      if (!confirmed) {
-        setTaskSetNotice('태스크 세트 불러오기를 취소했습니다.')
+      const files = await saveFilesApi.listTaskSets()
+      setSavedTaskSetFiles(files)
+      if (files.length === 0) {
+        setTaskSetNotice('Save_files/tasks 폴더에 저장된 태스크 JSON이 없습니다.')
         return
       }
-
-      const currentTemplates = await templateApi.list()
-      const existingTemplateIds = new Set(currentTemplates.map((template) => template.id))
-
-      const agentIdSet = new Set(agents.map((agent) => agent.id))
-      const agentIdByName = new Map<string, string>()
-      for (const agent of agents) {
-        const rawName = (agent.name || '').trim()
-        const formattedName = formatTaskManagerName(rawName)
-        if (rawName) agentIdByName.set(rawName, agent.id)
-        if (formattedName) agentIdByName.set(formattedName, agent.id)
-      }
-
-      let importedCount = 0
-      let assignmentAppliedCount = 0
-      let missingAgentCount = 0
-      const failedTemplates: string[] = []
-
-      for (const entry of backupTemplates) {
-        const snapshot = entry?.template
-        const templateID = snapshot?.id?.trim()
-        if (!templateID) {
-          continue
-        }
-
-        const steps = Array.isArray(snapshot.steps) ? snapshot.steps : []
-        const templateName = snapshot.name?.trim() || templateID
-
-        try {
-          if (!existingTemplateIds.has(templateID)) {
-            await templateApi.create({
-              id: templateID,
-              name: templateName,
-              description: snapshot.description || undefined,
-              entry_point: snapshot.entry_point || undefined,
-              preconditions: (snapshot.preconditions || undefined) as any,
-              steps: steps as any,
-              states: snapshot.states || undefined,
-              planning_task: snapshot.planning_task || undefined,
-            } as any)
-            existingTemplateIds.add(templateID)
-          }
-
-          await templateApi.update(templateID, {
-            name: templateName,
-            description: snapshot.description || '',
-            entry_point: snapshot.entry_point || '',
-            preconditions: (snapshot.preconditions || undefined) as any,
-            steps: steps as any,
-            states: snapshot.states || undefined,
-            planning_states: snapshot.planning_states || undefined,
-            planning_task: snapshot.planning_task || undefined,
-            task_distributor_id: snapshot.task_distributor_id || '',
-          } as any)
-
-          importedCount += 1
-        } catch (error) {
-          console.error(`Failed to upsert template ${templateID}:`, error)
-          failedTemplates.push(templateID)
-          continue
-        }
-
-        const assignments = Array.isArray(entry.assignments) ? entry.assignments : []
-        try {
-          const currentAssignments = await templateApi.getAssignments(templateID)
-          await Promise.all(
-            currentAssignments.map((assignment) =>
-              templateApi.unassign(templateID, assignment.agent_id)
-            )
-          )
-        } catch (error) {
-          console.error(`Failed to clear assignments for ${templateID}:`, error)
-        }
-
-        for (const assignment of assignments) {
-          const rawAgentID = (assignment.agent_id || '').trim()
-          const rawAgentName = (assignment.agent_name || '').trim()
-          const formattedAgentName = formatTaskManagerName(rawAgentName)
-          const resolvedAgentID = agentIdSet.has(rawAgentID)
-            ? rawAgentID
-            : (agentIdByName.get(rawAgentName) || agentIdByName.get(formattedAgentName) || '')
-
-          if (!resolvedAgentID) {
-            missingAgentCount += 1
-            continue
-          }
-
-          try {
-            await templateApi.assign(
-              templateID,
-              resolvedAgentID,
-              assignment.enabled !== false,
-              Number.isFinite(assignment.priority) ? Number(assignment.priority) : 0
-            )
-            assignmentAppliedCount += 1
-          } catch (error) {
-            console.error(`Failed to assign template ${templateID} to ${resolvedAgentID}:`, error)
-          }
-        }
-      }
-
-      queryClient.invalidateQueries({ queryKey: ['templates'] })
-      queryClient.invalidateQueries({ queryKey: ['templates-all'] })
-      queryClient.invalidateQueries({ queryKey: ['template', selectedTemplateId] })
-      queryClient.invalidateQueries({ queryKey: ['template-assignments'] })
-      queryClient.invalidateQueries({ queryKey: ['agents-overview'] })
-
-      const firstTemplateID = backupTemplates[0]?.template?.id
-      if (firstTemplateID) {
-        setSelectedTemplateId(firstTemplateID)
-      }
-
-      const summary =
-        `불러오기 완료: 태스크 ${importedCount}개, 할당 ${assignmentAppliedCount}개 적용` +
-        (missingAgentCount > 0 ? `, 누락 RTM ${missingAgentCount}개` : '') +
-        (failedTemplates.length > 0 ? `, 실패 태스크 ${failedTemplates.length}개` : '')
-      setTaskSetNotice(summary)
+      setShowTaskSetLoadModal(true)
     } catch (error) {
-      console.error('Failed to import task set:', error)
-      setTaskSetNotice(`태스크 세트 불러오기 실패: ${extractApiErrorMessage(error, 'invalid json')}`)
+      console.error('Failed to list task set save files:', error)
+      setTaskSetNotice(`저장 파일 목록 조회 실패: ${extractApiErrorMessage(error, 'unknown error')}`)
     } finally {
       setIsTaskSetProcessing(false)
     }
-  }, [agents, queryClient, selectedTemplateId])
+  }, [])
+
+  const handleImportTaskSet = useCallback(async (fileName: string) => {
+    setShowTaskSetLoadModal(false)
+    setIsTaskSetProcessing(true)
+    setTaskSetNotice(null)
+    try {
+      const parsed = await saveFilesApi.loadTaskSet<TaskSetBackup>(fileName)
+      await importTaskSetBackup(parsed, fileName)
+    } catch (error) {
+      console.error('Failed to import task set:', error)
+      setTaskSetNotice(`태스크 세트 불러오기 실패: ${extractApiErrorMessage(error, fileName)}`)
+    } finally {
+      setIsTaskSetProcessing(false)
+    }
+  }, [importTaskSetBackup])
 
   const selectedTaskSummary = useMemo(
     () => allTemplates.find(template => template.id === selectedTemplateId) || null,
@@ -2914,13 +2933,6 @@ function ActionGraphEditor() {
         {/* Task list */}
         <div className="flex-1 overflow-y-auto">
           <div className="py-2">
-            <input
-              ref={taskSetImportInputRef}
-              type="file"
-              accept="application/json,.json"
-              className="hidden"
-              onChange={handleImportTaskSet}
-            />
             <div className="px-3 py-2 flex items-center justify-between">
               <span className="text-xs font-semibold text-secondary uppercase tracking-wider">
                 태스크
@@ -3875,6 +3887,46 @@ function ActionGraphEditor() {
           )}
         </div>
       </div>
+
+      {showTaskSetLoadModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="w-full max-w-xl rounded-xl border border-primary bg-surface shadow-2xl">
+            <div className="flex items-center justify-between border-b border-primary px-4 py-3">
+              <div>
+                <h3 className="text-sm font-semibold text-primary">태스크 세트 불러오기</h3>
+                <p className="text-[11px] text-muted">Save_files/tasks 폴더에서 파일을 선택하세요.</p>
+              </div>
+              <button
+                onClick={() => setShowTaskSetLoadModal(false)}
+                className="rounded p-1 text-muted hover:bg-elevated hover:text-primary"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="max-h-[55vh] space-y-2 overflow-y-auto p-3">
+              {savedTaskSetFiles.length === 0 ? (
+                <div className="rounded border border-primary bg-elevated px-3 py-4 text-xs text-muted">
+                  저장된 파일이 없습니다.
+                </div>
+              ) : (
+                savedTaskSetFiles.map((file) => (
+                  <button
+                    key={file.name}
+                    onClick={() => handleImportTaskSet(file.name)}
+                    className="w-full rounded border border-primary bg-elevated px-3 py-2 text-left transition hover:border-blue-500/40 hover:bg-blue-500/10"
+                  >
+                    <div className="truncate text-xs font-medium text-primary">{file.name}</div>
+                    <div className="mt-0.5 text-[10px] text-muted">
+                      {new Date(file.updated_at).toLocaleString()} · {Math.max(1, Math.round(file.size_bytes / 1024))} KB
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Create Template Modal */}
       {showCreateModal && (

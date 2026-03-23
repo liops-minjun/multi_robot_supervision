@@ -915,6 +915,19 @@ export const taskDistributorApi = {
     await api.delete(`/task-distributors/${id}`)
   },
 
+  getStateMergePolicies: async (distributorId: string): Promise<{ policies: TaskDistributor['state_merge_policies'] }> => {
+    const { data } = await api.get(`/task-distributors/${distributorId}/state-merge-policies`)
+    return data
+  },
+
+  updateStateMergePolicies: async (
+    distributorId: string,
+    policies: NonNullable<TaskDistributor['state_merge_policies']>
+  ): Promise<{ policies: TaskDistributor['state_merge_policies'] }> => {
+    const { data } = await api.put(`/task-distributors/${distributorId}/state-merge-policies`, { policies })
+    return data
+  },
+
   // States
   listStates: async (distributorId: string): Promise<TaskDistributorState[]> => {
     const { data } = await api.get(`/task-distributors/${distributorId}/states`)
@@ -961,6 +974,54 @@ export const taskDistributorApi = {
 
   deleteResource: async (distributorId: string, resourceId: string): Promise<void> => {
     await api.delete(`/task-distributors/${distributorId}/resources/${resourceId}`)
+  },
+}
+
+export type SavedJsonFileEntry = {
+  name: string
+  size_bytes: number
+  updated_at: string
+}
+
+const encodePathSegment = (value: string): string => encodeURIComponent(value)
+
+export const saveFilesApi = {
+  // Task set JSONs (Save_files/tasks)
+  listTaskSets: async (): Promise<SavedJsonFileEntry[]> => {
+    const { data } = await api.get('/save-files/task-sets')
+    return data?.files || []
+  },
+
+  saveTaskSet: async (fileName: string, payload: unknown): Promise<SavedJsonFileEntry> => {
+    const { data } = await api.post('/save-files/task-sets', {
+      file_name: fileName,
+      payload,
+    })
+    return data
+  },
+
+  loadTaskSet: async <T = unknown>(fileName: string): Promise<T> => {
+    const { data } = await api.get(`/save-files/task-sets/${encodePathSegment(fileName)}`)
+    return data?.payload as T
+  },
+
+  // PDDL profile JSONs (Save_files/pddl)
+  listPddlProfiles: async (): Promise<SavedJsonFileEntry[]> => {
+    const { data } = await api.get('/save-files/pddl-profiles')
+    return data?.files || []
+  },
+
+  savePddlProfile: async (fileName: string, payload: unknown): Promise<SavedJsonFileEntry> => {
+    const { data } = await api.post('/save-files/pddl-profiles', {
+      file_name: fileName,
+      payload,
+    })
+    return data
+  },
+
+  loadPddlProfile: async <T = unknown>(fileName: string): Promise<T> => {
+    const { data } = await api.get(`/save-files/pddl-profiles/${encodePathSegment(fileName)}`)
+    return data?.payload as T
   },
 }
 

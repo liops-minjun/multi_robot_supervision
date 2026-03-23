@@ -3934,17 +3934,23 @@ func (r *Repository) CreateTaskDistributor(td *TaskDistributor) error {
 		return fmt.Errorf("task distributor is nil")
 	}
 	ctx := context.Background()
-	props := map[string]any{
-		"id":            td.ID,
-		"name":          td.Name,
-		"description":   td.Description,
-		"created_at_ms": timeToMillis(td.CreatedAt),
-		"updated_at_ms": timeToMillis(td.UpdatedAt),
+	stateMergePoliciesJSON, err := jsonString(td.StateMergePolicies)
+	if err != nil {
+		return fmt.Errorf("failed to encode state merge policies: %w", err)
 	}
-	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+	props := map[string]any{
+		"id":                        td.ID,
+		"name":                      td.Name,
+		"description":               td.Description,
+		"state_merge_policies_json": stateMergePoliciesJSON,
+		"created_at_ms":             timeToMillis(td.CreatedAt),
+		"updated_at_ms":             timeToMillis(td.UpdatedAt),
+	}
+	_, err = r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
 		_, err := tx.Run(ctx, `
 			CREATE (td:TaskDistributor {
 				id: $id, name: $name, description: $description,
+				state_merge_policies_json: $state_merge_policies_json,
 				created_at_ms: $created_at_ms, updated_at_ms: $updated_at_ms
 			})
 		`, props)
@@ -4017,6 +4023,27 @@ func (r *Repository) UpdateTaskDistributor(id string, name, description string) 
 	return err
 }
 
+func (r *Repository) UpdateTaskDistributorStateMergePolicies(id string, policies []TaskDistributorStateMergePolicy) error {
+	ctx := context.Background()
+	policiesJSON, err := jsonString(policies)
+	if err != nil {
+		return fmt.Errorf("failed to encode state merge policies: %w", err)
+	}
+	_, err = r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		_, err := tx.Run(ctx, `
+			MATCH (td:TaskDistributor {id: $id})
+			SET td.state_merge_policies_json = $state_merge_policies_json,
+			    td.updated_at_ms = $updated_at_ms
+		`, map[string]any{
+			"id":                        id,
+			"state_merge_policies_json": policiesJSON,
+			"updated_at_ms":             time.Now().UTC().UnixMilli(),
+		})
+		return nil, err
+	})
+	return err
+}
+
 func (r *Repository) DeleteTaskDistributor(id string) error {
 	ctx := context.Background()
 	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
@@ -4033,12 +4060,17 @@ func (r *Repository) DeleteTaskDistributor(id string) error {
 }
 
 func parseTaskDistributorNode(props map[string]any) *TaskDistributor {
+	var policies []TaskDistributorStateMergePolicy
+	if raw := strings.TrimSpace(getString(props, "state_merge_policies_json")); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &policies)
+	}
 	return &TaskDistributor{
-		ID:          getString(props, "id"),
-		Name:        getString(props, "name"),
-		Description: getString(props, "description"),
-		CreatedAt:   time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
-		UpdatedAt:   time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
+		ID:                 getString(props, "id"),
+		Name:               getString(props, "name"),
+		Description:        getString(props, "description"),
+		StateMergePolicies: policies,
+		CreatedAt:          time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
+		UpdatedAt:          time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
 	}
 }
 

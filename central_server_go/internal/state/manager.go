@@ -115,6 +115,11 @@ type GlobalStateManager struct {
 	// Active state overrides per robot (agentID -> sourceID -> override)
 	stateOverrides map[string]map[string]StateOverride
 
+	// Manual reset guard window (agentID -> expiresAt).
+	// While active, transient error/warning heartbeat/planning-state overlays are
+	// normalized to idle to prevent immediate bounce-back after Reset State.
+	manualResetGuardUntil map[string]time.Time
+
 	// Zone reservations indexed by zone ID
 	zones map[string]*ZoneReservation
 
@@ -160,26 +165,29 @@ type StateOverride struct {
 	SetAt time.Time
 }
 
+const manualResetGuardDuration = 45 * time.Second
+
 // NewGlobalStateManager creates a new state manager
 func NewGlobalStateManager() *GlobalStateManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &GlobalStateManager{
-		robots:             make(map[string]*RobotState),
-		stateOverrides:     make(map[string]map[string]StateOverride),
-		zones:              make(map[string]*ZoneReservation),
-		agents:             make(map[string]*AgentConnection),
-		zoneExpiryDuration: 30 * time.Second,
-		graphCache:         NewGraphCache(),
-		metadataCache:      NewMetadataCache(30 * time.Second), // 30s TTL
-		stateRegistry:      NewStateRegistry(),
-		taskLogManager:     NewTaskLogManager(),
-		heartbeatConfig:    DefaultHeartbeatConfig(),
-		planningStates:    make(map[string]map[string]string),
-		planResources:     make(map[string]map[string]PlanResourceHold),
-		resourceHolds:     make(map[string]PlanResourceHold),
-		taskRuntimeScopes: make(map[string]TaskRuntimeContext),
-		ctx:               ctx,
-		cancel:            cancel,
+		robots:                make(map[string]*RobotState),
+		stateOverrides:        make(map[string]map[string]StateOverride),
+		manualResetGuardUntil: make(map[string]time.Time),
+		zones:                 make(map[string]*ZoneReservation),
+		agents:                make(map[string]*AgentConnection),
+		zoneExpiryDuration:    30 * time.Second,
+		graphCache:            NewGraphCache(),
+		metadataCache:         NewMetadataCache(30 * time.Second), // 30s TTL
+		stateRegistry:         NewStateRegistry(),
+		taskLogManager:        NewTaskLogManager(),
+		heartbeatConfig:       DefaultHeartbeatConfig(),
+		planningStates:        make(map[string]map[string]string),
+		planResources:         make(map[string]map[string]PlanResourceHold),
+		resourceHolds:         make(map[string]PlanResourceHold),
+		taskRuntimeScopes:     make(map[string]TaskRuntimeContext),
+		ctx:                   ctx,
+		cancel:                cancel,
 	}
 }
 
@@ -362,6 +370,7 @@ func (m *GlobalStateManager) CleanupStaleAgents(maxOfflineAge time.Duration) int
 			agentID, now.Sub(m.robots[agentID].LastSeen).Round(time.Second))
 		delete(m.robots, agentID)
 		delete(m.stateOverrides, agentID)
+		delete(m.manualResetGuardUntil, agentID)
 		delete(m.agents, agentID)
 		m.graphCache.InvalidateAgentCache(agentID)
 		count++
@@ -414,6 +423,7 @@ func (m *GlobalStateManager) UnregisterRobot(id string) {
 
 	delete(m.robots, id)
 	delete(m.stateOverrides, id)
+	delete(m.manualResetGuardUntil, id)
 	// Also release any zone reservations
 	for zoneID, res := range m.zones {
 		if res.AgentID == id {
@@ -448,6 +458,7 @@ func (m *GlobalStateManager) UpdateRobotState(agentID, newState string) error {
 		return fmt.Errorf("robot %s not found", agentID)
 	}
 
+	newState = m.normalizeReportedStateForManualResetLocked(agentID, newState)
 	robot.ReportedState = newState
 	if !m.hasStateOverrideLocked(agentID) {
 		robot.CurrentState = newState
@@ -643,6 +654,9 @@ func (m *GlobalStateManager) UpdateRobotExecution(agentID string, isExecuting bo
 	robot.CurrentTaskID = taskID
 	robot.CurrentStepID = stepID
 	robot.LastSeen = time.Now()
+	if isExecuting {
+		delete(m.manualResetGuardUntil, agentID)
+	}
 
 	// Update state registry
 	m.stateRegistry.SetAgentExecuting(agentID, isExecuting)
@@ -674,6 +688,9 @@ func (m *GlobalStateManager) TryUpdateRobotExecutionFromHeartbeat(agentID string
 		if hbStepID != "" && hbStepID != robot.CurrentStepID {
 			robot.CurrentStepID = hbStepID
 			robot.LastSeen = time.Now()
+			if hbIsExecuting {
+				delete(m.manualResetGuardUntil, agentID)
+			}
 			return true, nil // Updated step from heartbeat
 		}
 		return false, nil // No change needed
@@ -694,10 +711,97 @@ func (m *GlobalStateManager) TryUpdateRobotExecutionFromHeartbeat(agentID string
 		robot.CurrentStepID = hbStepID
 	}
 	robot.LastSeen = time.Now()
+	if robot.IsExecuting {
+		delete(m.manualResetGuardUntil, agentID)
+	}
 
 	// Update state registry
 	m.stateRegistry.SetAgentExecuting(agentID, robot.IsExecuting)
 	return true, nil
+}
+
+func (m *GlobalStateManager) normalizeReportedStateForManualResetLocked(agentID, state string) string {
+	normalizedState := strings.ToLower(strings.TrimSpace(state))
+	now := time.Now()
+
+	expiry, ok := m.manualResetGuardUntil[agentID]
+	if !ok {
+		return state
+	}
+	if now.After(expiry) {
+		delete(m.manualResetGuardUntil, agentID)
+		return state
+	}
+
+	switch normalizedState {
+	case "", "error", "warning", "failed", "aborted":
+		return "idle"
+	case "idle", "ready":
+		return "idle"
+	default:
+		// Robot reported an explicit non-idle operational state; release guard.
+		delete(m.manualResetGuardUntil, agentID)
+		return state
+	}
+}
+
+func isTruthyExecutionValue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "1", "yes", "running", "executing":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldNormalizeStateValue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "error", "warning", "failed", "aborted":
+		return true
+	default:
+		return false
+	}
+}
+
+// NormalizePlanningRuntimeStateForManualReset normalizes live runtime state overlays
+// while a manual reset guard is active for the target agent.
+func (m *GlobalStateManager) NormalizePlanningRuntimeStateForManualReset(agentID string, values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return values
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	expiry, ok := m.manualResetGuardUntil[agentID]
+	if !ok {
+		return values
+	}
+	if time.Now().After(expiry) {
+		delete(m.manualResetGuardUntil, agentID)
+		return values
+	}
+
+	for key, raw := range values {
+		lowerKey := strings.ToLower(strings.TrimSpace(key))
+		if strings.HasSuffix(lowerKey, "_is_executing") && isTruthyExecutionValue(raw) {
+			delete(m.manualResetGuardUntil, agentID)
+			return values
+		}
+	}
+
+	normalized := make(map[string]string, len(values))
+	for key, raw := range values {
+		next := raw
+		lowerKey := strings.ToLower(strings.TrimSpace(key))
+		if strings.HasSuffix(lowerKey, "_status") || strings.HasSuffix(lowerKey, "_mode") {
+			if shouldNormalizeStateValue(raw) {
+				next = "idle"
+			}
+		}
+		normalized[key] = next
+	}
+	return normalized
 }
 
 // SetRobotOnline sets a robot's online status
@@ -2063,6 +2167,10 @@ func (m *GlobalStateManager) ResetAgentState(agentID string) error {
 
 	// Clear any state overrides
 	delete(m.stateOverrides, agentID)
+
+	// Enable short guard window so immediate stale heartbeat/planning overlays
+	// (error/warning) do not instantly revert manual reset to error.
+	m.manualResetGuardUntil[agentID] = time.Now().Add(manualResetGuardDuration)
 
 	// Release any zone reservations held by this agent
 	for zoneID, res := range m.zones {

@@ -315,13 +315,6 @@ const GoalParametersSection = memo(({
             </div>
           ) : (
             <div className="space-y-2">
-              <div className="rounded border border-sky-500/20 bg-sky-500/5 px-2.5 py-2 text-[10px] leading-5 text-secondary">
-                PDDL planner로 실행될 때 goal 파라미터에서
-                <span className="ml-1 font-mono text-sky-300">${'{agent_name}'}</span>,
-                <span className="ml-1 font-mono text-sky-300">${'{agent.name}'}</span>,
-                <span className="ml-1 font-mono text-sky-300">${'{resource_name}'}</span>,
-                <span className="ml-1 font-mono text-sky-300">${'{resource.name}'}</span> 같은 실행 변수를 선택해 사용할 수 있습니다.
-              </div>
               {goalFields.map((field) => (
                 <div key={field.name} className="p-2 bg-surface rounded border border-primary/50">
                   {/* Field header */}
