@@ -200,7 +200,9 @@ export interface GraphStep {
   job_name?: string                // User-defined job name for this step
   auto_generate_states?: boolean   // Whether to auto-generate states from this step
   type?: 'fallback' | 'terminal' | null
-  terminal_type?: 'success' | 'failure'
+  terminal_type?: 'success' | 'failure' | 'warning'
+  alert?: boolean
+  message?: string
   // Legacy preconditions (simple string-based)
   preconditions?: Precondition[]
   // New State BehaviorTree Configuration
@@ -247,9 +249,14 @@ export interface PlanningEffect {
 }
 
 export interface PlanningTaskSpec {
+  preconditions?: PlanningCondition[]
   required_resources?: string[]
   during_state?: PlanningEffect[]
   result_states?: PlanningEffect[]
+  warning_result_states?: PlanningEffect[]
+  error_result_states?: PlanningEffect[]
+  warning_message_variable?: string
+  error_message_variable?: string
 }
 
 export interface PlanningStateVar {
@@ -669,6 +676,13 @@ export interface ParameterFieldSource {
   conversion?: TypeConversionConfig  // Optional conversion config
 }
 
+export interface RuntimeBindingOption {
+  key: string
+  expression: string
+  label: string
+  description?: string
+}
+
 // Type conversion configuration
 export interface TypeConversionConfig {
   enabled: boolean
@@ -709,9 +723,21 @@ export interface WaitFor {
   timeout_sec?: number
 }
 
+export interface RetryNodeUIPosition {
+  x?: number
+  y?: number
+}
+
+export interface TransitionOnFailureConfig {
+  retry?: number
+  fallback?: string
+  backoff_ms?: number
+  ui?: RetryNodeUIPosition
+}
+
 export interface Transition {
   on_success?: string | TransitionCondition
-  on_failure?: string | { retry?: number; fallback?: string }
+  on_failure?: string | TransitionOnFailureConfig
   on_confirm?: string
   on_cancel?: string
   on_timeout?: string
@@ -1389,6 +1415,7 @@ export interface PlanningProblem {
   id: string
   name: string
   behavior_tree_id: string
+  behavior_tree_ids?: string[]
   task_distributor_id?: string
   initial_state?: Record<string, string>
   goal_state: Record<string, string>
@@ -1409,6 +1436,11 @@ export interface TaskDistributorState {
   description?: string
 }
 
+export interface TaskDistributorStateMergePolicy {
+  pattern: string
+  priority: 'live' | 'planner' | string
+}
+
 export interface TaskDistributorResource {
   id: string
   task_distributor_id: string
@@ -1424,6 +1456,7 @@ export interface TaskDistributor {
   description?: string
   created_at: string
   updated_at: string
+  state_merge_policies?: TaskDistributorStateMergePolicy[]
   states?: TaskDistributorState[]
   resources?: TaskDistributorResource[]
 }
@@ -1444,6 +1477,7 @@ export interface ResourceAllocation {
 export interface PlanExecutionStep {
   task_id: string
   task_name?: string
+  behavior_tree_id?: string
   runtime_task_id?: string
   step_id: string
   step_name: string
@@ -1460,6 +1494,7 @@ export interface PlanExecution {
   id: string
   problem_id: string
   behavior_tree_id: string
+  behavior_tree_ids?: string[]
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | string
   current_order: number
   total_orders: number
@@ -1469,4 +1504,42 @@ export interface PlanExecution {
   planning_state?: Record<string, string>
   resources?: ResourceAllocation[]
   steps: PlanExecutionStep[]
+}
+
+export interface RealtimeGoalRule {
+  id: string
+  name: string
+  priority: number
+  enabled: boolean
+  resource_type_id?: string
+  resource_type_ids?: string[]
+  activation_conditions?: PlanningCondition[]
+  goal_state: Record<string, string>
+}
+
+export interface RealtimeSession {
+  id: string
+  name: string
+  status: string
+  behavior_tree_ids: string[]
+  task_distributor_id?: string
+  agent_ids: string[]
+  tick_interval_sec: number
+  goals: RealtimeGoalRule[]
+  effective_state?: Record<string, string>
+  current_state: Record<string, string>
+  live_state?: Record<string, string>
+  selected_goal_id?: string
+  selected_goal_name?: string
+  selected_agent_id?: string
+  selected_agent_name?: string
+  selected_resource_id?: string
+  selected_resource_name?: string
+  active_execution_id?: string
+  active_execution_ids?: string[]
+  active_execution_status?: string
+  last_error?: string
+  last_plan?: PlanResult
+  started_at: string
+  updated_at: string
 }

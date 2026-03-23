@@ -1,0 +1,328 @@
+{
+  "version": 1,
+  "exported_at": "2026-03-11T00:00:00Z",
+  "source": "multi-robot-supervision/task-editor",
+  "templates": [
+    {
+      "template": {
+        "id": "go_to_cnc_01_and_park",
+        "name": "go to cnc and park",
+        "description": "Realtime smoke task: placeholder command for go/park stage",
+        "entry_point": "step_main",
+        "steps": [
+          {
+            "id": "step_main",
+            "name": "go_to_cnc_and_park",
+            "job_name": "go_to_cnc_and_park/",
+            "action": {
+              "type": "navigation_interfaces/Spin",
+              "server": "/spin",
+              "capability_kind": "action",
+              "params": {
+                "source": "inline",
+                "data": {
+                  "angle_rad": 0.25,
+                  "direction": "ccw"
+                }
+              },
+              "timeout_sec": 60
+            },
+            "transition": {
+              "on_success": "terminal_success",
+              "on_failure": "terminal_failure"
+            }
+          },
+          {
+            "id": "terminal_success",
+            "name": "success",
+            "type": "terminal",
+            "terminal_type": "success",
+            "message": "go_to_cnc_and_park succeeded"
+          },
+          {
+            "id": "terminal_failure",
+            "name": "failure",
+            "type": "terminal",
+            "terminal_type": "failure",
+            "message": "go_to_cnc_and_park failed",
+            "alert": true
+          }
+        ],
+        "planning_task": {
+          "preconditions": [
+            {
+              "variable": "at_{{resource.name}}",
+              "operator": "==",
+              "value": "false"
+            },
+            {
+              "variable": "{{resource.name}}_status",
+              "operator": "!=",
+              "value": "running"
+            }
+          ],
+          "required_resources": [
+            "TYPE cnc0"
+          ],
+          "result_states": [
+            {
+              "variable": "at_{{resource.name}}",
+              "value": "true"
+            }
+          ]
+        }
+      },
+      "assignments": [
+        {
+          "agent_name": "Task Manager-001",
+          "enabled": true,
+          "priority": 0
+        }
+      ]
+    },
+    {
+      "template": {
+        "id": "run_cnc_service_cycle_01",
+        "name": "run cnc service cycle 01",
+        "description": "Realtime smoke task: cycle01 stage",
+        "entry_point": "step_main",
+        "steps": [
+          {
+            "id": "step_main",
+            "name": "run_cycle01",
+            "job_name": "run_cycle01/",
+            "action": {
+              "type": "navigation_interfaces/Spin",
+              "server": "/spin",
+              "capability_kind": "action",
+              "params": {
+                "source": "inline",
+                "data": {
+                  "angle_rad": 0.35,
+                  "direction": "ccw"
+                }
+              },
+              "timeout_sec": 60
+            },
+            "transition": {
+              "on_success": "terminal_success",
+              "on_failure": "terminal_failure"
+            }
+          },
+          {
+            "id": "terminal_success",
+            "name": "success",
+            "type": "terminal",
+            "terminal_type": "success",
+            "message": "run_cycle01 succeeded"
+          },
+          {
+            "id": "terminal_failure",
+            "name": "failure",
+            "type": "terminal",
+            "terminal_type": "failure",
+            "message": "run_cycle01 failed",
+            "alert": true
+          }
+        ],
+        "planning_task": {
+          "preconditions": [
+            {
+              "variable": "at_{{resource.name}}",
+              "operator": "==",
+              "value": "true"
+            },
+            {
+              "variable": "{{resource.name}}_status",
+              "operator": "==",
+              "value": "idle"
+            },
+            {
+              "variable": "pending_leave",
+              "operator": "==",
+              "value": "false"
+            }
+          ],
+          "required_resources": [
+            "TYPE cnc0"
+          ],
+          "result_states": [
+            {
+              "variable": "{{resource.name}}_status",
+              "value": "running"
+            },
+            {
+              "variable": "pending_leave",
+              "value": "true"
+            }
+          ]
+        }
+      },
+      "assignments": [
+        {
+          "agent_name": "Task Manager-001",
+          "enabled": true,
+          "priority": 0
+        }
+      ]
+    },
+    {
+      "template": {
+        "id": "run_cnc_cycle_02",
+        "name": "run cnc cycle 02",
+        "description": "Realtime smoke task: cycle02 stage",
+        "entry_point": "step_main",
+        "steps": [
+          {
+            "id": "step_main",
+            "name": "run_cycle02",
+            "job_name": "run_cycle02/",
+            "action": {
+              "type": "navigation_interfaces/Spin",
+              "server": "/spin",
+              "capability_kind": "action",
+              "params": {
+                "source": "inline",
+                "data": {
+                  "angle_rad": 0.30,
+                  "direction": "cw"
+                }
+              },
+              "timeout_sec": 60
+            },
+            "transition": {
+              "on_success": "terminal_success",
+              "on_failure": "terminal_failure"
+            }
+          },
+          {
+            "id": "terminal_success",
+            "name": "success",
+            "type": "terminal",
+            "terminal_type": "success",
+            "message": "run_cycle02 succeeded"
+          },
+          {
+            "id": "terminal_failure",
+            "name": "failure",
+            "type": "terminal",
+            "terminal_type": "failure",
+            "message": "run_cycle02 failed",
+            "alert": true
+          }
+        ],
+        "planning_task": {
+          "preconditions": [
+            {
+              "variable": "at_{{resource.name}}",
+              "operator": "==",
+              "value": "true"
+            },
+            {
+              "variable": "{{resource.name}}_status",
+              "operator": "==",
+              "value": "done"
+            }
+          ],
+          "required_resources": [
+            "TYPE cnc0"
+          ],
+          "result_states": [
+            {
+              "variable": "{{resource.name}}_status",
+              "value": "idle"
+            }
+          ]
+        }
+      },
+      "assignments": [
+        {
+          "agent_name": "Task Manager-001",
+          "enabled": true,
+          "priority": 0
+        }
+      ]
+    },
+    {
+      "template": {
+        "id": "leave_cnc",
+        "name": "leave cnc",
+        "description": "Realtime smoke task: leave stage",
+        "entry_point": "step_main",
+        "steps": [
+          {
+            "id": "step_main",
+            "name": "leave_cnc",
+            "job_name": "leave_cnc/",
+            "action": {
+              "type": "navigation_interfaces/Spin",
+              "server": "/spin",
+              "capability_kind": "action",
+              "params": {
+                "source": "inline",
+                "data": {
+                  "angle_rad": 0.20,
+                  "direction": "cw"
+                }
+              },
+              "timeout_sec": 60
+            },
+            "transition": {
+              "on_success": "terminal_success",
+              "on_failure": "terminal_failure"
+            }
+          },
+          {
+            "id": "terminal_success",
+            "name": "success",
+            "type": "terminal",
+            "terminal_type": "success",
+            "message": "leave_cnc succeeded"
+          },
+          {
+            "id": "terminal_failure",
+            "name": "failure",
+            "type": "terminal",
+            "terminal_type": "failure",
+            "message": "leave_cnc failed",
+            "alert": true
+          }
+        ],
+        "planning_task": {
+          "preconditions": [
+            {
+              "variable": "at_{{resource.name}}",
+              "operator": "==",
+              "value": "true"
+            },
+            {
+              "variable": "pending_leave",
+              "operator": "==",
+              "value": "true"
+            }
+          ],
+          "required_resources": [
+            "TYPE cnc0"
+          ],
+          "result_states": [
+            {
+              "variable": "at_{{resource.name}}",
+              "value": "false"
+            },
+            {
+              "variable": "pending_leave",
+              "value": "false"
+            }
+          ]
+        }
+      },
+      "assignments": [
+        {
+          "agent_name": "Task Manager-001",
+          "enabled": true,
+          "priority": 0
+        }
+      ]
+    }
+  ]
+}

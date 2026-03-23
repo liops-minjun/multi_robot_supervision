@@ -189,6 +189,7 @@ type graphEdge struct {
 	EdgeType  string
 	Retry     int
 	Fallback  string
+	BackoffMs int
 	Condition string
 }
 
@@ -313,6 +314,12 @@ func extractEdgesFromStep(step *BehaviorTreeStep) []graphEdge {
 			if rawRetry, ok := v["retry"]; ok {
 				retry = toInt(rawRetry)
 			}
+			backoffMs := 0
+			if rawBackoff, ok := v["backoff_ms"]; ok {
+				backoffMs = toInt(rawBackoff)
+			} else if rawBackoff, ok := v["backoffMs"]; ok {
+				backoffMs = toInt(rawBackoff)
+			}
 			fallback := ""
 			if fb, ok := v["fallback"].(string); ok {
 				fallback = fb
@@ -327,11 +334,12 @@ func extractEdgesFromStep(step *BehaviorTreeStep) []graphEdge {
 			}
 			if target != "" {
 				edges = append(edges, graphEdge{
-					From:     step.ID,
-					To:       target,
-					EdgeType: "on_failure",
-					Retry:    retry,
-					Fallback: fallback,
+					From:      step.ID,
+					To:        target,
+					EdgeType:  "on_failure",
+					Retry:     retry,
+					Fallback:  fallback,
+					BackoffMs: backoffMs,
 				})
 			}
 		}
@@ -1378,6 +1386,162 @@ func (r *Repository) UpdateBehaviorTree(graph *BehaviorTree) error {
 	return err
 }
 
+// RenameBehaviorTreeIdentity updates behavior tree ID and/or name.
+// When ID changes, related references are updated as well.
+func (r *Repository) RenameBehaviorTreeIdentity(oldID, newID, newName string) error {
+	oldID = strings.TrimSpace(oldID)
+	newID = strings.TrimSpace(newID)
+	newName = strings.TrimSpace(newName)
+
+	if oldID == "" {
+		return fmt.Errorf("old behavior tree id is empty")
+	}
+	if newID == "" {
+		newID = oldID
+	}
+	if newID == oldID && newName == "" {
+		return nil
+	}
+
+	ctx := context.Background()
+	updatedAtMs := time.Now().UTC().UnixMilli()
+
+	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		// Ensure source graph exists
+		checkRes, err := tx.Run(ctx, `
+			MATCH (g:ActionGraph {id: $old_id})
+			RETURN count(g) AS cnt
+		`, map[string]any{"old_id": oldID})
+		if err != nil {
+			return nil, err
+		}
+		if !checkRes.Next(ctx) || getInt64(checkRes.Record().AsMap(), "cnt") == 0 {
+			return nil, fmt.Errorf("behavior tree not found: %s", oldID)
+		}
+
+		// Ensure target ID is not already used by another graph
+		if newID != oldID {
+			dupRes, err := tx.Run(ctx, `
+				MATCH (g:ActionGraph {id: $new_id})
+				RETURN count(g) AS cnt
+			`, map[string]any{"new_id": newID})
+			if err != nil {
+				return nil, err
+			}
+			if dupRes.Next(ctx) && getInt64(dupRes.Record().AsMap(), "cnt") > 0 {
+				return nil, fmt.Errorf("behavior tree id already exists: %s", newID)
+			}
+		}
+
+		// Rename graph id and all references
+		if newID != oldID {
+			_, err = tx.Run(ctx, `
+				MATCH (g:ActionGraph {id: $old_id})
+				SET g.id = $new_id,
+				    g.updated_at_ms = $updated_at_ms
+			`, map[string]any{
+				"old_id":        oldID,
+				"new_id":        newID,
+				"updated_at_ms": updatedAtMs,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			_, err = tx.Run(ctx, `
+				MATCH (n {graph_id: $old_id})
+				SET n.graph_id = $new_id
+			`, map[string]any{
+				"old_id": oldID,
+				"new_id": newID,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			_, err = tx.Run(ctx, `
+				MATCH (aag:AgentActionGraph {behavior_tree_id: $old_id})
+				SET aag.behavior_tree_id = $new_id,
+				    aag.deployed_version = 0,
+				    aag.deployment_status = "outdated",
+				    aag.deployment_error = "behavior tree id changed",
+				    aag.updated_at_ms = $updated_at_ms
+			`, map[string]any{
+				"old_id":        oldID,
+				"new_id":        newID,
+				"updated_at_ms": updatedAtMs,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			_, err = tx.Run(ctx, `
+				MATCH (t:Task {behavior_tree_id: $old_id})
+				SET t.behavior_tree_id = $new_id
+			`, map[string]any{
+				"old_id": oldID,
+				"new_id": newID,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			_, err = tx.Run(ctx, `
+				MATCH (a:Agent {current_graph_id: $old_id})
+				SET a.current_graph_id = $new_id
+			`, map[string]any{
+				"old_id": oldID,
+				"new_id": newID,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			_, err = tx.Run(ctx, `
+				MATCH (p:PlanningProblem {behavior_tree_id: $old_id})
+				SET p.behavior_tree_id = $new_id
+			`, map[string]any{
+				"old_id": oldID,
+				"new_id": newID,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			_, err = tx.Run(ctx, `
+				MATCH (p:PlanningProblem)
+				WHERE p.behavior_tree_ids CONTAINS $old_marker
+				SET p.behavior_tree_ids = replace(p.behavior_tree_ids, $old_marker, $new_marker)
+			`, map[string]any{
+				"old_marker": fmt.Sprintf(`"%s"`, oldID),
+				"new_marker": fmt.Sprintf(`"%s"`, newID),
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		// Rename display name
+		if newName != "" {
+			_, err = tx.Run(ctx, `
+				MATCH (g:ActionGraph {id: $target_id})
+				SET g.name = $new_name,
+				    g.updated_at_ms = $updated_at_ms
+			`, map[string]any{
+				"target_id":     newID,
+				"new_name":      newName,
+				"updated_at_ms": updatedAtMs,
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		return nil, nil
+	})
+	return err
+}
+
 func (r *Repository) DeleteBehaviorTree(id string) error {
 	ctx := context.Background()
 	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
@@ -1618,15 +1782,16 @@ func (r *Repository) storeBehaviorTreeStructure(ctx context.Context, tx neo4j.Ma
 		query := fmt.Sprintf(`
 			MATCH (from {id:$from, graph_id:$graph_id})
 			MATCH (to {id:$to, graph_id:$graph_id})
-			CREATE (from)-[:%s {retry:$retry, fallback:$fallback, condition:$condition}]->(to)
+			CREATE (from)-[:%s {retry:$retry, fallback:$fallback, backoff_ms:$backoff_ms, condition:$condition}]->(to)
 		`, relType)
 		_, err = tx.Run(ctx, query, map[string]any{
-			"from":      edge.From,
-			"to":        edge.To,
-			"graph_id":  graph.ID,
-			"retry":     edge.Retry,
-			"fallback":  edge.Fallback,
-			"condition": edge.Condition,
+			"from":       edge.From,
+			"to":         edge.To,
+			"graph_id":   graph.ID,
+			"retry":      edge.Retry,
+			"fallback":   edge.Fallback,
+			"backoff_ms": edge.BackoffMs,
+			"condition":  edge.Condition,
 		})
 		if err != nil {
 			return err
@@ -3598,6 +3763,7 @@ func (r *Repository) CreatePlanningProblem(pp *PlanningProblem) error {
 		"id":                  pp.ID,
 		"name":                pp.Name,
 		"behavior_tree_id":    pp.BehaviorTreeID,
+		"behavior_tree_ids":   string(pp.BehaviorTreeIDs),
 		"task_distributor_id": pp.TaskDistributorID.String,
 		"initial_state":       string(pp.InitialState),
 		"goal_state":          string(pp.GoalState),
@@ -3614,6 +3780,7 @@ func (r *Repository) CreatePlanningProblem(pp *PlanningProblem) error {
 				id: $id,
 				name: $name,
 				behavior_tree_id: $behavior_tree_id,
+				behavior_tree_ids: $behavior_tree_ids,
 				task_distributor_id: $task_distributor_id,
 				initial_state: $initial_state,
 				goal_state: $goal_state,
@@ -3664,8 +3831,9 @@ func (r *Repository) ListPlanningProblems(behaviorTreeID string) ([]PlanningProb
 	query := "MATCH (p:PlanningProblem) "
 	params := map[string]any{}
 	if behaviorTreeID != "" {
-		query += "WHERE p.behavior_tree_id = $bt_id "
+		query += "WHERE p.behavior_tree_id = $bt_id OR p.behavior_tree_ids CONTAINS $bt_marker "
 		params["bt_id"] = behaviorTreeID
+		params["bt_marker"] = fmt.Sprintf("\"%s\"", behaviorTreeID)
 	}
 	query += "RETURN p ORDER BY p.created_at_ms DESC"
 
@@ -3742,6 +3910,9 @@ func parsePlanningProblemNode(props map[string]any) *PlanningProblem {
 	if is := getString(props, "initial_state"); is != "" {
 		pp.InitialState = datatypes.JSON([]byte(is))
 	}
+	if btIDs := getString(props, "behavior_tree_ids"); btIDs != "" {
+		pp.BehaviorTreeIDs = datatypes.JSON([]byte(btIDs))
+	}
 	if gs := getString(props, "goal_state"); gs != "" {
 		pp.GoalState = datatypes.JSON([]byte(gs))
 	}
@@ -3763,17 +3934,23 @@ func (r *Repository) CreateTaskDistributor(td *TaskDistributor) error {
 		return fmt.Errorf("task distributor is nil")
 	}
 	ctx := context.Background()
-	props := map[string]any{
-		"id":            td.ID,
-		"name":          td.Name,
-		"description":   td.Description,
-		"created_at_ms": timeToMillis(td.CreatedAt),
-		"updated_at_ms": timeToMillis(td.UpdatedAt),
+	stateMergePoliciesJSON, err := jsonString(td.StateMergePolicies)
+	if err != nil {
+		return fmt.Errorf("failed to encode state merge policies: %w", err)
 	}
-	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+	props := map[string]any{
+		"id":                        td.ID,
+		"name":                      td.Name,
+		"description":               td.Description,
+		"state_merge_policies_json": stateMergePoliciesJSON,
+		"created_at_ms":             timeToMillis(td.CreatedAt),
+		"updated_at_ms":             timeToMillis(td.UpdatedAt),
+	}
+	_, err = r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
 		_, err := tx.Run(ctx, `
 			CREATE (td:TaskDistributor {
 				id: $id, name: $name, description: $description,
+				state_merge_policies_json: $state_merge_policies_json,
 				created_at_ms: $created_at_ms, updated_at_ms: $updated_at_ms
 			})
 		`, props)
@@ -3846,6 +4023,27 @@ func (r *Repository) UpdateTaskDistributor(id string, name, description string) 
 	return err
 }
 
+func (r *Repository) UpdateTaskDistributorStateMergePolicies(id string, policies []TaskDistributorStateMergePolicy) error {
+	ctx := context.Background()
+	policiesJSON, err := jsonString(policies)
+	if err != nil {
+		return fmt.Errorf("failed to encode state merge policies: %w", err)
+	}
+	_, err = r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
+		_, err := tx.Run(ctx, `
+			MATCH (td:TaskDistributor {id: $id})
+			SET td.state_merge_policies_json = $state_merge_policies_json,
+			    td.updated_at_ms = $updated_at_ms
+		`, map[string]any{
+			"id":                        id,
+			"state_merge_policies_json": policiesJSON,
+			"updated_at_ms":             time.Now().UTC().UnixMilli(),
+		})
+		return nil, err
+	})
+	return err
+}
+
 func (r *Repository) DeleteTaskDistributor(id string) error {
 	ctx := context.Background()
 	_, err := r.withSession(ctx, neo4j.AccessModeWrite, func(tx neo4j.ManagedTransaction) (any, error) {
@@ -3862,12 +4060,17 @@ func (r *Repository) DeleteTaskDistributor(id string) error {
 }
 
 func parseTaskDistributorNode(props map[string]any) *TaskDistributor {
+	var policies []TaskDistributorStateMergePolicy
+	if raw := strings.TrimSpace(getString(props, "state_merge_policies_json")); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &policies)
+	}
 	return &TaskDistributor{
-		ID:          getString(props, "id"),
-		Name:        getString(props, "name"),
-		Description: getString(props, "description"),
-		CreatedAt:   time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
-		UpdatedAt:   time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
+		ID:                 getString(props, "id"),
+		Name:               getString(props, "name"),
+		Description:        getString(props, "description"),
+		StateMergePolicies: policies,
+		CreatedAt:          time.UnixMilli(getInt64(props, "created_at_ms")).UTC(),
+		UpdatedAt:          time.UnixMilli(getInt64(props, "updated_at_ms")).UTC(),
 	}
 }
 

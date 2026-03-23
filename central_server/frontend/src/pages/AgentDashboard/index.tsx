@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Server,
@@ -43,6 +43,17 @@ const capabilityKindOf = (capability: AgentCapabilityInfo): 'action' | 'service'
   if (capability.capability_kind === 'service') return 'service'
   if (capability.capability_kind === 'action') return 'action'
   return capability.action_type.toLowerCase().includes('/srv/') ? 'service' : 'action'
+}
+
+const getApiErrorMessage = (error: unknown): string => {
+  const err = error as {
+    response?: { data?: { error?: string; message?: string } }
+    message?: string
+  }
+  return err?.response?.data?.error
+    || err?.response?.data?.message
+    || err?.message
+    || String(error)
 }
 
 // Status badge component
@@ -744,6 +755,8 @@ export default function AgentDashboard() {
   const [editingAgentInList, setEditingAgentInList] = useState<string | null>(null)
   const [listEditedName, setListEditedName] = useState('')
   const [statusFilter, setStatusFilter] = useState<'online' | 'offline' | 'saved'>('online')
+  const [isDeployingAll, setIsDeployingAll] = useState(false)
+  const [deployAllNotice, setDeployAllNotice] = useState<string | null>(null)
   const staleCleanupDoneRef = useRef(false)
 
   // Fetch all agents
@@ -822,9 +835,11 @@ export default function AgentDashboard() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agent-assigned-graphs', selectedAgentId] })
     },
-    onError: () => {
+    onError: (error: unknown) => {
+      console.error('[deployGraphMutation] Error:', error)
       // Also refresh on error to show failed status
       queryClient.invalidateQueries({ queryKey: ['agent-assigned-graphs', selectedAgentId] })
+      alert(`Deploy failed: ${getApiErrorMessage(error)}`)
     },
   })
 
@@ -859,6 +874,62 @@ export default function AgentDashboard() {
       }))
   }, [assignedGraphs])
 
+  const deployableGraphTargets = useMemo(
+    () => sortedActionGraphs.filter(graph =>
+      !!graph.id && (graph.deployment_status === 'pending' || graph.deployment_status === 'failed' || graph.deployment_status === 'outdated')
+    ),
+    [sortedActionGraphs]
+  )
+
+  const handleDeployUpdateAll = useCallback(async () => {
+    if (!selectedAgentId) return
+    if (deployableGraphTargets.length === 0) {
+      setDeployAllNotice('Deploy/Update 대상 태스크가 없습니다.')
+      return
+    }
+
+    setIsDeployingAll(true)
+    setDeployAllNotice(null)
+
+    let successCount = 0
+    let skippedCount = 0
+    let failedCount = 0
+
+    for (const graph of deployableGraphTargets) {
+      const graphId = (graph.id || '').trim()
+      if (!graphId) {
+        skippedCount += 1
+        continue
+      }
+
+      try {
+        // Skip missing/invalid BT safely.
+        await actionGraphApi.get(graphId)
+      } catch (error) {
+        console.warn('[DeployAll] Skip invalid or missing graph:', graphId, error)
+        skippedCount += 1
+        continue
+      }
+
+      try {
+        const result = await agentApi.deployActionGraph(graphId, selectedAgentId)
+        if (result.success) {
+          successCount += 1
+        } else {
+          failedCount += 1
+        }
+      } catch (error) {
+        console.error('[DeployAll] Deploy failed:', graphId, error)
+        failedCount += 1
+      }
+    }
+
+    setDeployAllNotice(`Deploy/Update all 완료 · 성공 ${successCount} · 스킵 ${skippedCount} · 실패 ${failedCount}`)
+    setIsDeployingAll(false)
+    queryClient.invalidateQueries({ queryKey: ['agent-assigned-graphs', selectedAgentId] })
+    queryClient.invalidateQueries({ queryKey: ['action-graph'] })
+  }, [deployableGraphTargets, queryClient, selectedAgentId])
+
   // Auto-select first graph when graphs load or selection becomes invalid
   useEffect(() => {
     if (sortedActionGraphs.length > 0) {
@@ -876,11 +947,22 @@ export default function AgentDashboard() {
     return sortedActionGraphs.find(g => g.id === selectedGraphId) || null
   }, [sortedActionGraphs, selectedGraphId])
 
-  const { data: fleetGraph } = useQuery({
+  const { data: fleetGraph, error: fleetGraphError } = useQuery({
     queryKey: ['action-graph', fleetGraphMeta?.id],
     queryFn: () => actionGraphApi.get(fleetGraphMeta!.id),
     enabled: !!fleetGraphMeta,
+    retry: false,
   })
+
+  useEffect(() => {
+    if (!fleetGraphMeta || !fleetGraphError) return
+    const fallback = sortedActionGraphs.find(g => g.id !== fleetGraphMeta.id)
+    if (fallback) {
+      setSelectedGraphId(fallback.id)
+    } else {
+      setSelectedGraphId(null)
+    }
+  }, [fleetGraphMeta, fleetGraphError, sortedActionGraphs])
 
   const { data: stateDefinitions = [] } = useQuery({
     queryKey: ['state-definitions'],
@@ -974,6 +1056,10 @@ export default function AgentDashboard() {
   useEffect(() => {
     setDetailViewTab('actions')
   }, [selectedAgentId])
+
+  useEffect(() => {
+    setDeployAllNotice(null)
+  }, [selectedAgentId])
   const pingLatencyText = (() => {
     const latencyUs = selectedAgentConnection?.ping_latency_us
     if (latencyUs != null) {
@@ -1032,18 +1118,66 @@ export default function AgentDashboard() {
 
   // Task execution control mutations
   const executeGraphMutation = useMutation({
-    mutationFn: ({ graphId, agentId }: { graphId: string; agentId: string }) => {
-      console.log('[executeGraphMutation] Starting execution:', { graphId, agentId })
+    mutationFn: async ({
+      graphId,
+      agentId,
+      deploymentStatus,
+    }: {
+      graphId: string
+      agentId: string
+      deploymentStatus?: string
+    }) => {
+      console.log('[executeGraphMutation] Starting execution:', { graphId, agentId, deploymentStatus })
+
+      // Refresh deployment status from server first (UI cache can be stale).
+      let effectiveStatus = deploymentStatus
+      try {
+        const latest = await agentApi.getAssignedActionGraph(agentId, graphId)
+        effectiveStatus = latest?.deployment_status || deploymentStatus
+      } catch (refreshError) {
+        console.warn('[executeGraphMutation] Failed to refresh deployment status:', refreshError)
+      }
+
+      // Auto-heal deployment:
+      // - pending/failed/outdated => try deploy once
+      // - deploying => do NOT re-deploy here (can cause repeated 504 timeout loop)
+      //   let scheduler/execute path handle it.
+      if (effectiveStatus && effectiveStatus !== 'deployed' && effectiveStatus !== 'deploying') {
+        try {
+          const deploy = await agentApi.deployActionGraph(graphId, agentId)
+          if (!deploy.success) {
+            throw new Error(deploy.error || `Auto deploy failed (status=${deploy.deployment_status || 'unknown'})`)
+          }
+        } catch (deployError) {
+          // Timeout/temporary network issues can still end up deployed on backend.
+          // Re-check once; if deployed/deploying, continue to execute.
+          try {
+            const latest = await agentApi.getAssignedActionGraph(agentId, graphId)
+            const statusAfterError = latest?.deployment_status
+            if (statusAfterError === 'deployed' || statusAfterError === 'deploying') {
+              console.warn('[executeGraphMutation] Deploy request failed but backend status is', statusAfterError, '- continuing execute')
+            } else {
+              throw deployError
+            }
+          } catch {
+            throw deployError
+          }
+        }
+      }
+
       return actionGraphApi.execute(graphId, agentId)
     },
     onSuccess: (data) => {
       console.log('[executeGraphMutation] Success:', data)
       queryClient.invalidateQueries({ queryKey: ['agent-state'] })
       queryClient.invalidateQueries({ queryKey: ['tasks'] })
+      queryClient.invalidateQueries({ queryKey: ['agent-assigned-graphs', selectedAgentId] })
     },
-    onError: (error: Error) => {
+    onError: (error: unknown) => {
       console.error('[executeGraphMutation] Error:', error)
-      alert(`Failed to start execution: ${error.message}`)
+      queryClient.invalidateQueries({ queryKey: ['agent-assigned-graphs', selectedAgentId] })
+      queryClient.invalidateQueries({ queryKey: ['agent-state'] })
+      alert(`Failed to start execution: ${getApiErrorMessage(error)}`)
     },
   })
 
@@ -1773,6 +1907,7 @@ export default function AgentDashboard() {
                                     executeGraphMutation.mutate({
                                       graphId: fleetGraph.id,
                                       agentId: selectedRobotId,
+                                      deploymentStatus: fleetGraphMeta?.deployment_status,
                                     })
                                   }
                                 }}
@@ -1955,7 +2090,25 @@ export default function AgentDashboard() {
                           <span className="text-[10px] text-muted">
                             {sortedActionGraphs.length} graphs
                           </span>
+                          <button
+                            onClick={handleDeployUpdateAll}
+                            disabled={!selectedAgentId || isDeployingAll || deployableGraphTargets.length === 0}
+                            className="inline-flex items-center gap-1 rounded border border-primary bg-elevated px-2 py-1 text-[10px] text-secondary transition hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                            title="현재 RTM에 할당된 BT 중 deploy/update가 필요한 항목을 한 번에 반영"
+                          >
+                            {isDeployingAll ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Play className="h-3 w-3" />
+                            )}
+                            Deploy/Update all ({deployableGraphTargets.length})
+                          </button>
                         </div>
+                        {deployAllNotice && (
+                          <div className="rounded border border-blue-500/30 bg-blue-500/10 px-2 py-1 text-[10px] text-blue-200">
+                            {deployAllNotice}
+                          </div>
+                        )}
                         {/* Deployment Status Banner */}
                         {fleetGraphMeta && fleetGraphMeta.deployment_status !== 'deployed' && (
                           <div className={`flex items-center justify-between gap-2 px-2 py-1.5 rounded border ${
@@ -1984,7 +2137,7 @@ export default function AgentDashboard() {
                                 {fleetGraphMeta.deployment_status === 'outdated' && `Graph outdated (server: v${fleetGraphMeta.server_version}, deployed: v${fleetGraphMeta.version})`}
                               </span>
                             </div>
-                            {(fleetGraphMeta.deployment_status === 'pending' || fleetGraphMeta.deployment_status === 'failed' || fleetGraphMeta.deployment_status === 'outdated' || fleetGraphMeta.deployment_status === 'deploying') && selectedAgentId && (
+                            {(fleetGraphMeta.deployment_status === 'pending' || fleetGraphMeta.deployment_status === 'failed' || fleetGraphMeta.deployment_status === 'outdated') && selectedAgentId && (
                               <button
                                 onClick={() => deployGraphMutation.mutate({ graphId: fleetGraphMeta.id, agentId: selectedAgentId })}
                                 disabled={deployGraphMutation.isPending}
@@ -1995,7 +2148,7 @@ export default function AgentDashboard() {
                                 ) : (
                                   <Play className="w-3 h-3" />
                                 )}
-                                {fleetGraphMeta.deployment_status === 'outdated' ? 'Update' : fleetGraphMeta.deployment_status === 'deploying' ? 'Retry' : 'Deploy'}
+                                {fleetGraphMeta.deployment_status === 'outdated' ? 'Update' : 'Deploy'}
                               </button>
                             )}
                           </div>
@@ -2004,14 +2157,26 @@ export default function AgentDashboard() {
                     )}
 
                     <div className="h-[380px] rounded-lg border border-primary overflow-hidden bg-base">
-                      <ActionGraphViewer
-                        actionGraph={fleetGraph}
-                        stateDef={selectedStateDef}
-                        currentStepId={currentStepId}
-                        className="h-full"
-                        showControls={true}
-                        showMiniMap={false}
-                      />
+                      {fleetGraphMeta && fleetGraphError && !fleetGraph ? (
+                        <div className="h-full flex items-center justify-center text-center px-6">
+                          <div className="space-y-2">
+                            <AlertTriangle className="w-8 h-8 text-yellow-400 mx-auto" />
+                            <div className="text-sm text-primary">선택한 BT를 불러올 수 없습니다.</div>
+                            <div className="text-xs text-muted">
+                              이미 삭제되었거나 현재 RTM에 더 이상 유효하지 않은 할당일 수 있습니다.
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <ActionGraphViewer
+                          actionGraph={fleetGraph}
+                          stateDef={selectedStateDef}
+                          currentStepId={currentStepId}
+                          className="h-full"
+                          showControls={true}
+                          showMiniMap={false}
+                        />
+                      )}
                     </div>
                   </div>
                 )}

@@ -1,0 +1,188 @@
+{
+  "version": 1,
+  "exported_at": "2026-03-11T00:00:00Z",
+  "distributor": {
+    "name": "test",
+    "description": "Quickstart profile for single CNC01 realtime execution"
+  },
+  "states": [
+    {
+      "name": "at_cnc01",
+      "type": "bool",
+      "initial_value": "false",
+      "description": "Whether an agent is currently parked at cnc01"
+    },
+    {
+      "name": "cnc01_status",
+      "type": "string",
+      "initial_value": "idle",
+      "description": "CNC lifecycle state (idle/running/done/fault)"
+    },
+    {
+      "name": "pending_leave",
+      "type": "bool",
+      "initial_value": "false",
+      "description": "Set true after cycle run succeeds; leave_cnc consumes this"
+    }
+  ],
+  "resources": [
+    {
+      "name": "cnc0",
+      "kind": "type",
+      "description": "CNC resource type"
+    },
+    {
+      "name": "cnc01",
+      "kind": "instance",
+      "parent_name": "cnc0",
+      "description": "CNC instance 01"
+    }
+  ],
+  "selected_tasks": [
+    {
+      "name": "go to cnc and park"
+    },
+    {
+      "name": "run cnc service cycle 01"
+    },
+    {
+      "name": "run cnc cycle 02"
+    },
+    {
+      "name": "leave cnc"
+    }
+  ],
+  "selected_agents": [
+    {
+      "name": "Task Manager-001"
+    }
+  ],
+  "initial_state": {
+    "at_cnc01": "false",
+    "cnc01_status": "idle",
+    "pending_leave": "false"
+  },
+  "goal_state": {
+    "cnc01_status": "running"
+  },
+  "realtime": {
+    "tick_interval_sec": 2,
+    "goals": [
+      {
+        "id": "park_for_done_cnc",
+        "name": "park_for_done_cnc",
+        "priority": 10,
+        "enabled": true,
+        "activation_conditions": [
+          {
+            "variable": "cnc01_status",
+            "operator": "==",
+            "value": "done"
+          },
+          {
+            "variable": "at_cnc01",
+            "operator": "==",
+            "value": "false"
+          }
+        ],
+        "goal_state": {
+          "at_cnc01": "true"
+        }
+      },
+      {
+        "id": "run_cycle02",
+        "name": "run_cycle02",
+        "priority": 20,
+        "enabled": true,
+        "activation_conditions": [
+          {
+            "variable": "cnc01_status",
+            "operator": "==",
+            "value": "done"
+          },
+          {
+            "variable": "at_cnc01",
+            "operator": "==",
+            "value": "true"
+          }
+        ],
+        "goal_state": {
+          "cnc01_status": "idle"
+        }
+      },
+      {
+        "id": "run_cycle01",
+        "name": "run_cycle01",
+        "priority": 30,
+        "enabled": true,
+        "activation_conditions": [
+          {
+            "variable": "cnc01_status",
+            "operator": "==",
+            "value": "idle"
+          },
+          {
+            "variable": "at_cnc01",
+            "operator": "==",
+            "value": "true"
+          },
+          {
+            "variable": "pending_leave",
+            "operator": "==",
+            "value": "false"
+          }
+        ],
+        "goal_state": {
+          "cnc01_status": "running"
+        }
+      },
+      {
+        "id": "leave_after_cycle",
+        "name": "leave_after_cycle",
+        "priority": 40,
+        "enabled": true,
+        "activation_conditions": [
+          {
+            "variable": "cnc01_status",
+            "operator": "==",
+            "value": "running"
+          },
+          {
+            "variable": "at_cnc01",
+            "operator": "==",
+            "value": "true"
+          },
+          {
+            "variable": "pending_leave",
+            "operator": "==",
+            "value": "true"
+          }
+        ],
+        "goal_state": {
+          "at_cnc01": "false"
+        }
+      },
+      {
+        "id": "park_for_idle_cnc",
+        "name": "park_for_idle_cnc",
+        "priority": 50,
+        "enabled": true,
+        "activation_conditions": [
+          {
+            "variable": "cnc01_status",
+            "operator": "==",
+            "value": "idle"
+          },
+          {
+            "variable": "at_cnc01",
+            "operator": "==",
+            "value": "false"
+          }
+        ],
+        "goal_state": {
+          "at_cnc01": "true"
+        }
+      }
+    ]
+  }
+}

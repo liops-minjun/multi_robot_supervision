@@ -22,15 +22,15 @@ import 'reactflow/dist/style.css'
 import {
   Trash2, Zap, ChevronDown, ChevronRight, Server, Activity, Plus, PlusCircle, X,
   Cpu, FileCode, Users, Link2, Unlink, Check, AlertCircle, Clock, Layout, Save, Radio,
-  Edit, Lock, Unlock, Eye, EyeOff, Search
+  Edit, Lock, Unlock, Eye, EyeOff, Search, Download, Upload
 } from 'lucide-react'
-import { templateApi, stateDefinitionApi, agentApi, capabilityApi, behaviorTreeLockApi, taskDistributorApi } from '../../api/client'
+import { templateApi, stateDefinitionApi, agentApi, capabilityApi, behaviorTreeLockApi, taskDistributorApi, saveFilesApi } from '../../api/client'
 import { useWebSocket, BehaviorTreeLockMessage, GraphSyncMessage } from '../../contexts/WebSocketContext'
 import { useUserStore } from '../../stores/userStore'
 import type {
   ActionGraph, StateDefinition, ActionMapping,
   AssignmentInfo, TemplateListItem,
-  EndStateConfig, ActionOutcome, OutcomeTransition, LifecycleState,
+  EndStateConfig, ActionOutcome, OutcomeTransition, LifecycleState, TransitionOnFailureConfig,
   PlanningEffect, PlanningTaskSpec,
   TaskDistributor, TaskDistributorState, TaskDistributorResource
 } from '../../types'
@@ -38,6 +38,7 @@ import type {
 // State-based Node Components
 import StateActionNode from './nodes/StateActionNode'
 import StateEventNode from './nodes/StateEventNode'
+import StateRetryNode from './nodes/StateRetryNode'
 import StateTransitionNode from './nodes/StateTransitionNode'
 import DeletableEdge from './edges/DeletableEdge'
 import { TelemetryPanel } from '../../components/TelemetryPanel'
@@ -46,6 +47,7 @@ import { TelemetryProvider } from '../../contexts/TelemetryContext'
 const nodeTypes = {
   action: StateActionNode,
   event: StateEventNode,
+  retry: StateRetryNode,
   transition: StateTransitionNode,
 }
 
@@ -56,6 +58,7 @@ const edgeTypes = {
 const START_NODE_ID = '__behavior_tree_start__'
 const START_NODE_COLOR = '#22c55e'
 const ACTION_NODE_DRAG_HANDLE_SELECTOR = '.action-node-drag-handle'
+type TerminalEventSubtype = 'End' | 'Error' | 'Warning'
 
 // Color palette for different action types
 const ACTION_COLORS: Record<string, string> = {
@@ -86,10 +89,20 @@ const DEFAULT_STATE_COLORS: Record<string, StateColorType> = {
 }
 
 const emptyPlanningTask = (): PlanningTaskSpec => ({
+  preconditions: [],
   required_resources: [],
   during_state: [],
   result_states: [],
+  warning_result_states: [],
+  error_result_states: [],
+  warning_message_variable: '',
+  error_message_variable: '',
 })
+
+interface PlanningAgentOption {
+  id: string
+  name: string
+}
 
 function getStateDefaultValue(stateVar?: TaskDistributorState): string {
   if (!stateVar) return ''
@@ -110,59 +123,274 @@ function formatPlanningResourceToken(token: string, resources: TaskDistributorRe
   return token
 }
 
-type TaskResourceFlowSummary = {
-  token: string
-  acquireSteps: string[]
-  releaseSteps: string[]
-  holdUntilTaskEnd: boolean
+function buildPlanningResourceTokenSet(resources: TaskDistributorResource[]): Set<string> {
+  return new Set(resources.map(resource => `${resource.kind === 'type' ? 'type' : 'instance'}:${resource.id}`))
 }
 
-function collectTaskResourceFlow(nodes: Node[]): TaskResourceFlowSummary[] {
-  const summary = new Map<string, { acquireSteps: Set<string>; releaseSteps: Set<string> }>()
+function containsPlanningPlaceholder(value: string): boolean {
+  return (
+    value.includes('{{resource.') ||
+    value.includes('{{agent.') ||
+    value.includes('{{agent}}')
+  )
+}
 
-  const ensureEntry = (token: string) => {
-    const normalized = token.trim()
-    if (!normalized) return null
-    if (!summary.has(normalized)) {
-      summary.set(normalized, {
-        acquireSteps: new Set<string>(),
-        releaseSteps: new Set<string>(),
-      })
+function buildPlanningPlaceholderCandidates(
+  variable: string,
+  resources: TaskDistributorResource[],
+  agents: PlanningAgentOption[]
+): string[] {
+  const resourceNames = resources
+    .filter(resource => resource.kind !== 'type' && resource.name)
+    .map(resource => resource.name)
+  const agentNames = Array.from(new Set(agents
+    .map(agent => (agent.name || '').trim())
+    .filter(Boolean)))
+  const agentIDs = Array.from(new Set(agents
+    .map(agent => (agent.id || '').trim())
+    .filter(Boolean)))
+
+  let candidates = [variable]
+  const apply = (placeholder: string, values: string[]) => {
+    if (values.length === 0) return
+    const next = new Set<string>()
+    for (const candidate of candidates) {
+      if (!candidate.includes(placeholder)) {
+        next.add(candidate)
+        continue
+      }
+      for (const value of values) {
+        next.add(candidate.split(placeholder).join(value))
+      }
     }
-    return summary.get(normalized) || null
+    candidates = Array.from(next)
   }
 
-  for (const node of nodes) {
-    if (node.type !== 'action') continue
-    const nodeData = node.data as {
-      jobName?: string
-      label?: string
-      resourceAcquire?: string[]
-      resourceRelease?: string[]
-    }
-    const stepName = nodeData.jobName?.trim() || nodeData.label?.trim() || node.id
+  apply('{{resource.name}}', resourceNames)
+  apply('{{agent.name}}', agentNames)
+  apply('{{agent.id}}', agentIDs)
+  apply('{{agent}}', agentNames)
 
-    for (const token of nodeData.resourceAcquire || []) {
-      const entry = ensureEntry(token)
-      if (!entry) continue
-      entry.acquireSteps.add(stepName)
-    }
+  return candidates
+}
 
-    for (const token of nodeData.resourceRelease || []) {
-      const entry = ensureEntry(token)
-      if (!entry) continue
-      entry.releaseSteps.add(stepName)
+function buildTemplateLoadSignature(template: ActionGraph): string {
+  return [
+    template.id,
+    template.version,
+    template.updated_at || '',
+    template.created_at || '',
+    template.entry_point || '',
+    template.steps?.length || 0,
+  ].join('|')
+}
+
+function eventSubtypeToTerminalPayload(
+  subtype: TerminalEventSubtype,
+  debugMessage?: string
+): {
+  terminal_type: 'success' | 'failure'
+  alert: boolean
+  message?: string
+} {
+  const message = (debugMessage || '').trim()
+  if (subtype === 'Error') {
+    return {
+      terminal_type: 'failure',
+      alert: true,
+      message: message || undefined,
+    }
+  }
+  if (subtype === 'Warning') {
+    return {
+      terminal_type: 'success',
+      alert: true,
+      message: message || undefined,
+    }
+  }
+  return {
+    terminal_type: 'success',
+    alert: false,
+    message: message || undefined,
+  }
+}
+
+function terminalStepToEventSubtype(step: ActionGraph['steps'][number]): TerminalEventSubtype {
+  const terminalType = (step.terminal_type || '').toLowerCase()
+  if (terminalType === 'failure') return 'Error'
+  if (terminalType === 'warning' || (!!step.alert && terminalType !== 'failure')) return 'Warning'
+  return 'End'
+}
+
+function inferPlanningStateVar(
+  variable: string,
+  states: TaskDistributorState[],
+  resources: TaskDistributorResource[],
+  agents: PlanningAgentOption[]
+): TaskDistributorState | undefined {
+  const exact = states.find(state => state.name === variable)
+  if (exact) return exact
+  if (!containsPlanningPlaceholder(variable)) return undefined
+
+  const matches = buildPlanningPlaceholderCandidates(variable, resources, agents)
+    .map(candidate => states.find(state => state.name === candidate))
+    .filter((state): state is TaskDistributorState => Boolean(state))
+
+  if (matches.length === 0) return undefined
+  const [first] = matches
+  return matches.every(state => state.type === first.type) ? first : undefined
+}
+
+function buildPlanningVariableSuggestions(
+  states: TaskDistributorState[],
+  resources: TaskDistributorResource[],
+  agents: PlanningAgentOption[]
+): string[] {
+  const suggestions = new Set<string>()
+  const instanceResources = resources.filter(resource => resource.kind !== 'type' && resource.name)
+  const namedAgents = agents
+    .map(agent => ({ id: (agent.id || '').trim(), name: (agent.name || '').trim() }))
+    .filter(agent => agent.id || agent.name)
+
+  for (const state of states) {
+    if (state.name) suggestions.add(state.name)
+  }
+
+  for (const state of states) {
+    for (const resource of instanceResources) {
+      if (!resource.name || !state.name.includes(resource.name)) continue
+      suggestions.add(state.name.split(resource.name).join('{{resource.name}}'))
     }
   }
 
-  return Array.from(summary.entries())
-    .map(([token, value]) => ({
-      token,
-      acquireSteps: Array.from(value.acquireSteps).sort(),
-      releaseSteps: Array.from(value.releaseSteps).sort(),
-      holdUntilTaskEnd: value.acquireSteps.size > value.releaseSteps.size,
-    }))
-    .sort((left, right) => left.token.localeCompare(right.token))
+  for (const state of states) {
+    for (const agent of namedAgents) {
+      if (agent.name && state.name.includes(agent.name)) {
+        suggestions.add(state.name.split(agent.name).join('{{agent.name}}'))
+        suggestions.add(state.name.split(agent.name).join('{{agent}}'))
+      }
+      if (agent.id && state.name.includes(agent.id)) {
+        suggestions.add(state.name.split(agent.id).join('{{agent.id}}'))
+      }
+    }
+  }
+
+  const priority = (value: string) => {
+    if (value.includes('{{resource.name}}')) return 0
+    if (value.includes('{{agent.name}}') || value.includes('{{agent.id}}') || value.includes('{{agent}}')) return 1
+    return 2
+  }
+  return Array.from(suggestions).sort((left, right) => {
+    const byPriority = priority(left) - priority(right)
+    if (byPriority !== 0) return byPriority
+    return left.localeCompare(right)
+  })
+}
+
+function isPlanningStateReferenceAllowed(
+  variable: string,
+  states: TaskDistributorState[]
+): boolean {
+  return states.some(state => state.name === variable) || containsPlanningPlaceholder(variable)
+}
+
+function filterPlanningTaskForDistributor(
+  spec: PlanningTaskSpec,
+  states: TaskDistributorState[],
+  resources: TaskDistributorResource[]
+): PlanningTaskSpec {
+  const validResourceTokens = buildPlanningResourceTokenSet(resources)
+  const normalizedRequiredResources = Array.from(new Set((spec.required_resources || [])
+    .map(token => `${token || ''}`.trim())
+    .filter(Boolean)))
+  const filteredRequiredResources = validResourceTokens.size > 0
+    ? normalizedRequiredResources.filter(token => validResourceTokens.has(token))
+    : normalizedRequiredResources
+
+  return {
+    preconditions: (spec.preconditions || [])
+      .filter(condition => isPlanningStateReferenceAllowed(condition.variable, states))
+      .map(condition => ({
+        variable: condition.variable,
+        operator: condition.operator || '==',
+        value: condition.value,
+      })),
+    required_resources: filteredRequiredResources,
+    during_state: (spec.during_state || [])
+      .filter(effect => isPlanningStateReferenceAllowed(effect.variable, states))
+      .slice(0, 1),
+    result_states: (spec.result_states || [])
+      .filter(effect => isPlanningStateReferenceAllowed(effect.variable, states)),
+    warning_result_states: (spec.warning_result_states || [])
+      .filter(effect => isPlanningStateReferenceAllowed(effect.variable, states)),
+    error_result_states: (spec.error_result_states || [])
+      .filter(effect => isPlanningStateReferenceAllowed(effect.variable, states)),
+    warning_message_variable: isPlanningStateReferenceAllowed(spec.warning_message_variable || '', states)
+      ? (spec.warning_message_variable || '')
+      : '',
+    error_message_variable: isPlanningStateReferenceAllowed(spec.error_message_variable || '', states)
+      ? (spec.error_message_variable || '')
+      : '',
+  }
+}
+
+function PlanningVariableInput({
+  value,
+  onChange,
+  suggestions,
+  placeholder,
+}: {
+  value: string
+  onChange: (value: string) => void
+  suggestions: string[]
+  placeholder: string
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+
+  const filteredSuggestions = useMemo(() => {
+    const keyword = value.trim().toLowerCase()
+    if (!keyword) return suggestions
+    return suggestions.filter(option => option.toLowerCase().includes(keyword))
+  }, [suggestions, value])
+
+  return (
+    <div className="relative min-w-0 flex-[1_1_180px]">
+      <input
+        className="w-full rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value)
+          setIsOpen(true)
+        }}
+        onFocus={() => setIsOpen(true)}
+        onBlur={() => window.setTimeout(() => setIsOpen(false), 120)}
+        placeholder={placeholder}
+      />
+      {isOpen && filteredSuggestions.length > 0 && (
+        <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-30 max-h-56 overflow-y-auto rounded-lg border border-violet-500/20 bg-surface shadow-xl">
+          {filteredSuggestions.map((option) => (
+            <button
+              key={option}
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault()
+                onChange(option)
+                setIsOpen(false)
+              }}
+              className="flex w-full items-center justify-between gap-3 border-b border-border/60 px-3 py-2 text-left text-xs text-primary transition last:border-b-0 hover:bg-violet-500/10"
+            >
+              <span className="truncate font-mono">{option}</span>
+              {option.includes('{{resource.name}}') && (
+                <span className="shrink-0 rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] text-violet-200">
+                  placeholder
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 const OUTCOME_EDGE_COLORS: Record<ActionOutcome, string> = {
@@ -204,12 +432,44 @@ type PaletteItem = {
   isHidden?: boolean
   isDefaultHidden?: boolean
   isDraggable?: boolean
+  maxRetries?: number
+  backoffMs?: number
 }
 
 type PaletteCategory = {
   category: string
   icon: React.ReactNode
   items: PaletteItem[]
+}
+
+type TaskSetAssignmentSnapshot = {
+  agent_id?: string
+  agent_name?: string
+  enabled?: boolean
+  priority?: number
+}
+
+type TaskSetTemplateSnapshot = {
+  id: string
+  name: string
+  description?: string
+  entry_point?: string
+  preconditions?: unknown[]
+  steps: ActionGraph['steps']
+  states?: ActionGraph['states']
+  planning_states?: ActionGraph['planning_states']
+  planning_task?: ActionGraph['planning_task']
+  task_distributor_id?: string
+}
+
+type TaskSetBackup = {
+  version: number
+  exported_at: string
+  source: string
+  templates: Array<{
+    template: TaskSetTemplateSnapshot
+    assignments: TaskSetAssignmentSnapshot[]
+  }>
 }
 
 const inferCapabilityKindFromActionType = (actionType?: string): 'action' | 'service' => {
@@ -354,6 +614,24 @@ const extractApiErrorMessage = (error: any, fallback: string): string => {
     fallback
   )
 }
+
+const toOptionalString = (value?: string | null): string | undefined => {
+  const trimmed = (value || '').trim()
+  return trimmed.length > 0 ? trimmed : undefined
+}
+
+const buildTaskSetTemplateSnapshot = (template: ActionGraph): TaskSetTemplateSnapshot => ({
+  id: template.id,
+  name: template.name || template.id,
+  description: toOptionalString(template.description),
+  entry_point: toOptionalString(template.entry_point),
+  preconditions: (template.preconditions || undefined) as unknown[] | undefined,
+  steps: template.steps || [],
+  states: template.states || undefined,
+  planning_states: template.planning_states || undefined,
+  planning_task: template.planning_task || undefined,
+  task_distributor_id: toOptionalString(template.task_distributor_id),
+})
 
 const matchesPaletteSearch = (item: PaletteItem, query: string): boolean => {
   if (!query) return true
@@ -521,9 +799,21 @@ function ActionGraphEditor() {
   // Modal state
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showAssignModal, setShowAssignModal] = useState(false)
+  const [showRenameModal, setShowRenameModal] = useState(false)
   const [showAddStateModal, setShowAddStateModal] = useState(false)
+  const [showTaskPddlConfigModal, setShowTaskPddlConfigModal] = useState(false)
+  const [taskSetNotice, setTaskSetNotice] = useState<string | null>(null)
+  const [isTaskSetProcessing, setIsTaskSetProcessing] = useState(false)
+  const [savedTaskSetFiles, setSavedTaskSetFiles] = useState<Array<{
+    name: string
+    size_bytes: number
+    updated_at: string
+  }>>([])
+  const [showTaskSetLoadModal, setShowTaskSetLoadModal] = useState(false)
 
   const [expandedCategories, setExpandedCategories] = useState<string[]>([
+    'Start Nodes',
+    'Control Nodes',
     'Discovered Actions',
     'Discovered Services',
     'Configured Actions',
@@ -545,7 +835,8 @@ function ActionGraphEditor() {
   // Save state
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const lastSavedStateRef = useRef<{ nodes: string; edges: string } | null>(null)
-  const loadedTemplateIdRef = useRef<string | null>(null)  // Track which template's data is currently loaded on canvas
+  const loadedTemplateRef = useRef<{ id: string; signature: string } | null>(null)  // Track currently loaded template identity
+  const pendingCreatedTemplateIdRef = useRef<string | null>(null)
 
   // Edit lock state (persistent session from user store)
   const { username, sessionId: storeSessionId } = useUserStore()
@@ -733,22 +1024,43 @@ function ActionGraphEditor() {
     queryFn: () => templateApi.list(),
   })
 
+  const sortedTemplates = useMemo(
+    () => [...allTemplates].sort((left, right) => {
+      const leftTime = new Date(left.updated_at || left.created_at).getTime()
+      const rightTime = new Date(right.updated_at || right.created_at).getTime()
+      if (leftTime !== rightTime) return rightTime - leftTime
+      return left.id.localeCompare(right.id)
+    }),
+    [allTemplates]
+  )
+
   useEffect(() => {
     if (templatesLoading) return
-    if (allTemplates.length === 0) {
+    if (sortedTemplates.length === 0) {
       if (selectedTemplateId !== null) {
         setSelectedTemplateId(null)
+      }
+      pendingCreatedTemplateIdRef.current = null
+      return
+    }
+
+    const pendingTemplateId = pendingCreatedTemplateIdRef.current
+    if (pendingTemplateId) {
+      const pendingExists = sortedTemplates.some(template => template.id === pendingTemplateId)
+      if (pendingExists) {
+        setSelectedTemplateId(pendingTemplateId)
+        pendingCreatedTemplateIdRef.current = null
       }
       return
     }
 
     const isCurrentSelectionValid = !!selectedTemplateId &&
-      allTemplates.some(template => template.id === selectedTemplateId)
+      sortedTemplates.some(template => template.id === selectedTemplateId)
 
     if (!isCurrentSelectionValid) {
-      setSelectedTemplateId(allTemplates[0].id)
+      setSelectedTemplateId(sortedTemplates[0].id)
     }
-  }, [templatesLoading, allTemplates, selectedTemplateId])
+  }, [templatesLoading, sortedTemplates, selectedTemplateId])
 
 
   // Fetch selected template
@@ -796,10 +1108,15 @@ function ActionGraphEditor() {
   })
   const tdStates: TaskDistributorState[] = taskDistributorFull?.states || []
   const tdResources: TaskDistributorResource[] = taskDistributorFull?.resources || []
-  const [planningResultVariable, setPlanningResultVariable] = useState('')
-  const [planningResultValue, setPlanningResultValue] = useState('')
 
   const normalizePlanningTask = useCallback((spec?: PlanningTaskSpec): PlanningTaskSpec => {
+    const normalizedPreconditions = (spec?.preconditions || [])
+      .filter(condition => condition.variable)
+      .map(condition => ({
+        variable: condition.variable,
+        operator: condition.operator || '==',
+        value: condition.value,
+      }))
     const normalizedDuring = (spec?.during_state || [])
       .filter(effect => effect.variable)
       .slice(0, 1)
@@ -807,39 +1124,23 @@ function ActionGraphEditor() {
     const normalizedResults = (spec?.result_states || [])
       .filter(effect => effect.variable)
       .map(effect => ({ variable: effect.variable, value: effect.value }))
+    const normalizedWarningResults = (spec?.warning_result_states || [])
+      .filter(effect => effect.variable)
+      .map(effect => ({ variable: effect.variable, value: effect.value }))
+    const normalizedErrorResults = (spec?.error_result_states || [])
+      .filter(effect => effect.variable)
+      .map(effect => ({ variable: effect.variable, value: effect.value }))
     return {
+      preconditions: normalizedPreconditions,
       required_resources: Array.from(new Set((spec?.required_resources || []).filter(Boolean))),
       during_state: normalizedDuring,
       result_states: normalizedResults,
+      warning_result_states: normalizedWarningResults,
+      error_result_states: normalizedErrorResults,
+      warning_message_variable: (spec?.warning_message_variable || '').trim(),
+      error_message_variable: (spec?.error_message_variable || '').trim(),
     }
   }, [])
-
-  // Handle task distributor change
-  const handleTaskDistributorChange = useCallback(async (tdId: string) => {
-    if (!selectedTemplateId) return
-    const normalizedTdId = tdId || undefined
-    const queryKey = ['template', selectedTemplateId]
-    const previousTemplate = queryClient.getQueryData<ActionGraph>(queryKey)
-    try {
-      if (previousTemplate) {
-        queryClient.setQueryData<ActionGraph>(queryKey, {
-          ...previousTemplate,
-          task_distributor_id: normalizedTdId,
-        })
-      }
-      await templateApi.update(selectedTemplateId, { task_distributor_id: normalizedTdId } as Partial<ActionGraph>, sessionId)
-      queryClient.invalidateQueries({ queryKey })
-      queryClient.invalidateQueries({ queryKey: ['templates-all'] })
-      if (tdId) {
-        queryClient.invalidateQueries({ queryKey: ['task-distributor-full', tdId] })
-      }
-    } catch (err) {
-      if (previousTemplate) {
-        queryClient.setQueryData<ActionGraph>(queryKey, previousTemplate)
-      }
-      console.error('Failed to update task distributor:', err)
-    }
-  }, [selectedTemplateId, sessionId, queryClient])
 
   // Fetch assignments for selected template
   const { data: templateAssignments = [] } = useQuery({
@@ -1042,6 +1343,36 @@ function ActionGraphEditor() {
       })
     }
 
+    palette.push({
+      category: 'Start Nodes',
+      icon: <Radio className="w-3.5 h-3.5" />,
+      items: [
+        {
+          type: 'event',
+          subtype: 'Start',
+          label: 'Start',
+          color: START_NODE_COLOR,
+          isDraggable: true,
+        },
+      ],
+    })
+
+    palette.push({
+      category: 'Control Nodes',
+      icon: <Activity className="w-3.5 h-3.5" />,
+      items: [
+        {
+          type: 'retry',
+          subtype: 'Retry',
+          label: 'Retry Block',
+          color: '#f59e0b',
+          maxRetries: 3,
+          backoffMs: 0,
+          isDraggable: true,
+        },
+      ],
+    })
+
     // End nodes (terminal nodes for behavior tree)
     palette.push({
       category: 'End Nodes',
@@ -1060,7 +1391,7 @@ function ActionGraphEditor() {
           label: 'End (Error)',
           color: '#ef4444',
           isDraggable: true,
-        },
+        }
       ],
     })
 
@@ -1207,7 +1538,7 @@ function ActionGraphEditor() {
 
     const selectedNodeIds = new Set(
       nodes
-        .filter(node => node.selected && node.id !== START_NODE_ID)
+        .filter(node => node.selected)
         .map(node => node.id)
     )
     const selectedEdgeIds = new Set(
@@ -1241,7 +1572,7 @@ function ActionGraphEditor() {
         if (isTextInput) return
       }
 
-      const hasSelection = nodes.some((node) => node.selected && node.id !== START_NODE_ID) || edges.some((edge) => edge.selected)
+      const hasSelection = nodes.some((node) => node.selected) || edges.some((edge) => edge.selected)
       if (!hasSelection) return
 
       event.preventDefault()
@@ -1256,6 +1587,10 @@ function ActionGraphEditor() {
   // Using selectedTemplate?.id here can transiently become undefined during refetch/error
   // and inadvertently clear the canvas.
   const templateId = selectedTemplateId
+  const templateLoadSignature = useMemo(
+    () => (selectedTemplate ? buildTemplateLoadSignature(selectedTemplate) : null),
+    [selectedTemplate]
+  )
 
   // Keep editability flag inside node data for node-local controls (e.g. delete button).
   useEffect(() => {
@@ -1293,9 +1628,10 @@ function ActionGraphEditor() {
   // Clear canvas immediately when switching to a different template
   // This prevents showing stale data from the previous template
   useEffect(() => {
-    if (templateId !== loadedTemplateIdRef.current && loadedTemplateIdRef.current !== null) {
+    const loadedTemplateId = loadedTemplateRef.current?.id || null
+    if (templateId !== loadedTemplateId && loadedTemplateId !== null) {
       // Template ID changed - clear canvas to prevent showing old data
-      console.log('[Template] Switching from', loadedTemplateIdRef.current, 'to', templateId, '- clearing canvas')
+      console.log('[Template] Switching from', loadedTemplateId, 'to', templateId, '- clearing canvas')
       setNodes([])
       setEdges([])
       setSaveStatus('idle')
@@ -1307,8 +1643,11 @@ function ActionGraphEditor() {
   useEffect(() => {
     // IMPORTANT: Verify selectedTemplate.id matches selected template ID.
     if (selectedTemplate && templateId && selectedTemplate.id === templateId) {
-      // Skip if we already loaded this template
-      if (loadedTemplateIdRef.current === templateId) {
+      // Skip only if same template id + same data signature.
+      if (
+        loadedTemplateRef.current?.id === templateId &&
+        loadedTemplateRef.current?.signature === templateLoadSignature
+      ) {
         return
       }
 
@@ -1330,14 +1669,27 @@ function ActionGraphEditor() {
         })
       })
 
-      loadedTemplateIdRef.current = templateId
+      loadedTemplateRef.current = {
+        id: templateId,
+        signature: templateLoadSignature || '',
+      }
       lastSavedStateRef.current = {
         nodes: JSON.stringify(initialNodes),
         edges: JSON.stringify(initialEdges),
       }
       setSaveStatus('idle')
     }
-  }, [templateId, selectedTemplate, setNodes, setEdges, selectedStateDef, availableStates, availableAgents, fitView])
+  }, [
+    templateId,
+    templateLoadSignature,
+    selectedTemplate,
+    setNodes,
+    setEdges,
+    selectedStateDef,
+    availableStates,
+    availableAgents,
+    fitView,
+  ])
 
   // Track if there are unsaved changes (for UI indicator)
   const hasUnsavedChanges = useMemo(() => {
@@ -1350,141 +1702,15 @@ function ActionGraphEditor() {
            currentState.edges !== lastSavedStateRef.current.edges
   }, [nodes, edges])
 
-  const taskResourceFlow = useMemo(
-    () => collectTaskResourceFlow(nodes),
-    [nodes]
-  )
-  const derivedPlanningResourceTokens = useMemo(
-    () => taskResourceFlow
-      .filter(flow => flow.acquireSteps.length > 0)
-      .map(flow => flow.token),
-    [taskResourceFlow]
-  )
-  const syncPlanningTaskWithNodeResources = useCallback((spec?: PlanningTaskSpec): PlanningTaskSpec => (
-    normalizePlanningTask({
-      ...(spec || emptyPlanningTask()),
-      required_resources: derivedPlanningResourceTokens,
-    })
-  ), [derivedPlanningResourceTokens, normalizePlanningTask])
   const planningTask = useMemo(
-    () => syncPlanningTaskWithNodeResources(selectedTemplate?.planning_task || emptyPlanningTask()),
-    [selectedTemplate?.planning_task, syncPlanningTaskWithNodeResources]
+    () => normalizePlanningTask(selectedTemplate?.planning_task || emptyPlanningTask()),
+    [normalizePlanningTask, selectedTemplate?.planning_task]
   )
-  const activePlanningDuring = planningTask.during_state?.[0] || null
-
-  const updatePlanningTask = useCallback(async (updater: (current: PlanningTaskSpec) => PlanningTaskSpec) => {
-    if (!selectedTemplateId) return
-
-    const queryKey = ['template', selectedTemplateId]
-    const previousTemplate = queryClient.getQueryData<ActionGraph>(queryKey)
-    const currentTask = syncPlanningTaskWithNodeResources(previousTemplate?.planning_task || emptyPlanningTask())
-    const nextTask = syncPlanningTaskWithNodeResources(updater(currentTask))
-
-    try {
-      if (previousTemplate) {
-        queryClient.setQueryData<ActionGraph>(queryKey, {
-          ...previousTemplate,
-          planning_task: nextTask,
-        })
-      }
-      await templateApi.update(selectedTemplateId, { planning_task: nextTask } as Partial<ActionGraph>, sessionId)
-      queryClient.invalidateQueries({ queryKey })
-      queryClient.invalidateQueries({ queryKey: ['templates-all'] })
-    } catch (error) {
-      if (previousTemplate) {
-        queryClient.setQueryData<ActionGraph>(queryKey, previousTemplate)
-      }
-      console.error('Failed to update task planning metadata:', error)
-    }
-  }, [queryClient, selectedTemplateId, sessionId, syncPlanningTaskWithNodeResources])
-
-  const handlePlanningDuringChange = useCallback((variable: string, value?: string) => {
-    void updatePlanningTask((current) => {
-      if (!variable) {
-        return { ...current, during_state: [] }
-      }
-      const stateVar = tdStates.find(item => item.name === variable)
-      return {
-        ...current,
-        during_state: [{
-          variable,
-          value: value ?? (current.during_state?.[0]?.variable === variable
-            ? current.during_state?.[0]?.value || getStateDefaultValue(stateVar)
-            : getStateDefaultValue(stateVar)),
-        }],
-      }
-    })
-  }, [tdStates, updatePlanningTask])
-
-  const handleUpsertPlanningResult = useCallback((effect: PlanningEffect) => {
-    if (!effect.variable) return
-    const stateVar = tdStates.find(item => item.name === effect.variable)
-    const fallbackValue = getStateDefaultValue(stateVar)
-    const nextEffect: PlanningEffect = {
-      variable: effect.variable,
-      value: effect.value || fallbackValue,
-    }
-    void updatePlanningTask((current) => ({
-      ...current,
-      result_states: [
-        ...(current.result_states || []).filter(item => item.variable !== nextEffect.variable),
-        nextEffect,
-      ],
-    }))
-  }, [tdStates, updatePlanningTask])
-
-  const handleAddPlanningResult = useCallback(() => {
-    if (!planningResultVariable) return
-    handleUpsertPlanningResult({
-      variable: planningResultVariable,
-      value: planningResultValue,
-    })
-    setPlanningResultVariable('')
-    setPlanningResultValue('')
-  }, [handleUpsertPlanningResult, planningResultValue, planningResultVariable])
-
-  const handleDeletePlanningResult = useCallback((variable: string) => {
-    void updatePlanningTask((current) => ({
-      ...current,
-      result_states: (current.result_states || []).filter(effect => effect.variable !== variable),
-    }))
-  }, [updatePlanningTask])
 
   // Track last applied states to prevent infinite loops
   const lastAppliedStatesRef = useRef<string>('')
   const lastAppliedAgentsRef = useRef<Array<{ id: string; name: string }>>([])
   const lastAppliedTDRef = useRef<string>('')
-  const lastAppliedPlanningTaskRef = useRef<string>('')
-
-  useEffect(() => {
-    const planningKey = JSON.stringify({
-      taskTemplateName: selectedTemplate?.name || '',
-      planningTask,
-    })
-    if (planningKey !== lastAppliedPlanningTaskRef.current) {
-      lastAppliedPlanningTaskRef.current = planningKey
-      setNodes((nds) =>
-        nds.map((node) => ({
-          ...node,
-          data: {
-            ...node.data,
-            planningTask,
-            taskTemplateName: selectedTemplate?.name || '',
-            onTaskPlanningDuringChange: handlePlanningDuringChange,
-            onTaskPlanningResultUpsert: handleUpsertPlanningResult,
-            onTaskPlanningResultDelete: handleDeletePlanningResult,
-          },
-        }))
-      )
-    }
-  }, [
-    handleDeletePlanningResult,
-    handlePlanningDuringChange,
-    handleUpsertPlanningResult,
-    planningTask,
-    selectedTemplate?.name,
-    setNodes,
-  ])
 
   // Clear validation errors when template changes
   useEffect(() => {
@@ -1540,11 +1766,6 @@ function ActionGraphEditor() {
             taskDistributorId,
             taskDistributorStates: tdStates,
             taskDistributorResources: tdResources,
-            planningTask,
-            taskTemplateName: selectedTemplate?.name || '',
-            onTaskPlanningDuringChange: handlePlanningDuringChange,
-            onTaskPlanningResultUpsert: handleUpsertPlanningResult,
-            onTaskPlanningResultDelete: handleDeletePlanningResult,
             resourceAcquire: filterResourceTokens(node.data.resourceAcquire),
             resourceRelease: filterResourceTokens(node.data.resourceRelease),
           },
@@ -1552,11 +1773,6 @@ function ActionGraphEditor() {
       )
     }
   }, [
-    handleDeletePlanningResult,
-    handlePlanningDuringChange,
-    handleUpsertPlanningResult,
-    planningTask,
-    selectedTemplate?.name,
     tdStates,
     tdResources,
     taskDistributorId,
@@ -1569,16 +1785,52 @@ function ActionGraphEditor() {
     entryPoint?: string
   } => {
     const steps: ActionGraph['steps'] = []
+    const retryNodes = new Map(
+      nodes
+        .filter((node) => node.type === 'retry')
+        .map((node) => [node.id, node] as const)
+    )
+    const resolveRetryEdge = (retryNodeId: string, sourceStepId: string) => {
+      const outgoing = edges.filter(edge => edge.source === retryNodeId)
+      const retryOutEdge = outgoing.find(edge =>
+        (edge.sourceHandle === 'retry-out' || edge.sourceHandle === 'state-out') &&
+        edge.target === sourceStepId
+      )
+      const failedFallbackEdge = outgoing.find(edge => edge.sourceHandle === 'retry-failed')
+      const warningFallbackEdge = outgoing.find(edge => edge.sourceHandle === 'retry-warning')
+      const legacyFallbackEdge = outgoing.find(edge =>
+        (!edge.sourceHandle || edge.sourceHandle === 'state-out') &&
+        edge.id !== retryOutEdge?.id &&
+        edge.target !== sourceStepId
+      )
+
+      if (failedFallbackEdge?.target && warningFallbackEdge?.target && failedFallbackEdge.target !== warningFallbackEdge.target) {
+        console.warn(
+          `[RetryBlock] Both failed and warning fallback edges are connected on ${retryNodeId}. ` +
+          `Using failed fallback (${failedFallbackEdge.target}) first.`
+        )
+      }
+
+      const fallbackTarget =
+        failedFallbackEdge?.target ||
+        warningFallbackEdge?.target ||
+        legacyFallbackEdge?.target
+
+      return { fallbackTarget }
+    }
 
     nodes.forEach((node) => {
       if (node.type === 'event') {
         // Event nodes (Start/End) are terminal steps
-        if (node.data.subtype === 'End' || node.data.subtype === 'Error') {
+        if (node.data.subtype === 'End' || node.data.subtype === 'Error' || node.data.subtype === 'Warning') {
+          const terminalPayload = eventSubtypeToTerminalPayload(node.data.subtype as TerminalEventSubtype, node.data.debugMessage)
           steps.push({
             id: node.id,
             name: node.data.label,
             type: 'terminal',
-            terminal_type: node.data.subtype === 'Error' ? 'failure' : 'success',
+            terminal_type: terminalPayload.terminal_type,
+            alert: terminalPayload.alert,
+            message: terminalPayload.message,
             ui: {
               x: node.position.x,
               y: node.position.y,
@@ -1586,6 +1838,10 @@ function ActionGraphEditor() {
           })
         }
         // Start nodes don't need to be saved as steps
+        return
+      }
+      if (node.type === 'retry') {
+        // Retry block is a UI control node. It is compiled into transition.on_failure.
         return
       }
 
@@ -1596,19 +1852,76 @@ function ActionGraphEditor() {
 
       const outgoingEdges = edges.filter(e => e.source === node.id)
       const outcomeTransitions: OutcomeTransition[] = []
+      let failureRetryConfig: { retry: number; backoff_ms: number; fallback?: string; ui?: { x?: number; y?: number } } | undefined
+
+      const resolveRetryTarget = (edge: Edge) => {
+        const retryNode = retryNodes.get(edge.target)
+        if (!retryNode) {
+          return {
+            target: edge.target as string,
+            retryConfig: undefined as undefined | { retry: number; backoff_ms: number; fallback?: string; ui?: { x?: number; y?: number } },
+          }
+        }
+
+        const maxRetries = Math.max(0, Number((retryNode.data as any)?.maxRetries ?? 0))
+        const backoffMs = Math.max(0, Number((retryNode.data as any)?.backoffMs ?? 0))
+        const { fallbackTarget } = resolveRetryEdge(retryNode.id, node.id)
+        const retryPosition = retryNode.position || { x: 0, y: 0 }
+
+        if (!fallbackTarget) {
+          console.warn(
+            `[RetryBlock] No fallback connected for retry block ${retryNode.id}. ` +
+            `After retries exhausted, step may fail terminally.`
+          )
+        }
+
+        return {
+          target: fallbackTarget,
+          retryConfig: {
+            retry: maxRetries,
+            backoff_ms: backoffMs,
+            fallback: fallbackTarget,
+            ui: {
+              x: Number.isFinite(retryPosition.x) ? Number(retryPosition.x) : undefined,
+              y: Number.isFinite(retryPosition.y) ? Number(retryPosition.y) : undefined,
+            },
+          },
+        }
+      }
+
       endStates.forEach((endState, index) => {
         const edge = outgoingEdges.find(e => e.sourceHandle === endState.id)
         if (!edge) return
         const normalizedOutcome = normalizeOutcome(endState.outcome) || outcomes.get(endState.id) || inferOutcome(endState, index)
+        const resolved = resolveRetryTarget(edge)
+        if (resolved.retryConfig && outcomeCategory(normalizedOutcome) !== 'success') {
+          if (!failureRetryConfig) {
+            failureRetryConfig = resolved.retryConfig
+          }
+          // Retry semantics are represented by transition.on_failure object.
+          // Do not emit failure outcome transitions to avoid bypassing retry logic.
+          return
+        }
+        const nextTarget = resolved.target || edge.target
+        if (!nextTarget) return
         outcomeTransitions.push({
           outcome: normalizedOutcome,
-          next: edge.target,
+          next: nextTarget,
           state: endState.state,
         })
       })
 
       const fallbackSuccess = outcomeTransitions.find(t => t.outcome === 'success')
       const fallbackFailure = outcomeTransitions.find(t => t.outcome !== 'success')
+      const resolvedOnFailure: string | TransitionOnFailureConfig | undefined =
+        failureRetryConfig
+          ? {
+              retry: failureRetryConfig.retry,
+              backoff_ms: failureRetryConfig.backoff_ms,
+              fallback: failureRetryConfig.fallback || fallbackFailure?.next,
+              ui: failureRetryConfig.ui,
+            }
+          : fallbackFailure?.next
 
       const normalizedNodeServer = normalizeLegacyNamespaceServer(node.data.server)
 
@@ -1645,7 +1958,7 @@ function ActionGraphEditor() {
         resource_release: Array.from(new Set((node.data.resourceRelease || []).filter(Boolean))),
         transition: {
           on_success: fallbackSuccess?.next,
-          on_failure: fallbackFailure?.next,
+          on_failure: resolvedOnFailure,
           on_outcomes: outcomeTransitions.length > 0 ? outcomeTransitions : undefined,
         },
       }
@@ -2021,7 +2334,11 @@ function ActionGraphEditor() {
 
       // Get target node to determine correct target handle
       const targetNode = nodes.find(node => node.id === params.target)
-      const targetHandleId = params.targetHandle || (targetNode?.type === 'action' ? 'in' : 'state-in')
+      const targetHandleId = params.targetHandle || (
+        targetNode?.type === 'action'
+          ? 'in'
+          : (targetNode?.type === 'retry' ? 'retry-in' : 'state-in')
+      )
 
       if (params.source === START_NODE_ID) {
         const color = START_NODE_COLOR
@@ -2050,10 +2367,24 @@ function ActionGraphEditor() {
 
       // If no sourceHandle specified, try to find a default (first success outcome)
       let sourceHandleId = params.sourceHandle
-      if (!sourceHandleId && endStates && endStates.length > 0) {
-        // Default to first end state (usually success)
-        sourceHandleId = endStates[0].id
-        console.log('[onConnect] No sourceHandle, defaulting to:', sourceHandleId)
+      if (!sourceHandleId) {
+        if (sourceNode?.type === 'retry') {
+          sourceHandleId = 'retry-out'
+        } else if (endStates && endStates.length > 0) {
+          // When connecting to retry, prefer the first failure-class end state.
+          // Retry semantics are currently compiled into transition.on_failure only.
+          if (targetNode?.type === 'retry') {
+            const failureEndState = endStates.find((endState, index) => {
+              const inferred = normalizeOutcome(endState.outcome) || inferOutcome(endState, index)
+              return outcomeCategory(inferred) === 'failure'
+            })
+            sourceHandleId = failureEndState?.id || endStates[0].id
+          } else {
+            // Default to first end state (usually success)
+            sourceHandleId = endStates[0].id
+          }
+          console.log('[onConnect] No sourceHandle, defaulting to:', sourceHandleId)
+        }
       }
 
       const matchedEndState = endStates?.find(es => es.id === sourceHandleId)
@@ -2061,8 +2392,20 @@ function ActionGraphEditor() {
         ? normalizeOutcome(matchedEndState.outcome) || inferOutcome(matchedEndState, 0)
         : undefined
 
+      if (targetNode?.type === 'retry' && outcome && outcomeCategory(outcome) === 'success') {
+        console.warn('[onConnect] Retry block only supports failure-class outcomes. Ignoring success->retry connection.')
+        return
+      }
+
+      const isRetrySource = sourceNode?.type === 'retry'
       const isSuccess = outcome === 'success'
-      const color = outcome ? OUTCOME_EDGE_COLORS[outcome] : '#22c55e'
+      const color = isRetrySource
+        ? (
+          sourceHandleId === 'retry-failed'
+            ? '#ef4444'
+            : '#f59e0b'
+        )
+        : (outcome ? OUTCOME_EDGE_COLORS[outcome] : '#22c55e')
 
       const newEdge = {
         ...params,
@@ -2077,7 +2420,7 @@ function ActionGraphEditor() {
         style: {
           stroke: color,
           strokeWidth: 2,
-          strokeDasharray: isSuccess ? undefined : '5,5',
+          strokeDasharray: (isRetrySource || !isSuccess) ? '5,5' : undefined,
         },
       }
       console.log('[onConnect] Creating edge:', newEdge)
@@ -2093,7 +2436,21 @@ function ActionGraphEditor() {
           return eds.filter(edge => !isSameConnection(edge))
         }
 
-        return addEdge(newEdge, eds)
+        let nextEdges = eds
+
+        // Retry node ports are single-connection ports (replace existing edge on reconnect)
+        if (sourceNode?.type === 'retry' && sourceHandleId) {
+          nextEdges = nextEdges.filter(
+            edge => !(edge.source === params.source && (edge.sourceHandle ?? null) === sourceHandleId)
+          )
+        }
+        if (targetNode?.type === 'retry' && targetHandleId) {
+          nextEdges = nextEdges.filter(
+            edge => !(edge.target === params.target && (edge.targetHandle ?? null) === targetHandleId)
+          )
+        }
+
+        return addEdge(newEdge, nextEdges)
       })
     },
     [nodes, setEdges]
@@ -2138,12 +2495,14 @@ function ActionGraphEditor() {
       }
       console.log('[onDrop] Parsed data:', data)
 
-      if (data.type !== 'action' && data.type !== 'service' && data.type !== 'event') {
+      if (data.type !== 'action' && data.type !== 'service' && data.type !== 'event' && data.type !== 'retry') {
         console.log('[onDrop] Unsupported palette item type:', data.type)
         return
       }
 
       const isActionLikeNode = data.type === 'action' || data.type === 'service'
+      const isRetryNode = data.type === 'retry'
+      const isStartEvent = data.type === 'event' && data.subtype === 'Start'
 
       const position = screenToFlowPosition({
         x: event.clientX,
@@ -2165,6 +2524,66 @@ function ActionGraphEditor() {
         ? getDefaultJobNameTemplate(data.server || data.subtype, data.label)
         : (data.label || data.subtype || '')
 
+      if (isRetryNode) {
+        const retryNode: Node = {
+          id: getNodeId(),
+          type: 'retry',
+          position,
+          data: {
+            label: data.label || 'Retry Block',
+            subtype: data.subtype || 'Retry',
+            color: data.color || '#f59e0b',
+            maxRetries: Number.isFinite(data.maxRetries) ? Number(data.maxRetries) : 3,
+            backoffMs: Number.isFinite(data.backoffMs) ? Number(data.backoffMs) : 0,
+            isEditing,
+          },
+        }
+        setNodes((nds) => [...nds, retryNode])
+        return
+      }
+
+      if (isStartEvent) {
+        const startNode: Node = {
+          id: START_NODE_ID,
+          type: 'event',
+          position,
+          data: {
+            label: 'Start',
+            subtype: 'Start',
+            color: START_NODE_COLOR,
+            initialState: defaultSuccessState,
+            availableStates,
+            availableAgents,
+            isEditing,
+          },
+          draggable: true,
+          selectable: true,
+          deletable: true,
+        }
+        setNodes((nds) => {
+          const withoutStart = nds.filter((node) => node.id !== START_NODE_ID)
+          return [...withoutStart, startNode]
+        })
+        setEdges((eds) => {
+          const existingEntry = eds.find((edge) => edge.source === START_NODE_ID && edge.target)
+          const filtered = eds.filter((edge) => edge.source !== START_NODE_ID && edge.target !== START_NODE_ID)
+          if (existingEntry?.target) {
+            filtered.push({
+              id: `${START_NODE_ID}->${existingEntry.target}`,
+              source: START_NODE_ID,
+              target: existingEntry.target,
+              sourceHandle: 'state-out',
+              targetHandle: 'state-in',
+              type: 'smoothstep',
+              markerEnd: { type: MarkerType.ArrowClosed, color: START_NODE_COLOR },
+              style: { stroke: START_NODE_COLOR, strokeWidth: 2 },
+            })
+          }
+          return filtered
+        })
+        return
+      }
+
       const newNode: Node = {
         id: getNodeId(),
         type: isActionLikeNode ? 'action' : 'event',
@@ -2184,22 +2603,21 @@ function ActionGraphEditor() {
           successState: defaultSuccessState,
           failureState: defaultFailureState,
           initialState: defaultSuccessState,
-          finalState: data.subtype === 'Error' ? defaultFailureState : defaultSuccessState,
+          finalState: data.subtype === 'Error'
+            ? defaultFailureState
+            : (data.subtype === 'Warning' && availableStates.includes('warning') ? 'warning' : defaultSuccessState),
           fromState: defaultSuccessState,
           toState: data.subtype,
           availableStates,
           availableAgents,
           params: {},
+          debugMessage: '',
           jobName: defaultJobName,
           endStates: defaultEndStates,
           // Task Distributor data
+          taskDistributorId,
           taskDistributorStates: tdStates,
           taskDistributorResources: tdResources,
-          planningTask,
-          taskTemplateName: selectedTemplate?.name || '',
-          onTaskPlanningDuringChange: handlePlanningDuringChange,
-          onTaskPlanningResultUpsert: handleUpsertPlanningResult,
-          onTaskPlanningResultDelete: handleDeletePlanningResult,
           resourceAcquire: [],
           resourceRelease: [],
           isEditing,
@@ -2217,14 +2635,11 @@ function ActionGraphEditor() {
     [
       availableAgents,
       availableStates,
-      handleDeletePlanningResult,
-      handlePlanningDuringChange,
-      handleUpsertPlanningResult,
       isEditing,
-      planningTask,
       screenToFlowPosition,
-      selectedTemplate?.name,
       setNodes,
+      setEdges,
+      taskDistributorId,
       tdResources,
       tdStates,
     ]
@@ -2289,6 +2704,221 @@ function ActionGraphEditor() {
     setBottomPanelTab(null)
   }, [])
 
+  const importTaskSetBackup = useCallback(async (parsed: TaskSetBackup, sourceLabel?: string) => {
+    const backupTemplates = Array.isArray(parsed?.templates) ? parsed.templates : []
+    if (backupTemplates.length === 0) {
+      throw new Error('유효한 templates 항목이 없습니다.')
+    }
+
+    const confirmed = window.confirm(
+      `태스크 세트 ${backupTemplates.length}개를 불러옵니다.\n` +
+        `동일 ID 태스크는 덮어씁니다. 계속할까요?`
+    )
+    if (!confirmed) {
+      setTaskSetNotice('태스크 세트 불러오기를 취소했습니다.')
+      return
+    }
+
+    const currentTemplates = await templateApi.list()
+    const existingTemplateIds = new Set(currentTemplates.map((template) => template.id))
+
+    const agentIdSet = new Set(agents.map((agent) => agent.id))
+    const agentIdByName = new Map<string, string>()
+    for (const agent of agents) {
+      const rawName = (agent.name || '').trim()
+      const formattedName = formatTaskManagerName(rawName)
+      if (rawName) agentIdByName.set(rawName, agent.id)
+      if (formattedName) agentIdByName.set(formattedName, agent.id)
+    }
+
+    let importedCount = 0
+    let assignmentAppliedCount = 0
+    let missingAgentCount = 0
+    const failedTemplates: string[] = []
+
+    for (const entry of backupTemplates) {
+      const snapshot = entry?.template
+      const templateID = snapshot?.id?.trim()
+      if (!templateID) {
+        continue
+      }
+
+      const steps = Array.isArray(snapshot.steps) ? snapshot.steps : []
+      const templateName = snapshot.name?.trim() || templateID
+
+      try {
+        if (!existingTemplateIds.has(templateID)) {
+          await templateApi.create({
+            id: templateID,
+            name: templateName,
+            description: snapshot.description || undefined,
+            entry_point: snapshot.entry_point || undefined,
+            preconditions: (snapshot.preconditions || undefined) as any,
+            steps: steps as any,
+            states: snapshot.states || undefined,
+            planning_task: snapshot.planning_task || undefined,
+          } as any)
+          existingTemplateIds.add(templateID)
+        }
+
+        await templateApi.update(templateID, {
+          name: templateName,
+          description: snapshot.description || '',
+          entry_point: snapshot.entry_point || '',
+          preconditions: (snapshot.preconditions || undefined) as any,
+          steps: steps as any,
+          states: snapshot.states || undefined,
+          planning_states: snapshot.planning_states || undefined,
+          planning_task: snapshot.planning_task || undefined,
+          task_distributor_id: snapshot.task_distributor_id || '',
+        } as any)
+
+        importedCount += 1
+      } catch (error) {
+        console.error(`Failed to upsert template ${templateID}:`, error)
+        failedTemplates.push(templateID)
+        continue
+      }
+
+      const assignments = Array.isArray(entry.assignments) ? entry.assignments : []
+      try {
+        const currentAssignments = await templateApi.getAssignments(templateID)
+        await Promise.all(
+          currentAssignments.map((assignment) =>
+            templateApi.unassign(templateID, assignment.agent_id)
+          )
+        )
+      } catch (error) {
+        console.error(`Failed to clear assignments for ${templateID}:`, error)
+      }
+
+      for (const assignment of assignments) {
+        const rawAgentID = (assignment.agent_id || '').trim()
+        const rawAgentName = (assignment.agent_name || '').trim()
+        const formattedAgentName = formatTaskManagerName(rawAgentName)
+        const resolvedAgentID = agentIdSet.has(rawAgentID)
+          ? rawAgentID
+          : (agentIdByName.get(rawAgentName) || agentIdByName.get(formattedAgentName) || '')
+
+        if (!resolvedAgentID) {
+          missingAgentCount += 1
+          continue
+        }
+
+        try {
+          await templateApi.assign(
+            templateID,
+            resolvedAgentID,
+            assignment.enabled !== false,
+            Number.isFinite(assignment.priority) ? Number(assignment.priority) : 0
+          )
+          assignmentAppliedCount += 1
+        } catch (error) {
+          console.error(`Failed to assign template ${templateID} to ${resolvedAgentID}:`, error)
+        }
+      }
+    }
+
+    queryClient.invalidateQueries({ queryKey: ['templates'] })
+    queryClient.invalidateQueries({ queryKey: ['templates-all'] })
+    queryClient.invalidateQueries({ queryKey: ['template', selectedTemplateId] })
+    queryClient.invalidateQueries({ queryKey: ['template-assignments'] })
+    queryClient.invalidateQueries({ queryKey: ['agents-overview'] })
+
+    const firstTemplateID = backupTemplates[0]?.template?.id
+    if (firstTemplateID) {
+      setSelectedTemplateId(firstTemplateID)
+    }
+
+    const summary =
+      `불러오기 완료: 태스크 ${importedCount}개, 할당 ${assignmentAppliedCount}개 적용` +
+      (missingAgentCount > 0 ? `, 누락 RTM ${missingAgentCount}개` : '') +
+      (failedTemplates.length > 0 ? `, 실패 태스크 ${failedTemplates.length}개` : '') +
+      (sourceLabel ? ` [${sourceLabel}]` : '')
+    setTaskSetNotice(summary)
+  }, [agents, queryClient, selectedTemplateId])
+
+  const handleExportTaskSet = useCallback(async () => {
+    setIsTaskSetProcessing(true)
+    setTaskSetNotice(null)
+    try {
+      const templates = await templateApi.list()
+      if (templates.length === 0) {
+        setTaskSetNotice('내보낼 태스크가 없습니다.')
+        return
+      }
+
+      const snapshotItems = await Promise.all(templates.map(async (item) => {
+        const [template, assignments] = await Promise.all([
+          templateApi.get(item.id),
+          templateApi.getAssignments(item.id),
+        ])
+        return {
+          template: buildTaskSetTemplateSnapshot(template),
+          assignments: assignments.map((assignment) => ({
+            agent_id: assignment.agent_id,
+            agent_name: assignment.agent_name,
+            enabled: assignment.enabled,
+            priority: 0,
+          })),
+        }
+      }))
+
+      const backup: TaskSetBackup = {
+        version: 1,
+        exported_at: new Date().toISOString(),
+        source: 'multi-robot-supervision/task-editor',
+        templates: snapshotItems,
+      }
+
+      const timeLabel = new Date().toISOString().replace(/[:.]/g, '-')
+      const fileName = `task_set_backup_${timeLabel}.json`
+      const saved = await saveFilesApi.saveTaskSet(fileName, backup)
+      const files = await saveFilesApi.listTaskSets()
+      setSavedTaskSetFiles(files)
+      setTaskSetNotice(`태스크 세트 저장 완료: ${snapshotItems.length}개 (${saved.name})`)
+    } catch (error) {
+      console.error('Failed to export task set:', error)
+      setTaskSetNotice(`태스크 세트 저장 실패: ${extractApiErrorMessage(error, 'unknown error')}`)
+    } finally {
+      setIsTaskSetProcessing(false)
+    }
+  }, [])
+
+  const handleOpenTaskSetImport = useCallback(async () => {
+    setIsTaskSetProcessing(true)
+    setTaskSetNotice(null)
+    try {
+      const files = await saveFilesApi.listTaskSets()
+      setSavedTaskSetFiles(files)
+      if (files.length === 0) {
+        setTaskSetNotice('Save_files/tasks 폴더에 저장된 태스크 JSON이 없습니다.')
+        return
+      }
+      setShowTaskSetLoadModal(true)
+    } catch (error) {
+      console.error('Failed to list task set save files:', error)
+      setTaskSetNotice(`저장 파일 목록 조회 실패: ${extractApiErrorMessage(error, 'unknown error')}`)
+    } finally {
+      setIsTaskSetProcessing(false)
+    }
+  }, [])
+
+  const handleImportTaskSet = useCallback(async (fileName: string) => {
+    setShowTaskSetLoadModal(false)
+    setIsTaskSetProcessing(true)
+    setTaskSetNotice(null)
+    try {
+      const parsed = await saveFilesApi.loadTaskSet<TaskSetBackup>(fileName)
+      await importTaskSetBackup(parsed, fileName)
+    } catch (error) {
+      console.error('Failed to import task set:', error)
+      setTaskSetNotice(`태스크 세트 불러오기 실패: ${extractApiErrorMessage(error, fileName)}`)
+    } finally {
+      setIsTaskSetProcessing(false)
+    }
+  }, [importTaskSetBackup])
+
   const selectedTaskSummary = useMemo(
     () => allTemplates.find(template => template.id === selectedTemplateId) || null,
     [allTemplates, selectedTemplateId]
@@ -2315,19 +2945,44 @@ function ActionGraphEditor() {
                 <PlusCircle size={14} />
               </button>
             </div>
+            <div className="px-3 pb-2 grid grid-cols-2 gap-1">
+              <button
+                onClick={handleExportTaskSet}
+                disabled={isTaskSetProcessing}
+                className="inline-flex items-center justify-center gap-1 rounded border border-primary bg-elevated px-2 py-1 text-[10px] text-secondary hover:text-primary disabled:opacity-50"
+                title="현재 태스크 세트를 JSON으로 저장"
+              >
+                <Download size={11} />
+                저장
+              </button>
+              <button
+                onClick={handleOpenTaskSetImport}
+                disabled={isTaskSetProcessing}
+                className="inline-flex items-center justify-center gap-1 rounded border border-primary bg-elevated px-2 py-1 text-[10px] text-secondary hover:text-primary disabled:opacity-50"
+                title="JSON 파일에서 태스크 세트 불러오기"
+              >
+                <Upload size={11} />
+                불러오기
+              </button>
+            </div>
+            {taskSetNotice && (
+              <div className="mx-3 mb-2 rounded border border-blue-500/30 bg-blue-500/10 px-2 py-1.5 text-[10px] text-blue-200">
+                {taskSetNotice}
+              </div>
+            )}
             <div className="px-3 pb-2 text-[10px] text-muted">
               항목 클릭: 열기 · 상단 편집 버튼: 수정
             </div>
 
             {templatesLoading ? (
               <div className="px-3 py-4 text-center text-muted text-sm">로딩 중...</div>
-            ) : allTemplates.length === 0 ? (
+            ) : sortedTemplates.length === 0 ? (
               <div className="px-3 py-4 text-center text-muted text-sm">
                 태스크가 없습니다. 새로 생성하세요.
               </div>
             ) : (
               <div className="space-y-0.5">
-                {allTemplates.map((template: TemplateListItem) => (
+                {sortedTemplates.map((template: TemplateListItem) => (
                   <div
                     key={template.id}
                     onClick={() => handleOpenTask(template.id)}
@@ -2435,238 +3090,78 @@ function ActionGraphEditor() {
       {/* Middle: Node Palette (when task loaded) */}
       {selectedTemplate && (
         <div className="w-56 bg-surface border-r border-primary flex flex-col">
-          {/* PDDL Task Distributor Selection */}
+          {/* PDDL Config */}
           <div className="px-3 py-2 border-b border-primary">
-            <div className="flex items-center gap-1.5 mb-1.5">
-              <FileCode size={12} className="text-violet-400" />
-              <span className="text-[10px] font-semibold text-violet-400 uppercase tracking-wider">PDDL Task Distributor</span>
-            </div>
-            <select
-              value={taskDistributorId || ''}
-              onChange={(e) => handleTaskDistributorChange(e.target.value)}
-              className="w-full px-2 py-1.5 bg-elevated border border-primary rounded-lg text-xs text-primary focus:outline-none focus:border-violet-500 cursor-pointer"
+            <button
+              onClick={() => setShowTaskPddlConfigModal(true)}
+              className="w-full rounded-lg border border-violet-500/40 bg-gradient-to-r from-violet-600/20 to-violet-500/10 px-3 py-2 text-left transition-all hover:border-violet-400/70 hover:from-violet-600/30 hover:to-violet-500/20"
             >
-              <option value="">TD 선택 안함</option>
-              {taskDistributors.map((td) => (
-                <option key={td.id} value={td.id}>{td.name}</option>
-              ))}
-            </select>
-            {taskDistributorId && taskDistributorFull ? (
-              <div className="mt-1.5 flex items-center gap-2 text-[10px] text-muted">
-                <span className="px-1.5 py-0.5 bg-violet-500/10 text-violet-400 rounded">States: {tdStates.length}</span>
-                <span className="px-1.5 py-0.5 bg-violet-500/10 text-violet-400 rounded">Resources: {tdResources.length}</span>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <FileCode size={14} className="text-violet-300" />
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase tracking-wider text-violet-300">PDDL Config</div>
+                    <div className="text-[10px] text-violet-200/80">Task 단위 planning 설정</div>
+                  </div>
+                </div>
+                <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[9px] text-violet-200">열기</span>
               </div>
-            ) : !taskDistributorId ? (
-              <div className="mt-1.5 flex items-center gap-1 text-[10px] text-yellow-400">
-                <AlertCircle size={10} />
-                <span>TD를 선택해야 PDDL 설정 가능</span>
-              </div>
-            ) : null}
-          </div>
+            </button>
 
-          <div className="px-3 py-3 border-b border-primary space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5">
-                <Zap size={12} className="text-amber-400" />
-                <span className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider">Current Task Planning</span>
-              </div>
-              {selectedTemplate?.name && (
-                <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[9px] text-amber-200">
-                  {selectedTemplate.name}
-                </span>
-              )}
-            </div>
-
-            {!taskDistributorId ? (
-              <div className="rounded-lg border border-dashed border-border bg-base/40 px-3 py-3 text-[10px] leading-5 text-muted">
-                이 패널이 현재 선택된 Task 전체에 저장되는 planning 설정입니다. Task Distributor를 연결해야 state / result / resource 요구사항을 설정할 수 있습니다.
-              </div>
-            ) : (
-              <>
-                <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 p-2">
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="text-[10px] font-medium text-violet-300">State</span>
-                    {activePlanningDuring && (
-                      <button
-                        onClick={() => handlePlanningDuringChange('')}
-                        className="text-[9px] text-muted hover:text-red-400"
-                      >
-                        clear
-                      </button>
+            <div className="mt-2 space-y-1.5 text-[10px]">
+              {taskDistributorId && taskDistributorFull ? (
+                <>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-violet-300">
+                      TD: {taskDistributorFull.name}
+                    </span>
+                    <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-violet-300">
+                      States {tdStates.length}
+                    </span>
+                    <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-violet-300">
+                      Resources {tdResources.length}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {(planningTask.preconditions || []).slice(0, 2).map((condition) => (
+                      <span key={condition.variable} className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[9px] text-emerald-200">
+                        Need: {condition.variable}{condition.operator || '=='}{condition.value}
+                      </span>
+                    ))}
+                    {(planningTask.preconditions || []).length > 2 && (
+                      <span className="rounded bg-surface px-1.5 py-0.5 text-[9px] text-secondary">
+                        +{(planningTask.preconditions || []).length - 2} more need
+                      </span>
+                    )}
+                    {(planningTask.result_states || []).slice(0, 2).map((effect) => (
+                      <span key={effect.variable} className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[9px] text-amber-200">
+                        Result: {effect.variable}={effect.value}
+                      </span>
+                    ))}
+                    {(planningTask.result_states || []).length > 2 && (
+                      <span className="rounded bg-surface px-1.5 py-0.5 text-[9px] text-secondary">
+                        +{(planningTask.result_states || []).length - 2} more
+                      </span>
+                    )}
+                    {(planningTask.required_resources || []).slice(0, 2).map((token) => (
+                      <span key={token} className="rounded bg-sky-500/10 px-1.5 py-0.5 text-[9px] text-sky-200">
+                        Resource: {formatPlanningResourceToken(token, tdResources)}
+                      </span>
+                    ))}
+                    {(planningTask.required_resources || []).length > 2 && (
+                      <span className="rounded bg-surface px-1.5 py-0.5 text-[9px] text-secondary">
+                        +{(planningTask.required_resources || []).length - 2} more resource
+                      </span>
                     )}
                   </div>
-
-                  {tdStates.length === 0 ? (
-                    <p className="text-[10px] text-muted italic">사용 가능한 state가 없습니다</p>
-                  ) : (
-                    <div className="space-y-2">
-                      <div>
-                        <div className="mb-1 text-[9px] font-medium text-violet-200">During State</div>
-                        <div className="flex items-center gap-1">
-                          <select
-                            className="flex-1 rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none"
-                            value={activePlanningDuring?.variable || ''}
-                            onChange={(e) => handlePlanningDuringChange(e.target.value)}
-                          >
-                            <option value="">state 선택</option>
-                            {tdStates.map((stateVar) => (
-                              <option key={stateVar.id} value={stateVar.name}>{stateVar.name}</option>
-                            ))}
-                          </select>
-                          <span className="text-[10px] text-secondary">=</span>
-                          {(() => {
-                            const currentVar = tdStates.find(item => item.name === activePlanningDuring?.variable)
-                            if (currentVar?.type === 'bool') {
-                              return (
-                                <select
-                                  className="w-20 rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none"
-                                  value={activePlanningDuring?.value || 'true'}
-                                  onChange={(e) => handlePlanningDuringChange(activePlanningDuring?.variable || '', e.target.value)}
-                                  disabled={!activePlanningDuring?.variable}
-                                >
-                                  <option value="true">true</option>
-                                  <option value="false">false</option>
-                                </select>
-                              )
-                            }
-                            return (
-                              <input
-                                type={currentVar?.type === 'int' ? 'number' : 'text'}
-                                className="w-24 rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none disabled:opacity-40"
-                                value={activePlanningDuring?.value || ''}
-                                onChange={(e) => handlePlanningDuringChange(activePlanningDuring?.variable || '', e.target.value)}
-                                disabled={!activePlanningDuring?.variable}
-                              />
-                            )
-                          })()}
-                        </div>
-                      </div>
-
-                      <div>
-                        <div className="mb-1 text-[9px] font-medium text-violet-200">Result States</div>
-                        <div className="flex gap-1">
-                          <select
-                            className="flex-1 rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none"
-                            value={planningResultVariable}
-                            onChange={(e) => {
-                              const variable = e.target.value
-                              setPlanningResultVariable(variable)
-                              const stateVar = tdStates.find(item => item.name === variable)
-                              setPlanningResultValue(getStateDefaultValue(stateVar))
-                            }}
-                          >
-                            <option value="">state 선택</option>
-                            {tdStates.map((stateVar) => (
-                              <option key={stateVar.id} value={stateVar.name}>{stateVar.name}</option>
-                            ))}
-                          </select>
-                          {(() => {
-                            const currentVar = tdStates.find(item => item.name === planningResultVariable)
-                            if (currentVar?.type === 'bool') {
-                              return (
-                                <select
-                                  className="w-20 rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none"
-                                  value={planningResultValue || 'true'}
-                                  onChange={(e) => setPlanningResultValue(e.target.value)}
-                                  disabled={!planningResultVariable}
-                                >
-                                  <option value="true">true</option>
-                                  <option value="false">false</option>
-                                </select>
-                              )
-                            }
-                            return (
-                              <input
-                                type={currentVar?.type === 'int' ? 'number' : 'text'}
-                                className="w-24 rounded border border-border bg-base px-2 py-1 text-[10px] text-primary outline-none disabled:opacity-40"
-                                value={planningResultValue}
-                                onChange={(e) => setPlanningResultValue(e.target.value)}
-                                disabled={!planningResultVariable}
-                              />
-                            )
-                          })()}
-                          <button
-                            onClick={handleAddPlanningResult}
-                            disabled={!planningResultVariable}
-                            className="rounded bg-violet-500/20 px-2 text-violet-300 disabled:opacity-40"
-                          >
-                            <Plus size={12} />
-                          </button>
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {(planningTask.result_states || []).length === 0 ? (
-                            <span className="text-[9px] text-muted">결과 상태 없음</span>
-                          ) : (planningTask.result_states || []).map((effect) => (
-                            <span
-                              key={effect.variable}
-                              className="inline-flex items-center gap-1 rounded-full bg-violet-500/10 px-2 py-0.5 text-[9px] text-violet-200"
-                            >
-                              {effect.variable} = {effect.value}
-                              <button onClick={() => handleDeletePlanningResult(effect.variable)}>
-                                <X size={9} />
-                              </button>
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                </>
+              ) : (
+                <div className="flex items-center gap-1 text-yellow-400">
+                  <AlertCircle size={10} />
+                  <span>Task Distributor를 연결한 뒤 PDDL Config에서 필요한 상태 / 결과 상태 / resource를 설정하세요.</span>
                 </div>
-
-                <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-2">
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="text-[10px] font-medium text-amber-300">Resources</span>
-                    <span className="text-[9px] text-secondary">Action Node Runtime Sync</span>
-                  </div>
-
-                  {tdResources.length === 0 ? (
-                    <p className="text-[10px] text-muted italic">사용 가능한 resource가 없습니다</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {taskResourceFlow.length === 0 ? (
-                        <p className="text-[10px] text-muted">
-                          각 Action Node에서 acquire / release resource를 지정하면 여기서 task 요구사항으로 자동 집계됩니다.
-                        </p>
-                      ) : taskResourceFlow.map((flow) => (
-                        <div key={flow.token} className="rounded border border-amber-500/20 bg-base/50 p-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[10px] font-medium text-amber-200">
-                              {formatPlanningResourceToken(flow.token, tdResources)}
-                            </span>
-                            <span className={`rounded-full px-1.5 py-0.5 text-[8px] ${
-                              flow.holdUntilTaskEnd
-                                ? 'bg-rose-500/10 text-rose-300'
-                                : 'bg-emerald-500/10 text-emerald-300'
-                            }`}>
-                              {flow.holdUntilTaskEnd ? 'task end hold' : 'released in-step'}
-                            </span>
-                          </div>
-                          <div className="mt-1 flex flex-wrap gap-1">
-                            <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[8px] text-amber-200">
-                              acquire {flow.acquireSteps.length}
-                            </span>
-                            <span className="rounded-full bg-surface px-1.5 py-0.5 text-[8px] text-secondary">
-                              release {flow.releaseSteps.length}
-                            </span>
-                          </div>
-                          <div className="mt-1 text-[9px] text-secondary">
-                            Acquire: {flow.acquireSteps.join(', ')}
-                          </div>
-                          {flow.releaseSteps.length > 0 && (
-                            <div className="mt-1 text-[9px] text-secondary">
-                              Release: {flow.releaseSteps.join(', ')}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                      <div className="rounded border border-amber-500/15 bg-amber-500/5 px-2 py-1.5 text-[9px] text-secondary">
-                        현재 선택된 Task의 planner required_resources는 Action Node의 runtime acquire 집합에서 자동 동기화됩니다.
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
+              )}
+            </div>
           </div>
 
           {/* States Management */}
@@ -3138,6 +3633,16 @@ function ActionGraphEditor() {
                   )}
                 </button>
               )}
+              {isEditing && (
+                <button
+                  onClick={() => setShowRenameModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border bg-elevated text-secondary border-primary hover:bg-surface hover:text-primary transition-colors"
+                  title="태스크 이름/ID 수정"
+                >
+                  <Edit size={14} />
+                  <span>이름/ID</span>
+                </button>
+              )}
               <button
                 onClick={() => {
                   if (!selectedTemplateId) return
@@ -3383,15 +3888,78 @@ function ActionGraphEditor() {
         </div>
       </div>
 
+      {showTaskSetLoadModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="w-full max-w-xl rounded-xl border border-primary bg-surface shadow-2xl">
+            <div className="flex items-center justify-between border-b border-primary px-4 py-3">
+              <div>
+                <h3 className="text-sm font-semibold text-primary">태스크 세트 불러오기</h3>
+                <p className="text-[11px] text-muted">Save_files/tasks 폴더에서 파일을 선택하세요.</p>
+              </div>
+              <button
+                onClick={() => setShowTaskSetLoadModal(false)}
+                className="rounded p-1 text-muted hover:bg-elevated hover:text-primary"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="max-h-[55vh] space-y-2 overflow-y-auto p-3">
+              {savedTaskSetFiles.length === 0 ? (
+                <div className="rounded border border-primary bg-elevated px-3 py-4 text-xs text-muted">
+                  저장된 파일이 없습니다.
+                </div>
+              ) : (
+                savedTaskSetFiles.map((file) => (
+                  <button
+                    key={file.name}
+                    onClick={() => handleImportTaskSet(file.name)}
+                    className="w-full rounded border border-primary bg-elevated px-3 py-2 text-left transition hover:border-blue-500/40 hover:bg-blue-500/10"
+                  >
+                    <div className="truncate text-xs font-medium text-primary">{file.name}</div>
+                    <div className="mt-0.5 text-[10px] text-muted">
+                      {new Date(file.updated_at).toLocaleString()} · {Math.max(1, Math.round(file.size_bytes / 1024))} KB
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Create Template Modal */}
       {showCreateModal && (
         <CreateTemplateModal
           onClose={() => setShowCreateModal(false)}
           onCreated={(id) => {
             setShowCreateModal(false)
+            pendingCreatedTemplateIdRef.current = id
             setSelectedTemplateId(id)
             queryClient.invalidateQueries({ queryKey: ['templates'] })
             queryClient.invalidateQueries({ queryKey: ['templates-all'] })
+          }}
+        />
+      )}
+
+      {showRenameModal && selectedTemplate && (
+        <RenameTemplateIdentityModal
+          template={selectedTemplate}
+          onClose={() => setShowRenameModal(false)}
+          onRenamed={(newId) => {
+            setShowRenameModal(false)
+            if (newId !== selectedTemplateId) {
+              setSelectedTemplateId(newId)
+            }
+            queryClient.invalidateQueries({ queryKey: ['templates'] })
+            queryClient.invalidateQueries({ queryKey: ['templates-all'] })
+            if (selectedTemplateId) {
+              queryClient.invalidateQueries({ queryKey: ['template', selectedTemplateId] })
+              queryClient.invalidateQueries({ queryKey: ['template-assignments', selectedTemplateId] })
+            }
+            queryClient.invalidateQueries({ queryKey: ['template', newId] })
+            queryClient.invalidateQueries({ queryKey: ['template-assignments', newId] })
+            queryClient.invalidateQueries({ queryKey: ['agents'] })
           }}
         />
       )}
@@ -3434,6 +4002,17 @@ function ActionGraphEditor() {
           }}
         />
       )}
+
+      {/* Task PDDL Config Modal */}
+      {showTaskPddlConfigModal && selectedTemplate && (
+        <TaskPddlConfigModal
+          template={selectedTemplate}
+          taskDistributors={taskDistributors}
+          currentGraphSnapshot={convertGraphToSteps()}
+          sessionId={sessionId}
+          onClose={() => setShowTaskPddlConfigModal(false)}
+        />
+      )}
     </div>
   )
 }
@@ -3449,6 +4028,7 @@ function convertActionGraphToGraph(
 
   // Defensive: ensure steps is always an array
   const steps = actionGraph.steps || []
+  const stepByID = new Map(steps.map(step => [step.id, step] as const))
 
   const actionMappings = stateDef?.action_mappings || []
   const defaultState = availableStates.includes('idle') ? 'idle' : availableStates[0] || 'idle'
@@ -3469,9 +4049,9 @@ function convertActionGraphToGraph(
       availableAgents,
       isEditing: false,
     },
-    draggable: false,
-    selectable: false,
-    deletable: false,
+    draggable: true,
+    selectable: true,
+    deletable: true,
   })
 
   steps.forEach((step, index) => {
@@ -3532,6 +4112,18 @@ function convertActionGraphToGraph(
 
     const isTerminal = step.type === 'terminal'
     const nodeType = isTerminal ? 'event' : 'action'
+    const terminalSubtype = isTerminal ? terminalStepToEventSubtype(step) : undefined
+    const terminalFinalState = isTerminal
+      ? (
+        terminalSubtype === 'Error'
+          ? errorState
+          : (
+            terminalSubtype === 'Warning' && availableStates.includes('warning')
+              ? 'warning'
+              : defaultState
+          )
+      )
+      : undefined
 
     nodes.push({
       id: step.id,
@@ -3540,7 +4132,7 @@ function convertActionGraphToGraph(
       dragHandle: nodeType === 'action' ? ACTION_NODE_DRAG_HANDLE_SELECTOR : undefined,
       data: {
         label: step.name || step.id,
-        subtype: isTerminal ? (step.terminal_type === 'success' ? 'End' : 'Error') : subtype,
+        subtype: terminalSubtype || subtype,
         color,
         actionType,
         server: normalizedServer || step.action?.server,
@@ -3556,19 +4148,118 @@ function convertActionGraphToGraph(
         jobName: step.job_name || (isTerminal ? '' : getDefaultJobNameTemplate(normalizedServer || step.action?.server, step.name || step.id)),
         resourceAcquire: Array.from(new Set(step.resource_acquire || [])),
         resourceRelease: Array.from(new Set(step.resource_release || [])),
-        planningTask: actionGraph.planning_task,
-        taskTemplateName: actionGraph.name || '',
-        finalState: isTerminal ? (step.terminal_type === 'success' ? defaultState : errorState) : undefined,
+        finalState: terminalFinalState,
+        debugMessage: isTerminal ? (step.message || '') : undefined,
         availableStates,
         availableAgents,
         isEditing: false,
       },
     })
 
+    const failureTransitionObj =
+      step.transition?.on_failure && typeof step.transition.on_failure === 'object'
+        ? step.transition.on_failure as Record<string, unknown>
+        : undefined
+    const retryCount = Math.max(0, Number((failureTransitionObj?.retry as number | undefined) ?? 0))
+    const retryBackoffMs = Math.max(
+      0,
+      Number(
+        (failureTransitionObj?.backoff_ms as number | undefined) ??
+        (failureTransitionObj?.backoffMs as number | undefined) ??
+        0
+      )
+    )
+    const retryFallbackTarget =
+      typeof failureTransitionObj?.fallback === 'string'
+        ? failureTransitionObj.fallback
+        : (typeof failureTransitionObj?.next === 'string' ? failureTransitionObj.next : '')
+    const retryUi = failureTransitionObj?.ui && typeof failureTransitionObj.ui === 'object'
+      ? failureTransitionObj.ui as Record<string, unknown>
+      : undefined
+    const retryStoredX = typeof retryUi?.x === 'number' && Number.isFinite(retryUi.x) ? retryUi.x : undefined
+    const retryStoredY = typeof retryUi?.y === 'number' && Number.isFinite(retryUi.y) ? retryUi.y : undefined
+    const hasRetryBlock = retryCount > 0 || retryBackoffMs > 0
+    const retryNodeId = `${step.id}__retry`
+    let retryInputEdgeAdded = false
+
+    const addRetryInputEdge = (sourceHandle?: string) => {
+      if (!hasRetryBlock || retryInputEdgeAdded) return
+      edges.push({
+        id: `${step.id}-fail->${retryNodeId}`,
+        source: step.id,
+        target: retryNodeId,
+        sourceHandle,
+        targetHandle: 'retry-in',
+        type: 'smoothstep',
+        markerEnd: { type: MarkerType.ArrowClosed, color: '#f59e0b' },
+        style: { stroke: '#f59e0b', strokeWidth: 2, strokeDasharray: '5,5' },
+      })
+      retryInputEdgeAdded = true
+    }
+
+    const addRetryLoopEdge = () => {
+      if (!hasRetryBlock) return
+      edges.push({
+        id: `${retryNodeId}->${step.id}::retry`,
+        source: retryNodeId,
+        target: step.id,
+        sourceHandle: 'retry-out',
+        targetHandle: 'in',
+        type: 'smoothstep',
+        markerEnd: { type: MarkerType.ArrowClosed, color: '#f59e0b' },
+        style: { stroke: '#f59e0b', strokeWidth: 2, strokeDasharray: '5,5' },
+      })
+    }
+
+    const addRetryFallbackEdge = () => {
+      if (!hasRetryBlock || !retryFallbackTarget) return
+      if (!stepIds.has(retryFallbackTarget)) return
+      if (retryFallbackTarget === step.id) return
+      const fallbackStep = stepByID.get(retryFallbackTarget)
+      const fallbackSubtype = fallbackStep ? terminalStepToEventSubtype(fallbackStep) : undefined
+      const edgeColor = fallbackSubtype === 'Warning' ? '#f59e0b' : '#ef4444'
+      edges.push({
+        id: `${retryNodeId}->${retryFallbackTarget}::retry-failed`,
+        source: retryNodeId,
+        target: retryFallbackTarget,
+        sourceHandle: 'retry-failed',
+        targetHandle: 'state-in',
+        type: 'smoothstep',
+        markerEnd: { type: MarkerType.ArrowClosed, color: edgeColor },
+        style: { stroke: edgeColor, strokeWidth: 2, strokeDasharray: '5,5' },
+      })
+    }
+
+    if (hasRetryBlock) {
+      nodes.push({
+        id: retryNodeId,
+        type: 'retry',
+        position: { x: retryStoredX ?? (x + 180), y: retryStoredY ?? (y + 84) },
+        data: {
+          label: 'Retry Block',
+          subtype: 'Retry',
+          color: '#f59e0b',
+          maxRetries: retryCount,
+          backoffMs: retryBackoffMs,
+          isEditing: false,
+        },
+      })
+      addRetryLoopEdge()
+    }
+
     if (outcomeTransitions.length > 0) {
       outcomeTransitions.forEach((transition, idx) => {
         if (!transition.next) return
         const normalizedOutcome = normalizeOutcome(transition.outcome) || 'failed'
+        if (hasRetryBlock && outcomeCategory(normalizedOutcome) !== 'success') {
+          const failureHandleMatch = stepEndStates.find(es => {
+            const esOutcome = normalizeOutcome(es.outcome) || inferOutcome(es, idx)
+            return outcomeCategory(esOutcome) !== 'success' &&
+              (!transition.state || es.state === transition.state)
+          })
+          addRetryInputEdge(failureHandleMatch?.id)
+          return
+        }
         const match = stepEndStates.find(es => {
           const esOutcome = normalizeOutcome(es.outcome) || inferOutcome(es, idx)
           return esOutcome === normalizedOutcome &&
@@ -3592,6 +4283,14 @@ function convertActionGraphToGraph(
           },
         })
       })
+      if (hasRetryBlock && !retryInputEdgeAdded) {
+        const failureHandle = stepEndStates.find((endState, idx) => {
+          const inferred = normalizeOutcome(endState.outcome) || inferOutcome(endState, idx)
+          return outcomeCategory(inferred) === 'failure'
+        })?.id
+        addRetryInputEdge(failureHandle)
+      }
+      addRetryFallbackEdge()
     } else if (step.transition?.on_success || step.transition?.on_failure) {
       const findOutcomeHandle = (desired: 'success' | 'failure') => {
         const match = stepEndStates.find((endState, idx) => {
@@ -3624,21 +4323,26 @@ function convertActionGraphToGraph(
       }
 
       if (step.transition?.on_failure) {
-        const target = typeof step.transition.on_failure === 'string'
-          ? step.transition.on_failure
-          : step.transition.on_failure.fallback
+        if (hasRetryBlock) {
+          addRetryInputEdge(failureHandle)
+          addRetryFallbackEdge()
+        } else {
+          const target = typeof step.transition.on_failure === 'string'
+            ? step.transition.on_failure
+            : step.transition.on_failure.fallback
 
-        if (target) {
-          edges.push({
-            id: `${step.id}-fail->${target}`,
-            source: step.id,
-            target,
-            sourceHandle: failureHandle,
-            targetHandle: 'state-in',
-            type: 'smoothstep',
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#ef4444' },
-            style: { stroke: '#ef4444', strokeWidth: 2, strokeDasharray: '5,5' },
-          })
+          if (target) {
+            edges.push({
+              id: `${step.id}-fail->${target}`,
+              source: step.id,
+              target,
+              sourceHandle: failureHandle,
+              targetHandle: 'state-in',
+              type: 'smoothstep',
+              markerEnd: { type: MarkerType.ArrowClosed, color: '#ef4444' },
+              style: { stroke: '#ef4444', strokeWidth: 2, strokeDasharray: '5,5' },
+            })
+          }
         }
       }
     }
@@ -3663,6 +4367,823 @@ function convertActionGraphToGraph(
   return { initialNodes: nodes, initialEdges: edges }
 }
 
+function TaskPddlConfigModal({
+  template,
+  taskDistributors,
+  currentGraphSnapshot,
+  sessionId,
+  onClose,
+}: {
+  template: ActionGraph
+  taskDistributors: Omit<TaskDistributor, 'states' | 'resources'>[]
+  currentGraphSnapshot: {
+    steps: ActionGraph['steps']
+    entryPoint?: string
+  }
+  sessionId?: string
+  onClose: () => void
+}) {
+  const queryClient = useQueryClient()
+  const [selectedDistributorId, setSelectedDistributorId] = useState(template.task_distributor_id || '')
+  const [localPlanningTask, setLocalPlanningTask] = useState<PlanningTaskSpec>(() => ({
+    ...emptyPlanningTask(),
+    ...(template.planning_task || {}),
+  }))
+  const [pendingPreconditionVariable, setPendingPreconditionVariable] = useState('')
+  const [pendingPreconditionOperator, setPendingPreconditionOperator] = useState<'==' | '!='>('==')
+  const [pendingPreconditionValue, setPendingPreconditionValue] = useState('')
+  const [pendingResultVariable, setPendingResultVariable] = useState('')
+  const [pendingResultValue, setPendingResultValue] = useState('')
+  const [pendingWarningResultVariable, setPendingWarningResultVariable] = useState('')
+  const [pendingWarningResultValue, setPendingWarningResultValue] = useState('')
+  const [pendingErrorResultVariable, setPendingErrorResultVariable] = useState('')
+  const [pendingErrorResultValue, setPendingErrorResultValue] = useState('')
+  const [pendingResourceToken, setPendingResourceToken] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
+
+  const { data: selectedDistributorFull, isLoading: isDistributorLoading } = useQuery({
+    queryKey: ['task-distributor-full', selectedDistributorId],
+    queryFn: () => taskDistributorApi.getFull(selectedDistributorId),
+    enabled: !!selectedDistributorId,
+  })
+  const { data: planningAgentsRaw = [] } = useQuery({
+    queryKey: ['agents-list', 'pddl-config-modal'],
+    queryFn: () => agentApi.list({ offlineMode: 'all' }),
+    staleTime: 30000,
+  })
+
+  const distributorStates = selectedDistributorFull?.states || []
+  const distributorResources = selectedDistributorFull?.resources || []
+  const planningAgents = useMemo<PlanningAgentOption[]>(
+    () => planningAgentsRaw.map(agent => ({
+      id: agent.id,
+      name: (agent.name || '').trim() || agent.id,
+    })),
+    [planningAgentsRaw]
+  )
+  const planningVariableSuggestions = useMemo(
+    () => buildPlanningVariableSuggestions(distributorStates, distributorResources, planningAgents),
+    [distributorResources, distributorStates, planningAgents]
+  )
+  const pendingPreconditionStateVar = useMemo(
+    () => inferPlanningStateVar(pendingPreconditionVariable, distributorStates, distributorResources, planningAgents),
+    [distributorResources, distributorStates, pendingPreconditionVariable, planningAgents]
+  )
+  const pendingResultStateVar = useMemo(
+    () => inferPlanningStateVar(pendingResultVariable, distributorStates, distributorResources, planningAgents),
+    [distributorResources, distributorStates, pendingResultVariable, planningAgents]
+  )
+  const pendingWarningResultStateVar = useMemo(
+    () => inferPlanningStateVar(pendingWarningResultVariable, distributorStates, distributorResources, planningAgents),
+    [distributorResources, distributorStates, pendingWarningResultVariable, planningAgents]
+  )
+  const pendingErrorResultStateVar = useMemo(
+    () => inferPlanningStateVar(pendingErrorResultVariable, distributorStates, distributorResources, planningAgents),
+    [distributorResources, distributorStates, pendingErrorResultVariable, planningAgents]
+  )
+
+  useEffect(() => {
+    if (!selectedDistributorId) {
+      setLocalPlanningTask(emptyPlanningTask())
+      setPendingPreconditionVariable('')
+      setPendingPreconditionOperator('==')
+      setPendingPreconditionValue('')
+      setPendingResultVariable('')
+      setPendingResultValue('')
+      setPendingWarningResultVariable('')
+      setPendingWarningResultValue('')
+      setPendingErrorResultVariable('')
+      setPendingErrorResultValue('')
+      setPendingResourceToken('')
+      return
+    }
+    if (!selectedDistributorFull) return
+
+    setLocalPlanningTask((current) => {
+      const nextTask = filterPlanningTaskForDistributor(
+        current,
+        distributorStates,
+        distributorResources
+      )
+      return JSON.stringify(nextTask) === JSON.stringify(current) ? current : nextTask
+    })
+  }, [distributorResources, distributorStates, selectedDistributorFull, selectedDistributorId])
+
+  const applyPendingPreconditionVariable = useCallback((variable: string) => {
+    setPendingPreconditionVariable(variable)
+    const stateVar = inferPlanningStateVar(variable, distributorStates, distributorResources, planningAgents)
+    setPendingPreconditionValue(getStateDefaultValue(stateVar))
+  }, [distributorResources, distributorStates, planningAgents])
+
+  const applyPendingResultVariable = useCallback((variable: string) => {
+    setPendingResultVariable(variable)
+    const stateVar = inferPlanningStateVar(variable, distributorStates, distributorResources, planningAgents)
+    setPendingResultValue(getStateDefaultValue(stateVar))
+  }, [distributorResources, distributorStates, planningAgents])
+
+  const applyPendingWarningResultVariable = useCallback((variable: string) => {
+    setPendingWarningResultVariable(variable)
+    const stateVar = inferPlanningStateVar(variable, distributorStates, distributorResources, planningAgents)
+    setPendingWarningResultValue(getStateDefaultValue(stateVar))
+  }, [distributorResources, distributorStates, planningAgents])
+
+  const applyPendingErrorResultVariable = useCallback((variable: string) => {
+    setPendingErrorResultVariable(variable)
+    const stateVar = inferPlanningStateVar(variable, distributorStates, distributorResources, planningAgents)
+    setPendingErrorResultValue(getStateDefaultValue(stateVar))
+  }, [distributorResources, distributorStates, planningAgents])
+
+  const handleAddPrecondition = useCallback(() => {
+    if (!pendingPreconditionVariable) return
+    const nextCondition = {
+      variable: pendingPreconditionVariable,
+      operator: pendingPreconditionOperator,
+      value: pendingPreconditionValue || getStateDefaultValue(pendingPreconditionStateVar),
+    }
+    setLocalPlanningTask((current) => ({
+      ...current,
+      preconditions: [
+        ...(current.preconditions || []).filter(condition => condition.variable !== nextCondition.variable),
+        nextCondition,
+      ],
+    }))
+    setPendingPreconditionVariable('')
+    setPendingPreconditionOperator('==')
+    setPendingPreconditionValue('')
+  }, [pendingPreconditionOperator, pendingPreconditionStateVar, pendingPreconditionValue, pendingPreconditionVariable])
+
+  const handleDeletePrecondition = useCallback((variable: string) => {
+    setLocalPlanningTask((current) => ({
+      ...current,
+      preconditions: (current.preconditions || []).filter(condition => condition.variable !== variable),
+    }))
+  }, [])
+
+  const handleAddResultState = useCallback(() => {
+    if (!pendingResultVariable) return
+    const nextEffect: PlanningEffect = {
+      variable: pendingResultVariable,
+      value: pendingResultValue || getStateDefaultValue(pendingResultStateVar),
+    }
+    setLocalPlanningTask((current) => ({
+      ...current,
+      result_states: [
+        ...(current.result_states || []).filter(effect => effect.variable !== nextEffect.variable),
+        nextEffect,
+      ],
+    }))
+    setPendingResultVariable('')
+    setPendingResultValue('')
+  }, [pendingResultStateVar, pendingResultValue, pendingResultVariable])
+
+  const handleDeleteResultState = useCallback((variable: string) => {
+    setLocalPlanningTask((current) => ({
+      ...current,
+      result_states: (current.result_states || []).filter(effect => effect.variable !== variable),
+    }))
+  }, [])
+
+  const handleAddWarningResultState = useCallback(() => {
+    if (!pendingWarningResultVariable) return
+    const nextEffect: PlanningEffect = {
+      variable: pendingWarningResultVariable,
+      value: pendingWarningResultValue || getStateDefaultValue(pendingWarningResultStateVar),
+    }
+    setLocalPlanningTask((current) => ({
+      ...current,
+      warning_result_states: [
+        ...(current.warning_result_states || []).filter(effect => effect.variable !== nextEffect.variable),
+        nextEffect,
+      ],
+    }))
+    setPendingWarningResultVariable('')
+    setPendingWarningResultValue('')
+  }, [pendingWarningResultStateVar, pendingWarningResultValue, pendingWarningResultVariable])
+
+  const handleDeleteWarningResultState = useCallback((variable: string) => {
+    setLocalPlanningTask((current) => ({
+      ...current,
+      warning_result_states: (current.warning_result_states || []).filter(effect => effect.variable !== variable),
+    }))
+  }, [])
+
+  const handleAddErrorResultState = useCallback(() => {
+    if (!pendingErrorResultVariable) return
+    const nextEffect: PlanningEffect = {
+      variable: pendingErrorResultVariable,
+      value: pendingErrorResultValue || getStateDefaultValue(pendingErrorResultStateVar),
+    }
+    setLocalPlanningTask((current) => ({
+      ...current,
+      error_result_states: [
+        ...(current.error_result_states || []).filter(effect => effect.variable !== nextEffect.variable),
+        nextEffect,
+      ],
+    }))
+    setPendingErrorResultVariable('')
+    setPendingErrorResultValue('')
+  }, [pendingErrorResultStateVar, pendingErrorResultValue, pendingErrorResultVariable])
+
+  const handleDeleteErrorResultState = useCallback((variable: string) => {
+    setLocalPlanningTask((current) => ({
+      ...current,
+      error_result_states: (current.error_result_states || []).filter(effect => effect.variable !== variable),
+    }))
+  }, [])
+
+  const handleAddRequiredResource = useCallback(() => {
+    if (!pendingResourceToken) return
+    setLocalPlanningTask((current) => ({
+      ...current,
+      required_resources: Array.from(new Set([...(current.required_resources || []), pendingResourceToken])),
+    }))
+    setPendingResourceToken('')
+  }, [pendingResourceToken])
+
+  const handleDeleteRequiredResource = useCallback((token: string) => {
+    setLocalPlanningTask((current) => ({
+      ...current,
+      required_resources: (current.required_resources || []).filter(value => value !== token),
+    }))
+  }, [])
+
+  const handleSave = useCallback(async () => {
+    const queryKey = ['template', template.id]
+    const previousTemplate = queryClient.getQueryData<ActionGraph>(queryKey)
+    const normalizedDistributorId = selectedDistributorId || undefined
+    const nextPlanningTask = normalizedDistributorId
+      ? filterPlanningTaskForDistributor(localPlanningTask, distributorStates, distributorResources)
+      : emptyPlanningTask()
+    const normalizedSteps = currentGraphSnapshot.steps || []
+    const entryPoint = currentGraphSnapshot.entryPoint
+
+    try {
+      setIsSaving(true)
+      if (previousTemplate) {
+        queryClient.setQueryData<ActionGraph>(queryKey, {
+          ...previousTemplate,
+          steps: normalizedSteps,
+          entry_point: entryPoint,
+          task_distributor_id: normalizedDistributorId,
+          planning_task: nextPlanningTask,
+        })
+      }
+
+      await templateApi.update(template.id, {
+        steps: normalizedSteps,
+        entry_point: entryPoint,
+        task_distributor_id: normalizedDistributorId,
+        planning_task: nextPlanningTask,
+      } as Partial<ActionGraph>, sessionId)
+
+      queryClient.invalidateQueries({ queryKey })
+      queryClient.invalidateQueries({ queryKey: ['templates-all'] })
+      if (normalizedDistributorId) {
+        queryClient.invalidateQueries({ queryKey: ['task-distributor-full', normalizedDistributorId] })
+      }
+      onClose()
+    } catch (error) {
+      if (previousTemplate) {
+        queryClient.setQueryData<ActionGraph>(queryKey, previousTemplate)
+      }
+      alert(extractApiErrorMessage(error, 'PDDL 설정 저장에 실패했습니다'))
+    } finally {
+      setIsSaving(false)
+    }
+  }, [
+    distributorResources,
+    distributorStates,
+    localPlanningTask,
+    currentGraphSnapshot.entryPoint,
+    currentGraphSnapshot.steps,
+    onClose,
+    queryClient,
+    selectedDistributorId,
+    sessionId,
+    template.id,
+  ])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="max-h-[90vh] w-full max-w-3xl overflow-hidden rounded-xl border border-primary bg-surface shadow-2xl">
+        <div className="flex items-center justify-between border-b border-primary px-6 py-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <FileCode size={18} className="text-violet-300" />
+              <h2 className="text-lg font-semibold text-primary">PDDL Config</h2>
+            </div>
+            <p className="mt-1 text-sm text-secondary">
+              <span className="font-medium text-violet-200">{template.name || template.id}</span> 태스크 전체의 planning 설정을 관리합니다.
+            </p>
+          </div>
+          <button onClick={onClose} className="text-muted transition-colors hover:text-primary">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="max-h-[calc(90vh-144px)] overflow-y-auto p-6">
+          <div className="space-y-4">
+            <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <Zap size={14} className="text-violet-300" />
+                <span className="text-sm font-semibold text-violet-200">Task Distributor 선택</span>
+              </div>
+              <p className="mb-3 text-xs leading-5 text-secondary">
+                이 태스크가 사용할 PDDL 상태 변수와 resource 목록입니다. 여기서 선택한 distributor의 state / resource만 아래 설정에 사용할 수 있습니다.
+              </p>
+              <select
+                value={selectedDistributorId}
+                onChange={(e) => setSelectedDistributorId(e.target.value)}
+                className="w-full rounded-lg border border-primary bg-elevated px-3 py-2 text-sm text-primary outline-none focus:border-violet-500"
+              >
+                <option value="">TD 선택 안함</option>
+                {taskDistributors.map((distributor) => (
+                  <option key={distributor.id} value={distributor.id}>{distributor.name}</option>
+                ))}
+              </select>
+              {!selectedDistributorId ? (
+                <div className="mt-3 flex items-center gap-1 text-xs text-yellow-400">
+                  <AlertCircle size={12} />
+                  <span>Task Distributor를 연결해야 state / result / resource 요구사항을 저장할 수 있습니다.</span>
+                </div>
+              ) : selectedDistributorFull ? (
+                <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
+                  <span className="rounded bg-violet-500/10 px-2 py-1 text-violet-200">States {distributorStates.length}</span>
+                  <span className="rounded bg-violet-500/10 px-2 py-1 text-violet-200">Resources {distributorResources.length}</span>
+                  {selectedDistributorFull.description && (
+                    <span className="rounded bg-surface px-2 py-1 text-secondary">{selectedDistributorFull.description}</span>
+                  )}
+                </div>
+              ) : isDistributorLoading ? (
+                <div className="mt-3 text-xs text-secondary">Task Distributor 불러오는 중...</div>
+              ) : null}
+            </div>
+
+            <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <Activity size={14} className="text-violet-300" />
+                <span className="text-sm font-semibold text-violet-200">Task 조건 / 결과 설정</span>
+              </div>
+              <p className="mb-3 text-xs leading-5 text-secondary">
+                <strong className="text-violet-200">Required States</strong>는 이 태스크가 시작되기 전에 만족해야 하는 값이고,
+                <strong className="ml-1 text-violet-200">Result States</strong>는 이 태스크가 성공 종료된 뒤 planner가 반영할 값입니다.
+                <br />
+                generic task를 만들 때는 변수명/값에 <span className="font-mono text-violet-200">{'{{resource.name}}'}</span>,
+                <span className="ml-1 font-mono text-violet-200">{'{{agent.name}}'}</span> 같은 placeholder를 사용할 수 있습니다.
+              </p>
+
+              {!selectedDistributorId ? (
+                <div className="rounded-lg border border-dashed border-border bg-base/40 px-3 py-3 text-xs text-muted">
+                  먼저 Task Distributor를 선택하세요.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-violet-200">Required States</div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <PlanningVariableInput
+                        value={pendingPreconditionVariable}
+                        onChange={applyPendingPreconditionVariable}
+                        suggestions={planningVariableSuggestions}
+                        placeholder="state 변수 또는 {{resource.name}}_empty / {{agent.name}}_idle"
+                      />
+                      <select
+                        className="w-[88px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+                        value={pendingPreconditionOperator}
+                        onChange={(e) => setPendingPreconditionOperator(e.target.value as '==' | '!=')}
+                        disabled={!pendingPreconditionVariable}
+                      >
+                        <option value="==">==</option>
+                        <option value="!=">!=</option>
+                      </select>
+                      {(() => {
+                        if (pendingPreconditionStateVar?.type === 'bool') {
+                          return (
+                            <select
+                              className="w-[90px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+                              value={pendingPreconditionValue || 'true'}
+                              onChange={(e) => setPendingPreconditionValue(e.target.value)}
+                              disabled={!pendingPreconditionVariable}
+                            >
+                              <option value="true">true</option>
+                              <option value="false">false</option>
+                            </select>
+                          )
+                        }
+                        return (
+                          <input
+                            type={pendingPreconditionStateVar?.type === 'int' ? 'number' : 'text'}
+                            className="w-[120px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none disabled:opacity-40"
+                            value={pendingPreconditionValue}
+                            onChange={(e) => setPendingPreconditionValue(e.target.value)}
+                            disabled={!pendingPreconditionVariable}
+                          />
+                        )
+                      })()}
+                      <button
+                        onClick={handleAddPrecondition}
+                        disabled={!pendingPreconditionVariable}
+                        className="shrink-0 rounded bg-violet-500/20 px-3 py-2 text-sm text-violet-200 disabled:opacity-40"
+                      >
+                        추가
+                      </button>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(localPlanningTask.preconditions || []).length === 0 ? (
+                        <span className="text-xs text-muted">필요 상태 없음</span>
+                      ) : (localPlanningTask.preconditions || []).map((condition) => (
+                        <span
+                          key={condition.variable}
+                          className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-1 text-xs text-emerald-200"
+                        >
+                          {condition.variable} {condition.operator || '=='} {condition.value}
+                          <button onClick={() => handleDeletePrecondition(condition.variable)}>
+                            <X size={10} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-violet-200">Result States</div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <PlanningVariableInput
+                        value={pendingResultVariable}
+                        onChange={applyPendingResultVariable}
+                        suggestions={planningVariableSuggestions}
+                        placeholder="state 변수 또는 at_{{resource.name}} / {{agent.name}}_mode"
+                      />
+                      {(() => {
+                        if (pendingResultStateVar?.type === 'bool') {
+                          return (
+                            <select
+                              className="w-[90px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+                              value={pendingResultValue || 'true'}
+                              onChange={(e) => setPendingResultValue(e.target.value)}
+                              disabled={!pendingResultVariable}
+                            >
+                              <option value="true">true</option>
+                              <option value="false">false</option>
+                            </select>
+                          )
+                        }
+                        return (
+                          <input
+                            type={pendingResultStateVar?.type === 'int' ? 'number' : 'text'}
+                            className="w-[120px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none disabled:opacity-40"
+                            value={pendingResultValue}
+                            onChange={(e) => setPendingResultValue(e.target.value)}
+                            disabled={!pendingResultVariable}
+                          />
+                        )
+                      })()}
+                      <button
+                        onClick={handleAddResultState}
+                        disabled={!pendingResultVariable}
+                        className="shrink-0 rounded bg-violet-500/20 px-3 py-2 text-sm text-violet-200 disabled:opacity-40"
+                      >
+                        추가
+                      </button>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(localPlanningTask.result_states || []).length === 0 ? (
+                        <span className="text-xs text-muted">결과 상태 없음</span>
+                      ) : (localPlanningTask.result_states || []).map((effect) => (
+                        <span
+                          key={effect.variable}
+                          className="inline-flex items-center gap-1 rounded-full bg-violet-500/10 px-2 py-1 text-xs text-violet-200"
+                        >
+                          {effect.variable} = {effect.value}
+                          <button onClick={() => handleDeleteResultState(effect.variable)}>
+                            <X size={10} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-amber-200">Warning Result States</div>
+                    <p className="mb-2 text-[11px] text-secondary">
+                      액션 결과 메시지가 <span className="font-mono text-amber-200">w:</span> 로 시작하면 일반 Result States 대신 이 값을 적용합니다.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <PlanningVariableInput
+                        value={pendingWarningResultVariable}
+                        onChange={applyPendingWarningResultVariable}
+                        suggestions={planningVariableSuggestions}
+                        placeholder="warning 시 반영할 state 변수"
+                      />
+                      {(() => {
+                        if (pendingWarningResultStateVar?.type === 'bool') {
+                          return (
+                            <select
+                              className="w-[90px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+                              value={pendingWarningResultValue || 'true'}
+                              onChange={(e) => setPendingWarningResultValue(e.target.value)}
+                              disabled={!pendingWarningResultVariable}
+                            >
+                              <option value="true">true</option>
+                              <option value="false">false</option>
+                            </select>
+                          )
+                        }
+                        return (
+                          <input
+                            type={pendingWarningResultStateVar?.type === 'int' ? 'number' : 'text'}
+                            className="w-[120px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none disabled:opacity-40"
+                            value={pendingWarningResultValue}
+                            onChange={(e) => setPendingWarningResultValue(e.target.value)}
+                            disabled={!pendingWarningResultVariable}
+                          />
+                        )
+                      })()}
+                      <button
+                        onClick={handleAddWarningResultState}
+                        disabled={!pendingWarningResultVariable}
+                        className="shrink-0 rounded bg-amber-500/20 px-3 py-2 text-sm text-amber-200 disabled:opacity-40"
+                      >
+                        추가
+                      </button>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(localPlanningTask.warning_result_states || []).length === 0 ? (
+                        <span className="text-xs text-muted">warning 결과 상태 없음</span>
+                      ) : (localPlanningTask.warning_result_states || []).map((effect) => (
+                        <span
+                          key={effect.variable}
+                          className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-1 text-xs text-amber-200"
+                        >
+                          {effect.variable} = {effect.value}
+                          <button onClick={() => handleDeleteWarningResultState(effect.variable)}>
+                            <X size={10} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                    <div className="mt-3">
+                      <div className="mb-1 text-[11px] font-medium text-amber-200">Warning Message Variable</div>
+                      <PlanningVariableInput
+                        value={localPlanningTask.warning_message_variable || ''}
+                        onChange={(value) => setLocalPlanningTask((current) => ({
+                          ...current,
+                          warning_message_variable: value,
+                        }))}
+                        suggestions={planningVariableSuggestions}
+                        placeholder="예: {{resource.name}}_msg"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-red-300">Error Result States</div>
+                    <p className="mb-2 text-[11px] text-secondary">
+                      액션 결과 메시지가 <span className="font-mono text-red-300">e:</span> 로 시작하거나 error end로 종료되면 일반 Result States 대신 이 값을 적용합니다.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <PlanningVariableInput
+                        value={pendingErrorResultVariable}
+                        onChange={applyPendingErrorResultVariable}
+                        suggestions={planningVariableSuggestions}
+                        placeholder="error 시 반영할 state 변수"
+                      />
+                      {(() => {
+                        if (pendingErrorResultStateVar?.type === 'bool') {
+                          return (
+                            <select
+                              className="w-[90px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+                              value={pendingErrorResultValue || 'true'}
+                              onChange={(e) => setPendingErrorResultValue(e.target.value)}
+                              disabled={!pendingErrorResultVariable}
+                            >
+                              <option value="true">true</option>
+                              <option value="false">false</option>
+                            </select>
+                          )
+                        }
+                        return (
+                          <input
+                            type={pendingErrorResultStateVar?.type === 'int' ? 'number' : 'text'}
+                            className="w-[120px] shrink-0 rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none disabled:opacity-40"
+                            value={pendingErrorResultValue}
+                            onChange={(e) => setPendingErrorResultValue(e.target.value)}
+                            disabled={!pendingErrorResultVariable}
+                          />
+                        )
+                      })()}
+                      <button
+                        onClick={handleAddErrorResultState}
+                        disabled={!pendingErrorResultVariable}
+                        className="shrink-0 rounded bg-red-500/20 px-3 py-2 text-sm text-red-300 disabled:opacity-40"
+                      >
+                        추가
+                      </button>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(localPlanningTask.error_result_states || []).length === 0 ? (
+                        <span className="text-xs text-muted">error 결과 상태 없음</span>
+                      ) : (localPlanningTask.error_result_states || []).map((effect) => (
+                        <span
+                          key={effect.variable}
+                          className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-1 text-xs text-red-300"
+                        >
+                          {effect.variable} = {effect.value}
+                          <button onClick={() => handleDeleteErrorResultState(effect.variable)}>
+                            <X size={10} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                    <div className="mt-3">
+                      <div className="mb-1 text-[11px] font-medium text-red-300">Error Message Variable</div>
+                      <PlanningVariableInput
+                        value={localPlanningTask.error_message_variable || ''}
+                        onChange={(value) => setLocalPlanningTask((current) => ({
+                          ...current,
+                          error_message_variable: value,
+                        }))}
+                        suggestions={planningVariableSuggestions}
+                        placeholder="예: {{agent.name}}_msg"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <Lock size={14} className="text-amber-300" />
+                <span className="text-sm font-semibold text-amber-200">Required Resources</span>
+              </div>
+              <p className="mb-3 text-xs leading-5 text-secondary">
+                이 태스크가 실행될 때 planner가 점유 충돌을 피해야 하는 resource입니다. 지금은 step별 acquire/release 대신 <strong className="text-amber-200">task 전체 단위</strong>로 간단하게 설정합니다.
+                <br />
+                고정 태스크면 특정 instance를 바로 선택해도 되고, 여러 CNC/충전기에 재사용할 generic 태스크를 만들 때만 <strong className="text-amber-200">[TYPE]</strong> resource를 선택하면 됩니다.
+                <br />
+                실행 시 Action goal 파라미터에서는 <span className="font-mono text-amber-200">{'${resource_name}'}</span> 또는 <span className="font-mono text-amber-200">{'${resource.name}'}</span> 로 선택된 resource 이름을 사용할 수 있습니다.
+                <span className="ml-1">agent 바인딩은 <span className="font-mono text-amber-200">{'${agent_name}'}</span>, <span className="font-mono text-amber-200">{'${agent.name}'}</span> 로 사용할 수 있습니다.</span>
+              </p>
+
+              {!selectedDistributorId ? (
+                <div className="rounded-lg border border-dashed border-border bg-base/40 px-3 py-3 text-xs text-muted">
+                  먼저 Task Distributor를 선택하세요.
+                </div>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      className="min-w-0 flex-[1_1_220px] rounded border border-border bg-base px-3 py-2 text-sm text-primary outline-none"
+                      value={pendingResourceToken}
+                      onChange={(e) => setPendingResourceToken(e.target.value)}
+                    >
+                      <option value="">resource 선택</option>
+                      {distributorResources.map((resource) => {
+                        const token = `${resource.kind === 'type' ? 'type' : 'instance'}:${resource.id}`
+                        return (
+                          <option key={token} value={token}>
+                            {resource.kind === 'type' ? `[TYPE] ${resource.name}` : resource.name}
+                          </option>
+                        )
+                      })}
+                    </select>
+                    <button
+                      onClick={handleAddRequiredResource}
+                      disabled={!pendingResourceToken}
+                      className="shrink-0 rounded bg-amber-500/20 px-3 py-2 text-sm text-amber-200 disabled:opacity-40"
+                    >
+                      추가
+                    </button>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {(localPlanningTask.required_resources || []).length === 0 ? (
+                      <span className="text-xs text-muted">required resource 없음</span>
+                    ) : (localPlanningTask.required_resources || []).map((token) => (
+                      <span
+                        key={token}
+                        className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-1 text-xs text-amber-200"
+                      >
+                        {formatPlanningResourceToken(token, distributorResources)}
+                        <button onClick={() => handleDeleteRequiredResource(token)}>
+                          <X size={10} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-primary bg-base/40 p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <Server size={14} className="text-primary" />
+                <span className="text-sm font-semibold text-primary">Available Variables / Resources</span>
+              </div>
+              <p className="mb-3 text-xs leading-5 text-secondary">
+                아래 목록은 현재 선택한 Task Distributor가 제공하는 변수와 resource입니다. description이 있으면 함께 표시합니다.
+              </p>
+
+              <div className="grid gap-3 lg:grid-cols-3">
+                <div className="rounded-lg border border-violet-500/15 bg-violet-500/5 p-3">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-wider text-violet-300">States</div>
+                  <div className="space-y-2">
+                    {distributorStates.length === 0 ? (
+                      <div className="text-xs text-muted">state 없음</div>
+                    ) : distributorStates.map((stateVar) => (
+                      <div key={stateVar.id} className="rounded border border-violet-500/15 bg-base/50 px-2 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-medium text-violet-200">{stateVar.name}</span>
+                          <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] text-violet-200">{stateVar.type}</span>
+                        </div>
+                        <div className="mt-1 text-[11px] text-secondary">
+                          기본값: <span className="text-primary">{stateVar.initial_value || '(empty)'}</span>
+                        </div>
+                        {stateVar.description && (
+                          <div className="mt-1 text-[11px] leading-5 text-secondary">{stateVar.description}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-emerald-500/15 bg-emerald-500/5 p-3">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-wider text-emerald-300">Agents / Placeholders</div>
+                  <div className="space-y-2">
+                    <div className="rounded border border-emerald-500/20 bg-base/50 px-2 py-2">
+                      <div className="text-[11px] font-medium text-emerald-200">{'{{agent.name}}'}</div>
+                      <div className="mt-1 text-[10px] text-secondary">선택된 실행 agent의 이름으로 치환</div>
+                    </div>
+                    <div className="rounded border border-emerald-500/20 bg-base/50 px-2 py-2">
+                      <div className="text-[11px] font-medium text-emerald-200">{'{{agent.id}}'}</div>
+                      <div className="mt-1 text-[10px] text-secondary">선택된 실행 agent의 ID로 치환</div>
+                    </div>
+                    <div className="rounded border border-emerald-500/20 bg-base/50 px-2 py-2">
+                      <div className="text-[11px] font-medium text-emerald-200">{'{{agent}}'}</div>
+                      <div className="mt-1 text-[10px] text-secondary">{'{{agent.name}}'}와 동일</div>
+                    </div>
+                    <div className="pt-1">
+                      {planningAgents.length === 0 ? (
+                        <div className="text-xs text-muted">agent 없음</div>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {planningAgents.map(agent => (
+                            <span key={`pddl-agent-${agent.id}`} className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-200">
+                              {agent.name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-amber-500/15 bg-amber-500/5 p-3">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-wider text-amber-300">Resources</div>
+                  <div className="space-y-2">
+                    {distributorResources.length === 0 ? (
+                      <div className="text-xs text-muted">resource 없음</div>
+                    ) : distributorResources.map((resource) => (
+                      <div key={resource.id} className="rounded border border-amber-500/15 bg-base/50 px-2 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-medium text-amber-200">{resource.name}</span>
+                          <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-200">
+                            {resource.kind === 'type' ? 'type' : 'instance'}
+                          </span>
+                        </div>
+                        {resource.description && (
+                          <div className="mt-1 text-[11px] leading-5 text-secondary">{resource.description}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-3 border-t border-primary px-6 py-4">
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-primary px-4 py-2 text-sm text-secondary transition-colors hover:bg-elevated hover:text-primary"
+          >
+            닫기
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={isSaving || (!!selectedDistributorId && !selectedDistributorFull)}
+            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Save size={14} />
+            {isSaving ? '저장 중...' : '저장'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function CreateTemplateModal({
   onClose,
   onCreated,
@@ -3684,7 +5205,7 @@ function CreateTemplateModal({
       description: data.description || undefined,
       steps: [],
     }),
-    onSuccess: () => onCreated(formData.id),
+    onSuccess: (created) => onCreated(created.id),
     onError: (err: any) => setError(err.response?.data?.detail || '태스크 생성에 실패했습니다'),
   })
 
@@ -3759,6 +5280,126 @@ function CreateTemplateModal({
               className="px-6 py-2 bg-blue-600 text-primary rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
               {createTemplate.isPending ? '생성 중...' : '태스크 생성'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function RenameTemplateIdentityModal({
+  template,
+  onClose,
+  onRenamed,
+}: {
+  template: ActionGraph
+  onClose: () => void
+  onRenamed: (newId: string) => void
+}) {
+  const [formData, setFormData] = useState({
+    id: template.id,
+    name: template.name || '',
+  })
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    setFormData({
+      id: template.id,
+      name: template.name || '',
+    })
+    setError('')
+  }, [template.id, template.name])
+
+  const renameTemplate = useMutation({
+    mutationFn: (data: { id: string; name: string }) =>
+      templateApi.updateIdentity(template.id, {
+        new_id: data.id,
+        new_name: data.name,
+      }),
+    onSuccess: (updated) => {
+      onRenamed(updated.id)
+    },
+    onError: (err: any) => {
+      setError(
+        err?.response?.data?.detail ||
+        err?.response?.data?.error ||
+        '태스크 이름/ID 수정에 실패했습니다'
+      )
+    },
+  })
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+      <div className="bg-surface rounded-xl shadow-2xl w-full max-w-md border border-primary">
+        <div className="px-6 py-4 border-b border-primary flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-primary">태스크 이름/ID 수정</h2>
+          <button onClick={onClose} className="text-muted hover:text-primary">
+            <X size={20} />
+          </button>
+        </div>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            const trimmedID = formData.id.trim()
+            const trimmedName = formData.name.trim()
+            if (!trimmedID || !trimmedName) {
+              setError('태스크 ID와 이름은 필수입니다')
+              return
+            }
+            if (trimmedID === template.id && trimmedName === template.name) {
+              onClose()
+              return
+            }
+            renameTemplate.mutate({ id: trimmedID, name: trimmedName })
+          }}
+          className="p-6 space-y-4"
+        >
+          {error && (
+            <div className="p-3 bg-red-500/20 border border-red-500/50 rounded-lg text-red-400 text-sm">
+              {error}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium text-primary mb-1">태스크 ID</label>
+            <input
+              type="text"
+              value={formData.id}
+              onChange={(e) => setFormData(prev => ({ ...prev, id: e.target.value }))}
+              className="w-full px-3 py-2 bg-elevated border border-primary rounded-lg text-primary placeholder-gray-600"
+              placeholder="예: go_to_cnc_and_park"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-primary mb-1">태스크 이름</label>
+            <input
+              type="text"
+              value={formData.name}
+              onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+              className="w-full px-3 py-2 bg-elevated border border-primary rounded-lg text-primary placeholder-gray-600"
+              placeholder="예: Go to CNC and Park"
+              required
+            />
+          </div>
+
+          <div className="text-xs text-muted p-2 bg-elevated/60 rounded border border-primary/60">
+            ID를 변경하면 기존 할당/실행 참조도 함께 업데이트됩니다. 이미 배포된 그래프는
+            다시 배포(outdated) 상태가 될 수 있습니다.
+          </div>
+
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-secondary hover:text-primary">
+              취소
+            </button>
+            <button
+              type="submit"
+              disabled={renameTemplate.isPending}
+              className="px-6 py-2 bg-blue-600 text-primary rounded-lg hover:bg-blue-700 disabled:opacity-50"
+            >
+              {renameTemplate.isPending ? '수정 중...' : '저장'}
             </button>
           </div>
         </form>

@@ -1,0 +1,547 @@
+{
+  "version": 1,
+  "exported_at": "2026-03-20T00:00:00Z",
+  "distributor": {
+    "name": "worker_slot_charge_reserved_handoff",
+    "description": "Worker-slot profile with charger reservation handoff: two workers keep working, non-worker stays at charger, low-battery worker releases slot and the charging standby robot takes over."
+  },
+  "state_merge_policies": [
+    {
+      "pattern": "{{agent.name}}_location",
+      "priority": "live"
+    },
+    {
+      "pattern": "{{agent.name}}_battery_*",
+      "priority": "live"
+    },
+    {
+      "pattern": "{{resource.name}}_status",
+      "priority": "live"
+    },
+    {
+      "pattern": "{{agent.name}}_status",
+      "priority": "planner"
+    },
+    {
+      "pattern": "{{agent.name}}_mode",
+      "priority": "planner"
+    },
+    {
+      "pattern": "{{agent.name}}_worker_slot",
+      "priority": "planner"
+    },
+    {
+      "pattern": "{{resource.name}}_reserved_by",
+      "priority": "planner"
+    },
+    {
+      "pattern": "{{agent.name}}_*msg*",
+      "priority": "planner"
+    },
+    {
+      "pattern": "{{resource.name}}_*msg*",
+      "priority": "planner"
+    }
+  ],
+  "states": [
+    {
+      "name": "agent001_status",
+      "type": "string",
+      "initial_value": "idle"
+    },
+    {
+      "name": "agent001_location",
+      "type": "string",
+      "initial_value": "none"
+    },
+    {
+      "name": "agent001_battery_low",
+      "type": "bool",
+      "initial_value": "false"
+    },
+    {
+      "name": "agent001_worker_slot",
+      "type": "string",
+      "initial_value": "worker_slot01"
+    },
+    {
+      "name": "agent001_msg",
+      "type": "string",
+      "initial_value": ""
+    },
+    {
+      "name": "agent002_status",
+      "type": "string",
+      "initial_value": "idle"
+    },
+    {
+      "name": "agent002_location",
+      "type": "string",
+      "initial_value": "none"
+    },
+    {
+      "name": "agent002_battery_low",
+      "type": "bool",
+      "initial_value": "false"
+    },
+    {
+      "name": "agent002_worker_slot",
+      "type": "string",
+      "initial_value": "worker_slot02"
+    },
+    {
+      "name": "agent002_msg",
+      "type": "string",
+      "initial_value": ""
+    },
+    {
+      "name": "agent003_status",
+      "type": "string",
+      "initial_value": "idle"
+    },
+    {
+      "name": "agent003_location",
+      "type": "string",
+      "initial_value": "charger01"
+    },
+    {
+      "name": "agent003_battery_low",
+      "type": "bool",
+      "initial_value": "false"
+    },
+    {
+      "name": "agent003_worker_slot",
+      "type": "string",
+      "initial_value": "none"
+    },
+    {
+      "name": "agent003_msg",
+      "type": "string",
+      "initial_value": ""
+    },
+    {
+      "name": "cnc01_status",
+      "type": "string",
+      "initial_value": "idle"
+    },
+    {
+      "name": "cnc01_reserved_by",
+      "type": "string",
+      "initial_value": "none"
+    },
+    {
+      "name": "cnc01_msg",
+      "type": "string",
+      "initial_value": ""
+    },
+    {
+      "name": "cnc02_status",
+      "type": "string",
+      "initial_value": "idle"
+    },
+    {
+      "name": "cnc02_reserved_by",
+      "type": "string",
+      "initial_value": "none"
+    },
+    {
+      "name": "cnc02_msg",
+      "type": "string",
+      "initial_value": ""
+    },
+    {
+      "name": "cnc03_status",
+      "type": "string",
+      "initial_value": "idle"
+    },
+    {
+      "name": "cnc03_reserved_by",
+      "type": "string",
+      "initial_value": "none"
+    },
+    {
+      "name": "cnc03_msg",
+      "type": "string",
+      "initial_value": ""
+    },
+    {
+      "name": "worker_slot01_reserved_by",
+      "type": "string",
+      "initial_value": "agent001"
+    },
+    {
+      "name": "worker_slot02_reserved_by",
+      "type": "string",
+      "initial_value": "agent002"
+    },
+    {
+      "name": "charger01_reserved_by",
+      "type": "string",
+      "initial_value": "agent003"
+    },
+    {
+      "name": "charger01_msg",
+      "type": "string",
+      "initial_value": ""
+    }
+  ],
+  "resources": [
+    {
+      "name": "cnc0",
+      "kind": "type"
+    },
+    {
+      "name": "cnc01",
+      "kind": "instance",
+      "parent_name": "cnc0"
+    },
+    {
+      "name": "cnc02",
+      "kind": "instance",
+      "parent_name": "cnc0"
+    },
+    {
+      "name": "cnc03",
+      "kind": "instance",
+      "parent_name": "cnc0"
+    },
+    {
+      "name": "charger",
+      "kind": "type"
+    },
+    {
+      "name": "charger01",
+      "kind": "instance",
+      "parent_name": "charger"
+    },
+    {
+      "name": "worker_slot",
+      "kind": "type"
+    },
+    {
+      "name": "worker_slot01",
+      "kind": "instance",
+      "parent_name": "worker_slot"
+    },
+    {
+      "name": "worker_slot02",
+      "kind": "instance",
+      "parent_name": "worker_slot"
+    }
+  ],
+  "selected_tasks": [
+    {
+      "name": "claim worker slot"
+    },
+    {
+      "name": "release worker slot"
+    },
+    {
+      "name": "go to charger and dock"
+    },
+    {
+      "name": "go to cnc and park"
+    },
+    {
+      "name": "run cnc service cycle 01"
+    },
+    {
+      "name": "run cnc service cycle 02"
+    }
+  ],
+  "selected_agents": [
+    {
+      "name": "agent001"
+    },
+    {
+      "name": "agent002"
+    },
+    {
+      "name": "agent003"
+    }
+  ],
+  "initial_state": {
+    "agent001_status": "idle",
+    "agent001_location": "none",
+    "agent001_battery_low": "false",
+    "agent001_worker_slot": "worker_slot01",
+    "agent001_msg": "",
+    "agent002_status": "idle",
+    "agent002_location": "none",
+    "agent002_battery_low": "false",
+    "agent002_worker_slot": "worker_slot02",
+    "agent002_msg": "",
+    "agent003_status": "idle",
+    "agent003_location": "charger01",
+    "agent003_battery_low": "false",
+    "agent003_worker_slot": "none",
+    "agent003_msg": "",
+    "cnc01_status": "idle",
+    "cnc01_reserved_by": "none",
+    "cnc01_msg": "",
+    "cnc02_status": "idle",
+    "cnc02_reserved_by": "none",
+    "cnc02_msg": "",
+    "cnc03_status": "idle",
+    "cnc03_reserved_by": "none",
+    "cnc03_msg": "",
+    "worker_slot01_reserved_by": "agent001",
+    "worker_slot02_reserved_by": "agent002",
+    "charger01_reserved_by": "agent003",
+    "charger01_msg": ""
+  },
+  "goal_state": {},
+  "realtime": {
+    "tick_interval_sec": 2,
+    "goals": [
+      {
+        "id": "release_slot_when_worker_low",
+        "name": "release slot when worker low",
+        "priority": 10,
+        "enabled": true,
+        "resource_type_ids": [
+          "worker_slot"
+        ],
+        "activation_conditions": [
+          {
+            "variable": "{{agent.name}}_status",
+            "operator": "==",
+            "value": "idle"
+          },
+          {
+            "variable": "{{agent.name}}_battery_low",
+            "operator": "==",
+            "value": "true"
+          },
+          {
+            "variable": "{{agent.name}}_worker_slot",
+            "operator": "==",
+            "value": "{{resource.name}}"
+          },
+          {
+            "variable": "{{resource.name}}_reserved_by",
+            "operator": "==",
+            "value": "{{agent.name}}"
+          }
+        ],
+        "goal_state": {
+          "{{agent.name}}_worker_slot": "none"
+        }
+      },
+      {
+        "id": "claim_slot_when_available",
+        "name": "claim slot when available",
+        "priority": 20,
+        "enabled": true,
+        "resource_type_ids": [
+          "worker_slot"
+        ],
+        "activation_conditions": [
+          {
+            "variable": "{{agent.name}}_status",
+            "operator": "==",
+            "value": "idle"
+          },
+          {
+            "variable": "{{agent.name}}_battery_low",
+            "operator": "==",
+            "value": "false"
+          },
+          {
+            "variable": "{{agent.name}}_worker_slot",
+            "operator": "==",
+            "value": "none"
+          },
+          {
+            "variable": "{{resource.name}}_reserved_by",
+            "operator": "==",
+            "value": "none"
+          }
+        ],
+        "goal_state": {
+          "{{agent.name}}_worker_slot": "{{resource.name}}"
+        }
+      },
+      {
+        "id": "done_to_idle_owned",
+        "name": "done to idle owned",
+        "priority": 30,
+        "enabled": true,
+        "resource_type_ids": [
+          "cnc0"
+        ],
+        "activation_conditions": [
+          {
+            "variable": "{{agent.name}}_status",
+            "operator": "==",
+            "value": "idle"
+          },
+          {
+            "variable": "{{agent.name}}_worker_slot",
+            "operator": "!=",
+            "value": "none"
+          },
+          {
+            "variable": "{{agent.name}}_location",
+            "operator": "==",
+            "value": "{{resource.name}}"
+          },
+          {
+            "variable": "{{resource.name}}_reserved_by",
+            "operator": "==",
+            "value": "{{agent.name}}"
+          },
+          {
+            "variable": "{{resource.name}}_status",
+            "operator": "==",
+            "value": "done"
+          }
+        ],
+        "goal_state": {
+          "{{resource.name}}_status": "idle"
+        }
+      },
+      {
+        "id": "done_to_idle_free",
+        "name": "done to idle free",
+        "priority": 40,
+        "enabled": true,
+        "resource_type_ids": [
+          "cnc0"
+        ],
+        "activation_conditions": [
+          {
+            "variable": "{{agent.name}}_status",
+            "operator": "==",
+            "value": "idle"
+          },
+          {
+            "variable": "{{agent.name}}_worker_slot",
+            "operator": "!=",
+            "value": "none"
+          },
+          {
+            "variable": "{{resource.name}}_reserved_by",
+            "operator": "==",
+            "value": "none"
+          },
+          {
+            "variable": "{{resource.name}}_status",
+            "operator": "==",
+            "value": "done"
+          }
+        ],
+        "goal_state": {
+          "{{resource.name}}_status": "idle"
+        }
+      },
+      {
+        "id": "idle_to_running_owned",
+        "name": "idle to running owned",
+        "priority": 50,
+        "enabled": true,
+        "resource_type_ids": [
+          "cnc0"
+        ],
+        "activation_conditions": [
+          {
+            "variable": "{{agent.name}}_status",
+            "operator": "==",
+            "value": "idle"
+          },
+          {
+            "variable": "{{agent.name}}_worker_slot",
+            "operator": "!=",
+            "value": "none"
+          },
+          {
+            "variable": "{{agent.name}}_location",
+            "operator": "==",
+            "value": "{{resource.name}}"
+          },
+          {
+            "variable": "{{resource.name}}_reserved_by",
+            "operator": "==",
+            "value": "{{agent.name}}"
+          },
+          {
+            "variable": "{{resource.name}}_status",
+            "operator": "==",
+            "value": "idle"
+          }
+        ],
+        "goal_state": {
+          "{{resource.name}}_status": "running"
+        }
+      },
+      {
+        "id": "idle_to_running_free",
+        "name": "idle to running free",
+        "priority": 60,
+        "enabled": true,
+        "resource_type_ids": [
+          "cnc0"
+        ],
+        "activation_conditions": [
+          {
+            "variable": "{{agent.name}}_status",
+            "operator": "==",
+            "value": "idle"
+          },
+          {
+            "variable": "{{agent.name}}_worker_slot",
+            "operator": "!=",
+            "value": "none"
+          },
+          {
+            "variable": "{{resource.name}}_reserved_by",
+            "operator": "==",
+            "value": "none"
+          },
+          {
+            "variable": "{{resource.name}}_status",
+            "operator": "==",
+            "value": "idle"
+          }
+        ],
+        "goal_state": {
+          "{{resource.name}}_status": "running"
+        }
+      },
+      {
+        "id": "park_non_worker_at_charger",
+        "name": "park non-worker at charger",
+        "priority": 90,
+        "enabled": true,
+        "resource_type_ids": [
+          "charger"
+        ],
+        "activation_conditions": [
+          {
+            "variable": "{{agent.name}}_status",
+            "operator": "==",
+            "value": "idle"
+          },
+          {
+            "variable": "{{agent.name}}_worker_slot",
+            "operator": "==",
+            "value": "none"
+          },
+          {
+            "variable": "{{agent.name}}_location",
+            "operator": "!=",
+            "value": "{{resource.name}}"
+          },
+          {
+            "variable": "{{resource.name}}_reserved_by",
+            "operator": "==",
+            "value": "none"
+          }
+        ],
+        "goal_state": {
+          "{{agent.name}}_location": "{{resource.name}}"
+        }
+      }
+    ]
+  }
+}

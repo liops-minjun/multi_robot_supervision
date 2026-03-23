@@ -29,37 +29,56 @@ const (
 
 // StepExecutionStatus tracks execution of a single task assignment within a plan.
 type StepExecutionStatus struct {
-	TaskID        string     `json:"task_id"`
-	TaskName      string     `json:"task_name,omitempty"`
-	RuntimeTaskID string     `json:"runtime_task_id,omitempty"`
-	StepID        string     `json:"step_id"`
-	StepName      string     `json:"step_name"`
-	AgentID       string     `json:"agent_id"`
-	AgentName     string     `json:"agent_name"`
-	Order         int        `json:"order"`
-	Status        TaskStatus `json:"status"`
-	StartedAt     time.Time  `json:"started_at,omitempty"`
-	EndedAt       time.Time  `json:"ended_at,omitempty"`
-	Error         string     `json:"error,omitempty"`
+	TaskID         string     `json:"task_id"`
+	TaskName       string     `json:"task_name,omitempty"`
+	BehaviorTreeID string     `json:"behavior_tree_id,omitempty"`
+	RuntimeTaskID  string     `json:"runtime_task_id,omitempty"`
+	StepID         string     `json:"step_id"`
+	StepName       string     `json:"step_name"`
+	AgentID        string     `json:"agent_id"`
+	AgentName      string     `json:"agent_name"`
+	Order          int        `json:"order"`
+	Status         TaskStatus `json:"status"`
+	StartedAt      time.Time  `json:"started_at,omitempty"`
+	EndedAt        time.Time  `json:"ended_at,omitempty"`
+	Error          string     `json:"error,omitempty"`
 }
 
 // PlanExecution represents a running plan execution
 type PlanExecution struct {
-	ID             string                          `json:"id"`
-	ProblemID      string                          `json:"problem_id"`
-	BehaviorTreeID string                          `json:"behavior_tree_id"`
-	Status         PlanExecutionStatus             `json:"status"`
-	CurrentOrder   int                             `json:"current_order"`
-	TotalOrders    int                             `json:"total_orders"`
-	StepStatuses   map[string]*StepExecutionStatus `json:"step_statuses"`
-	StartedAt      time.Time                       `json:"started_at"`
-	CompletedAt    time.Time                       `json:"completed_at,omitempty"`
-	Error          string                          `json:"error,omitempty"`
+	ID              string                          `json:"id"`
+	ProblemID       string                          `json:"problem_id"`
+	BehaviorTreeID  string                          `json:"behavior_tree_id"`
+	BehaviorTreeIDs []string                        `json:"behavior_tree_ids,omitempty"`
+	Status          PlanExecutionStatus             `json:"status"`
+	CurrentOrder    int                             `json:"current_order"`
+	TotalOrders     int                             `json:"total_orders"`
+	StepStatuses    map[string]*StepExecutionStatus `json:"step_statuses"`
+	StartedAt       time.Time                       `json:"started_at"`
+	CompletedAt     time.Time                       `json:"completed_at,omitempty"`
+	Error           string                          `json:"error,omitempty"`
 
 	// Internal
 	orderGroups [][]pddl.TaskAssignment
 	cancelFunc  context.CancelFunc
 	mu          sync.RWMutex
+
+	persistProblemStatus   bool
+	runtimeInitialState    map[string]string
+	runtimeTaskDistributor string
+}
+
+type taskResultMessageClass string
+
+const (
+	taskResultMessageNone    taskResultMessageClass = "none"
+	taskResultMessageWarning taskResultMessageClass = "warning"
+	taskResultMessageError   taskResultMessageClass = "error"
+)
+
+type taskCompletionOutcome struct {
+	Status  TaskStatus
+	Message string
 }
 
 // PlanExecutor orchestrates PDDL plan execution
@@ -85,12 +104,49 @@ func NewPlanExecutor(scheduler *Scheduler, stateManager *state.GlobalStateManage
 }
 
 // StartPlanExecution starts executing a solved plan
-func (pe *PlanExecutor) StartPlanExecution(ctx context.Context, problemID, behaviorTreeID string, plan *pddl.Plan) (string, error) {
+func (pe *PlanExecutor) StartPlanExecution(ctx context.Context, problemID string, behaviorTreeIDs []string, plan *pddl.Plan) (string, error) {
+	return pe.startPlanExecution(ctx, problemID, behaviorTreeIDs, plan, true, nil, "")
+}
+
+// StartRuntimePlanExecution starts an execution that is managed in-memory by the
+// server instead of a persisted PlanningProblem row.
+func (pe *PlanExecutor) StartRuntimePlanExecution(
+	ctx context.Context,
+	problemID string,
+	behaviorTreeIDs []string,
+	taskDistributorID string,
+	initialState map[string]string,
+	plan *pddl.Plan,
+) (string, error) {
+	return pe.startPlanExecution(ctx, problemID, behaviorTreeIDs, plan, false, initialState, taskDistributorID)
+}
+
+func (pe *PlanExecutor) startPlanExecution(
+	ctx context.Context,
+	problemID string,
+	behaviorTreeIDs []string,
+	plan *pddl.Plan,
+	persistProblemStatus bool,
+	initialState map[string]string,
+	taskDistributorID string,
+) (string, error) {
 	if !plan.IsValid {
 		return "", fmt.Errorf("plan is not valid: %s", plan.ErrorMessage)
 	}
 	if len(plan.Assignments) == 0 {
 		return "", fmt.Errorf("plan has no assignments")
+	}
+	if len(behaviorTreeIDs) == 0 {
+		for _, assignment := range plan.Assignments {
+			if assignment.BehaviorTreeID != "" {
+				behaviorTreeIDs = append(behaviorTreeIDs, assignment.BehaviorTreeID)
+			}
+		}
+	}
+	behaviorTreeIDs = uniqueStrings(behaviorTreeIDs)
+	primaryBehaviorTreeID := ""
+	if len(behaviorTreeIDs) > 0 {
+		primaryBehaviorTreeID = behaviorTreeIDs[0]
 	}
 
 	// Group assignments by order
@@ -116,14 +172,15 @@ func (pe *PlanExecutor) StartPlanExecution(ctx context.Context, problemID, behav
 	stepStatuses := make(map[string]*StepExecutionStatus, len(plan.Assignments))
 	for _, a := range plan.Assignments {
 		stepStatuses[a.TaskID] = &StepExecutionStatus{
-			TaskID:    a.TaskID,
-			TaskName:  a.TaskName,
-			StepID:    a.StepID,
-			StepName:  a.StepName,
-			AgentID:   a.AgentID,
-			AgentName: a.AgentName,
-			Order:     a.Order,
-			Status:    TaskPending,
+			TaskID:         a.TaskID,
+			TaskName:       a.TaskName,
+			BehaviorTreeID: a.BehaviorTreeID,
+			StepID:         a.StepID,
+			StepName:       a.StepName,
+			AgentID:        a.AgentID,
+			AgentName:      a.AgentName,
+			Order:          a.Order,
+			Status:         TaskPending,
 		}
 	}
 
@@ -131,16 +188,20 @@ func (pe *PlanExecutor) StartPlanExecution(ctx context.Context, problemID, behav
 	execCtx, cancel := context.WithCancel(ctx)
 
 	execution := &PlanExecution{
-		ID:             execID,
-		ProblemID:      problemID,
-		BehaviorTreeID: behaviorTreeID,
-		Status:         PlanExecPending,
-		CurrentOrder:   0,
-		TotalOrders:    maxOrder + 1,
-		StepStatuses:   stepStatuses,
-		StartedAt:      time.Now(),
-		orderGroups:    groups,
-		cancelFunc:     cancel,
+		ID:                     execID,
+		ProblemID:              problemID,
+		BehaviorTreeID:         primaryBehaviorTreeID,
+		BehaviorTreeIDs:        append([]string{}, behaviorTreeIDs...),
+		Status:                 PlanExecPending,
+		CurrentOrder:           0,
+		TotalOrders:            maxOrder + 1,
+		StepStatuses:           stepStatuses,
+		StartedAt:              time.Now(),
+		orderGroups:            groups,
+		cancelFunc:             cancel,
+		persistProblemStatus:   persistProblemStatus,
+		runtimeInitialState:    cloneStringMap(initialState),
+		runtimeTaskDistributor: strings.TrimSpace(taskDistributorID),
 	}
 
 	pe.mu.Lock()
@@ -160,43 +221,35 @@ func (pe *PlanExecutor) runPlanExecution(ctx context.Context, exec *PlanExecutio
 	exec.mu.Unlock()
 	pe.broadcastPlanUpdate(exec)
 
-	bt, err := pe.repo.GetBehaviorTree(exec.BehaviorTreeID)
-	if err != nil {
-		pe.failExecution(exec, fmt.Sprintf("failed to load behavior tree: %v", err))
-		return
+	behaviorTreeIDs := exec.BehaviorTreeIDs
+	if len(behaviorTreeIDs) == 0 && exec.BehaviorTreeID != "" {
+		behaviorTreeIDs = []string{exec.BehaviorTreeID}
 	}
-	if bt == nil {
-		pe.failExecution(exec, "behavior tree not found")
-		return
+	behaviorTrees := make(map[string]*db.BehaviorTree, len(behaviorTreeIDs))
+	for _, behaviorTreeID := range behaviorTreeIDs {
+		bt, err := pe.repo.GetBehaviorTree(behaviorTreeID)
+		if err != nil {
+			pe.failExecution(exec, fmt.Sprintf("failed to load behavior tree %q: %v", behaviorTreeID, err))
+			return
+		}
+		if bt == nil {
+			pe.failExecution(exec, fmt.Sprintf("behavior tree %q not found", behaviorTreeID))
+			return
+		}
+		behaviorTrees[behaviorTreeID] = bt
+	}
+	primaryBT := behaviorTrees[exec.BehaviorTreeID]
+	if primaryBT == nil {
+		for _, bt := range behaviorTrees {
+			primaryBT = bt
+			break
+		}
 	}
 
-	pp, err := pe.repo.GetPlanningProblem(exec.ProblemID)
-	if err != nil {
-		pe.failExecution(exec, fmt.Sprintf("failed to load planning problem: %v", err))
-		return
-	}
-	if pp == nil {
-		pe.failExecution(exec, "planning problem not found")
-		return
-	}
-
-	initialPlanningState, err := pe.buildInitialPlanningState(pp, bt)
+	initialPlanningState, selectedDistributorID, err := pe.resolvePlanningContext(exec, primaryBT)
 	if err != nil {
 		pe.failExecution(exec, fmt.Sprintf("failed to build planning state: %v", err))
 		return
-	}
-
-	taskSpec, err := pe.loadExecutionTaskSpec(bt)
-	if err != nil {
-		pe.failExecution(exec, fmt.Sprintf("failed to load task planning spec: %v", err))
-		return
-	}
-
-	selectedDistributorID := ""
-	if pp != nil && pp.TaskDistributorID.Valid && pp.TaskDistributorID.String != "" {
-		selectedDistributorID = pp.TaskDistributorID.String
-	} else if bt.TaskDistributorID.Valid && bt.TaskDistributorID.String != "" {
-		selectedDistributorID = bt.TaskDistributorID.String
 	}
 
 	// Initialize planning state
@@ -231,7 +284,7 @@ func (pe *PlanExecutor) runPlanExecution(ctx context.Context, exec *PlanExecutio
 			wg.Add(1)
 			go func(a pddl.TaskAssignment) {
 				defer wg.Done()
-				result := pe.dispatchStep(ctx, exec, a, taskSpec, selectedDistributorID)
+				result := pe.dispatchStep(ctx, exec, a, selectedDistributorID)
 				results <- result
 			}(assignment)
 		}
@@ -250,6 +303,11 @@ func (pe *PlanExecutor) runPlanExecution(ctx context.Context, exec *PlanExecutio
 			}
 		}
 
+		if ctx.Err() != nil {
+			pe.cancelExecution(exec)
+			return
+		}
+
 		if groupError != "" {
 			pe.failExecution(exec, groupError)
 			return
@@ -262,7 +320,9 @@ func (pe *PlanExecutor) runPlanExecution(ctx context.Context, exec *PlanExecutio
 	exec.CompletedAt = time.Now()
 	exec.mu.Unlock()
 
-	pe.repo.UpdatePlanningProblemStatus(exec.ProblemID, "completed", nil, "")
+	if exec.persistProblemStatus {
+		pe.repo.UpdatePlanningProblemStatus(exec.ProblemID, "completed", nil, "")
+	}
 	pe.broadcastPlanUpdate(exec)
 
 	log.Printf("[PlanExecutor] Plan execution %s completed successfully", exec.ID)
@@ -273,13 +333,42 @@ type stepDispatchResult struct {
 	err    error
 }
 
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
 // dispatchStep dispatches a single task to an agent and waits for completion.
-func (pe *PlanExecutor) dispatchStep(ctx context.Context, exec *PlanExecution, assignment pddl.TaskAssignment, taskSpec db.PlanningTaskSpec, taskDistributorID string) stepDispatchResult {
+func (pe *PlanExecutor) dispatchStep(ctx context.Context, exec *PlanExecution, assignment pddl.TaskAssignment, taskDistributorID string) stepDispatchResult {
 	stepStatus := exec.StepStatuses[assignment.TaskID]
+	behaviorTreeID := assignment.BehaviorTreeID
+	if behaviorTreeID == "" {
+		behaviorTreeID = exec.BehaviorTreeID
+	}
 
 	exec.mu.Lock()
 	stepStatus.Status = TaskRunning
 	stepStatus.StartedAt = time.Now()
+	stepStatus.BehaviorTreeID = behaviorTreeID
 	exec.mu.Unlock()
 	pe.broadcastPlanUpdate(exec)
 
@@ -291,8 +380,11 @@ func (pe *PlanExecutor) dispatchStep(ctx context.Context, exec *PlanExecution, a
 		taskParamLogicalTaskName:   assignment.TaskName,
 		taskParamTaskDistributorID: taskDistributorID,
 	}
+	for key, value := range assignment.RuntimeParams {
+		params[key] = value
+	}
 
-	taskID, err := pe.scheduler.StartTask(ctx, exec.BehaviorTreeID, assignment.AgentID, params)
+	taskID, err := pe.scheduler.StartTask(ctx, behaviorTreeID, assignment.AgentID, params)
 	if err != nil {
 		exec.mu.Lock()
 		stepStatus.Status = TaskFailed
@@ -309,15 +401,72 @@ func (pe *PlanExecutor) dispatchStep(ctx context.Context, exec *PlanExecution, a
 
 	// Wait for task completion
 	err = pe.waitForTask(ctx, taskID)
+	outcome := pe.resolveTaskCompletionOutcome(taskID, err)
+	messageClass, normalizedMessage := classifyTaskResultMessage(outcome.Message)
 
 	exec.mu.Lock()
 	stepStatus.EndedAt = time.Now()
 	if err != nil {
-		stepStatus.Status = TaskFailed
-		stepStatus.Error = err.Error()
+		rawMessage := strings.TrimSpace(outcome.Message)
+		errorMessage := normalizedMessage
+		if strings.TrimSpace(errorMessage) == "" {
+			errorMessage = rawMessage
+		}
+		baseEffects := clonePlanningEffects(assignment.ResultStates)
+		errorEffects := append(baseEffects, clonePlanningEffects(assignment.ErrorResultStates)...)
+		pe.applyPlanningEffects(exec.ProblemID, appendPlanningMessageEffect(
+			errorEffects,
+			assignment.ErrorMessageVariable,
+			errorMessage,
+		))
+		if ctx.Err() != nil || strings.Contains(strings.ToLower(err.Error()), "cancel") {
+			stepStatus.Status = TaskCancelled
+		} else {
+			stepStatus.Status = TaskFailed
+		}
+		if rawMessage != "" {
+			stepStatus.Error = rawMessage
+		} else if errorMessage != "" {
+			stepStatus.Error = errorMessage
+		} else {
+			stepStatus.Error = err.Error()
+		}
 	} else {
-		pe.applyPlanningEffects(exec.ProblemID, taskSpec)
-		stepStatus.Status = TaskCompleted
+		switch messageClass {
+		case taskResultMessageWarning:
+			baseEffects := clonePlanningEffects(assignment.ResultStates)
+			warningEffects := append(baseEffects, clonePlanningEffects(assignment.WarningResultStates)...)
+			pe.applyPlanningEffects(exec.ProblemID, appendPlanningMessageEffect(
+				warningEffects,
+				assignment.WarningMessageVariable,
+				normalizedMessage,
+			))
+			stepStatus.Status = TaskCompleted
+			if rawMessage := strings.TrimSpace(outcome.Message); rawMessage != "" {
+				stepStatus.Error = rawMessage
+			} else {
+				stepStatus.Error = normalizedMessage
+			}
+		case taskResultMessageError:
+			baseEffects := clonePlanningEffects(assignment.ResultStates)
+			errorEffects := append(baseEffects, clonePlanningEffects(assignment.ErrorResultStates)...)
+			pe.applyPlanningEffects(exec.ProblemID, appendPlanningMessageEffect(
+				errorEffects,
+				assignment.ErrorMessageVariable,
+				normalizedMessage,
+			))
+			stepStatus.Status = TaskFailed
+			if rawMessage := strings.TrimSpace(outcome.Message); rawMessage != "" {
+				stepStatus.Error = rawMessage
+			} else {
+				stepStatus.Error = normalizedMessage
+			}
+			err = fmt.Errorf("task error: %s", normalizedMessage)
+		default:
+			pe.applyPlanningEffects(exec.ProblemID, assignment.ResultStates)
+			stepStatus.Status = TaskCompleted
+			stepStatus.Error = ""
+		}
 	}
 	exec.mu.Unlock()
 	pe.broadcastPlanUpdate(exec)
@@ -337,7 +486,7 @@ func (pe *PlanExecutor) buildInitialPlanningState(
 
 	if pp != nil && pp.TaskDistributorID.Valid && pp.TaskDistributorID.String != "" {
 		selectedDistributorID = pp.TaskDistributorID.String
-	} else if bt.TaskDistributorID.Valid && bt.TaskDistributorID.String != "" {
+	} else if bt != nil && bt.TaskDistributorID.Valid && bt.TaskDistributorID.String != "" {
 		selectedDistributorID = bt.TaskDistributorID.String
 	}
 
@@ -351,7 +500,7 @@ func (pe *PlanExecutor) buildInitialPlanningState(
 				initial[stateVar.Name] = stateVar.InitialValue
 			}
 		}
-	} else if bt.PlanningStates != nil && len(bt.PlanningStates) > 0 {
+	} else if bt != nil && bt.PlanningStates != nil && len(bt.PlanningStates) > 0 {
 		var planningStates []db.PlanningStateVar
 		if err := json.Unmarshal(bt.PlanningStates, &planningStates); err != nil {
 			return nil, err
@@ -376,27 +525,74 @@ func (pe *PlanExecutor) buildInitialPlanningState(
 	return initial, nil
 }
 
-func (pe *PlanExecutor) loadExecutionTaskSpec(bt *db.BehaviorTree) (db.PlanningTaskSpec, error) {
-	if bt == nil {
-		return db.PlanningTaskSpec{}, fmt.Errorf("behavior tree is nil")
+func (pe *PlanExecutor) resolvePlanningContext(
+	exec *PlanExecution,
+	primaryBT *db.BehaviorTree,
+) (map[string]string, string, error) {
+	if exec == nil {
+		return nil, "", fmt.Errorf("execution is nil")
 	}
-	spec, err := db.DecodePlanningTaskSpec(bt.PlanningTask)
+
+	if len(exec.runtimeInitialState) > 0 || exec.runtimeTaskDistributor != "" || !exec.persistProblemStatus {
+		initial := cloneStringMap(exec.runtimeInitialState)
+		if initial == nil {
+			initial = map[string]string{}
+		}
+		selectedDistributorID := exec.runtimeTaskDistributor
+		if selectedDistributorID == "" && primaryBT != nil && primaryBT.TaskDistributorID.Valid && primaryBT.TaskDistributorID.String != "" {
+			selectedDistributorID = primaryBT.TaskDistributorID.String
+		}
+		return initial, selectedDistributorID, nil
+	}
+
+	pp, err := pe.repo.GetPlanningProblem(exec.ProblemID)
 	if err != nil {
-		return db.PlanningTaskSpec{}, err
+		return nil, "", err
 	}
-	if !spec.HasData() {
-		return db.PlanningTaskSpec{}, fmt.Errorf("behavior tree %q does not define task planning metadata", bt.ID)
+	if pp == nil {
+		return nil, "", fmt.Errorf("planning problem not found")
 	}
-	return spec, nil
+
+	initial, err := pe.buildInitialPlanningState(pp, primaryBT)
+	if err != nil {
+		return nil, "", err
+	}
+
+	selectedDistributorID := ""
+	if pp.TaskDistributorID.Valid && pp.TaskDistributorID.String != "" {
+		selectedDistributorID = pp.TaskDistributorID.String
+	} else if primaryBT != nil && primaryBT.TaskDistributorID.Valid && primaryBT.TaskDistributorID.String != "" {
+		selectedDistributorID = primaryBT.TaskDistributorID.String
+	}
+
+	return initial, selectedDistributorID, nil
 }
 
-func (pe *PlanExecutor) applyPlanningEffects(planID string, taskSpec db.PlanningTaskSpec) {
-	if len(taskSpec.ResultStates) == 0 {
+func (pe *PlanExecutor) loadExecutionTaskSpecs(behaviorTrees map[string]*db.BehaviorTree) (map[string]db.PlanningTaskSpec, error) {
+	taskSpecs := make(map[string]db.PlanningTaskSpec, len(behaviorTrees))
+	for behaviorTreeID, bt := range behaviorTrees {
+		if bt == nil {
+			return nil, fmt.Errorf("behavior tree %q is nil", behaviorTreeID)
+		}
+		spec, err := db.DecodePlanningTaskSpec(bt.PlanningTask)
+		if err != nil {
+			return nil, err
+		}
+		if !spec.HasData() {
+			return nil, fmt.Errorf("behavior tree %q does not define task planning metadata", bt.ID)
+		}
+		taskSpecs[behaviorTreeID] = spec
+	}
+	return taskSpecs, nil
+}
+
+func (pe *PlanExecutor) applyPlanningEffects(planID string, effectsInput []db.PlanningEffect) {
+	if len(effectsInput) == 0 {
 		return
 	}
 
-	effects := make(map[string]string, len(taskSpec.ResultStates))
-	for _, effect := range taskSpec.ResultStates {
+	effects := make(map[string]string, len(effectsInput))
+	for _, effect := range effectsInput {
 		if strings.TrimSpace(effect.Variable) == "" {
 			continue
 		}
@@ -405,6 +601,83 @@ func (pe *PlanExecutor) applyPlanningEffects(planID string, taskSpec db.Planning
 	if len(effects) > 0 {
 		pe.stateManager.UpdatePlanningState(planID, effects)
 	}
+}
+
+func appendPlanningMessageEffect(effectsInput []db.PlanningEffect, variable, message string) []db.PlanningEffect {
+	effects := clonePlanningEffects(effectsInput)
+	trimmedVariable := strings.TrimSpace(variable)
+	if trimmedVariable == "" {
+		return effects
+	}
+
+	trimmedMessage := strings.TrimSpace(message)
+	for i := range effects {
+		if strings.TrimSpace(effects[i].Variable) == trimmedVariable {
+			effects[i].Value = trimmedMessage
+			return effects
+		}
+	}
+
+	effects = append(effects, db.PlanningEffect{
+		Variable: trimmedVariable,
+		Value:    trimmedMessage,
+	})
+	return effects
+}
+
+func clonePlanningEffects(values []db.PlanningEffect) []db.PlanningEffect {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make([]db.PlanningEffect, len(values))
+	copy(cloned, values)
+	return cloned
+}
+
+func classifyTaskResultMessage(message string) (taskResultMessageClass, string) {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		return taskResultMessageNone, ""
+	}
+
+	if len(trimmed) >= 2 {
+		prefix := strings.ToLower(trimmed[:2])
+		payload := strings.TrimSpace(trimmed[2:])
+		switch prefix {
+		case "w:":
+			return taskResultMessageWarning, payload
+		case "e:":
+			return taskResultMessageError, payload
+		}
+	}
+
+	return taskResultMessageNone, trimmed
+}
+
+func (pe *PlanExecutor) resolveTaskCompletionOutcome(taskID string, fallbackErr error) taskCompletionOutcome {
+	if pe.scheduler != nil {
+		if task, exists := pe.scheduler.GetTask(taskID); exists && task != nil {
+			return taskCompletionOutcome{
+				Status:  task.Status,
+				Message: strings.TrimSpace(task.ErrorMessage),
+			}
+		}
+	}
+	if pe.repo != nil {
+		if dbTask, err := pe.repo.GetTask(taskID); err == nil && dbTask != nil {
+			return taskCompletionOutcome{
+				Status:  TaskStatus(strings.TrimSpace(dbTask.Status)),
+				Message: strings.TrimSpace(dbTask.ErrorMessage.String),
+			}
+		}
+	}
+	if fallbackErr != nil {
+		return taskCompletionOutcome{
+			Status:  TaskFailed,
+			Message: strings.TrimSpace(fallbackErr.Error()),
+		}
+	}
+	return taskCompletionOutcome{Status: TaskCompleted}
 }
 
 func (pe *PlanExecutor) updateResourceOccupancyState(planID, resourceID string, occupied bool) {
@@ -587,6 +860,7 @@ func (pe *PlanExecutor) resolveReleaseResourceToken(planID, agentID, token strin
 func (pe *PlanExecutor) waitForTask(ctx context.Context, taskID string) error {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+	missingCount := 0
 
 	for {
 		select {
@@ -601,8 +875,13 @@ func (pe *PlanExecutor) waitForTask(ctx context.Context, taskID string) error {
 					return fmt.Errorf("failed to check task status: %v", err)
 				}
 				if dbTask == nil {
-					return fmt.Errorf("task %s not found", taskID)
+					missingCount++
+					if missingCount >= 20 {
+						return fmt.Errorf("task %s not found", taskID)
+					}
+					continue
 				}
+				missingCount = 0
 				switch dbTask.Status {
 				case string(TaskCompleted):
 					return nil
@@ -613,17 +892,30 @@ func (pe *PlanExecutor) waitForTask(ctx context.Context, taskID string) error {
 					return fmt.Errorf("task failed")
 				case string(TaskCancelled):
 					return fmt.Errorf("task cancelled")
+				case string(TaskPending), string(TaskRunning), string(TaskPaused):
+					continue
 				default:
-					return nil // Assume completed if removed from active but not in DB as failed
+					continue
 				}
 			}
+			missingCount = 0
 			switch task.Status {
 			case TaskCompleted:
 				return nil
 			case TaskFailed:
+				if msg := strings.TrimSpace(task.ErrorMessage); msg != "" {
+					return fmt.Errorf("task failed: %s", msg)
+				}
 				return fmt.Errorf("task failed")
 			case TaskCancelled:
+				if msg := strings.TrimSpace(task.ErrorMessage); msg != "" {
+					return fmt.Errorf("task cancelled: %s", msg)
+				}
 				return fmt.Errorf("task cancelled")
+			case TaskPending, TaskRunning, TaskPaused:
+				continue
+			default:
+				continue
 			}
 		}
 	}
@@ -636,21 +928,62 @@ func (pe *PlanExecutor) failExecution(exec *PlanExecution, errMsg string) {
 	exec.Error = errMsg
 	exec.mu.Unlock()
 
-	pe.repo.UpdatePlanningProblemStatus(exec.ProblemID, "failed", nil, errMsg)
+	if exec.persistProblemStatus {
+		pe.repo.UpdatePlanningProblemStatus(exec.ProblemID, "failed", nil, errMsg)
+	}
 	pe.broadcastPlanUpdate(exec)
 	pe.stateManager.ReleaseAllPlanResources(exec.ProblemID)
 
 	log.Printf("[PlanExecutor] Plan execution %s failed: %s", exec.ID, errMsg)
 }
 
+func (pe *PlanExecutor) cancelRuntimeTasks(exec *PlanExecution, reason string) {
+	if pe.scheduler == nil || exec == nil {
+		return
+	}
+
+	runtimeTaskIDs := make([]string, 0)
+
+	exec.mu.RLock()
+	for _, stepStatus := range exec.StepStatuses {
+		if stepStatus == nil {
+			continue
+		}
+		taskID := strings.TrimSpace(stepStatus.RuntimeTaskID)
+		if taskID == "" {
+			continue
+		}
+		if stepStatus.Status == TaskCompleted || stepStatus.Status == TaskFailed || stepStatus.Status == TaskCancelled {
+			continue
+		}
+		runtimeTaskIDs = append(runtimeTaskIDs, taskID)
+	}
+	exec.mu.RUnlock()
+
+	seen := make(map[string]bool, len(runtimeTaskIDs))
+	for _, taskID := range runtimeTaskIDs {
+		if taskID == "" || seen[taskID] {
+			continue
+		}
+		seen[taskID] = true
+		if err := pe.scheduler.CancelTask(taskID, reason); err != nil {
+			log.Printf("[PlanExecutor] Failed to cancel runtime task %s for execution %s: %v", taskID, exec.ID, err)
+		}
+	}
+}
+
 func (pe *PlanExecutor) cancelExecution(exec *PlanExecution) {
+	pe.cancelRuntimeTasks(exec, "plan execution cancelled")
+
 	exec.mu.Lock()
 	exec.Status = PlanExecCancelled
 	exec.CompletedAt = time.Now()
 	exec.Error = "cancelled by user"
 	exec.mu.Unlock()
 
-	pe.repo.UpdatePlanningProblemStatus(exec.ProblemID, "cancelled", nil, "cancelled by user")
+	if exec.persistProblemStatus {
+		pe.repo.UpdatePlanningProblemStatus(exec.ProblemID, "cancelled", nil, "cancelled by user")
+	}
 	pe.broadcastPlanUpdate(exec)
 	pe.stateManager.ReleaseAllPlanResources(exec.ProblemID)
 
@@ -659,30 +992,32 @@ func (pe *PlanExecutor) cancelExecution(exec *PlanExecution) {
 
 // PlanExecutionSnapshot is a thread-safe copy of PlanExecution state
 type PlanExecutionSnapshot struct {
-	ID             string
-	ProblemID      string
-	BehaviorTreeID string
-	Status         string
-	CurrentOrder   int
-	TotalOrders    int
-	StartedAt      time.Time
-	CompletedAt    *time.Time
-	Error          string
-	Steps          []StepStatusSnapshot
+	ID              string
+	ProblemID       string
+	BehaviorTreeID  string
+	BehaviorTreeIDs []string
+	Status          string
+	CurrentOrder    int
+	TotalOrders     int
+	StartedAt       time.Time
+	CompletedAt     *time.Time
+	Error           string
+	Steps           []StepStatusSnapshot
 }
 
 // StepStatusSnapshot is a thread-safe copy of step status
 type StepStatusSnapshot struct {
-	StepID        string
-	StepName      string
-	AgentID       string
-	AgentName     string
-	Order         int
-	Status        string
-	TaskID        string
-	TaskName      string
-	RuntimeTaskID string
-	Error         string
+	StepID         string
+	StepName       string
+	BehaviorTreeID string
+	AgentID        string
+	AgentName      string
+	Order          int
+	Status         string
+	TaskID         string
+	TaskName       string
+	RuntimeTaskID  string
+	Error          string
 }
 
 // Snapshot returns a thread-safe copy of the execution state
@@ -691,14 +1026,15 @@ func (exec *PlanExecution) Snapshot() PlanExecutionSnapshot {
 	defer exec.mu.RUnlock()
 
 	snap := PlanExecutionSnapshot{
-		ID:             exec.ID,
-		ProblemID:      exec.ProblemID,
-		BehaviorTreeID: exec.BehaviorTreeID,
-		Status:         string(exec.Status),
-		CurrentOrder:   exec.CurrentOrder,
-		TotalOrders:    exec.TotalOrders,
-		StartedAt:      exec.StartedAt,
-		Error:          exec.Error,
+		ID:              exec.ID,
+		ProblemID:       exec.ProblemID,
+		BehaviorTreeID:  exec.BehaviorTreeID,
+		BehaviorTreeIDs: append([]string{}, exec.BehaviorTreeIDs...),
+		Status:          string(exec.Status),
+		CurrentOrder:    exec.CurrentOrder,
+		TotalOrders:     exec.TotalOrders,
+		StartedAt:       exec.StartedAt,
+		Error:           exec.Error,
 	}
 
 	if !exec.CompletedAt.IsZero() {
@@ -709,16 +1045,17 @@ func (exec *PlanExecution) Snapshot() PlanExecutionSnapshot {
 	snap.Steps = make([]StepStatusSnapshot, 0, len(exec.StepStatuses))
 	for _, ss := range exec.StepStatuses {
 		snap.Steps = append(snap.Steps, StepStatusSnapshot{
-			StepID:        ss.StepID,
-			StepName:      ss.StepName,
-			AgentID:       ss.AgentID,
-			AgentName:     ss.AgentName,
-			Order:         ss.Order,
-			Status:        string(ss.Status),
-			TaskID:        ss.TaskID,
-			TaskName:      ss.TaskName,
-			RuntimeTaskID: ss.RuntimeTaskID,
-			Error:         ss.Error,
+			StepID:         ss.StepID,
+			StepName:       ss.StepName,
+			BehaviorTreeID: ss.BehaviorTreeID,
+			AgentID:        ss.AgentID,
+			AgentName:      ss.AgentName,
+			Order:          ss.Order,
+			Status:         string(ss.Status),
+			TaskID:         ss.TaskID,
+			TaskName:       ss.TaskName,
+			RuntimeTaskID:  ss.RuntimeTaskID,
+			Error:          ss.Error,
 		})
 	}
 
@@ -761,6 +1098,7 @@ func (pe *PlanExecutor) CancelExecution(id string) error {
 		return fmt.Errorf("execution is not running (status: %s)", status)
 	}
 
+	pe.cancelRuntimeTasks(exec, "plan execution cancelled by user")
 	exec.cancelFunc()
 	return nil
 }

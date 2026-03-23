@@ -46,6 +46,141 @@ type Scheduler struct {
 	wg     sync.WaitGroup
 }
 
+func (s *Scheduler) ensureGraphDeployed(ctx context.Context, agentID string, dbGraph *db.BehaviorTree, force bool) error {
+	if dbGraph == nil {
+		return fmt.Errorf("behavior tree is nil")
+	}
+
+	assignment, err := s.repo.GetAgentBehaviorTree(agentID, dbGraph.ID)
+	if err != nil {
+		return fmt.Errorf("load agent behavior tree assignment: %w", err)
+	}
+
+	deployedInCache := false
+	if cached, ok := s.stateManager.GraphCache().GetDeployed(agentID, dbGraph.ID); ok {
+		deployedInCache = cached != nil && cached.Version == dbGraph.Version
+	}
+
+	if !force &&
+		assignment != nil &&
+		deployedInCache &&
+		assignment.DeployedVersion == dbGraph.Version &&
+		assignment.DeploymentStatus == "deployed" &&
+		assignment.DeployedAt.Valid &&
+		!dbGraph.UpdatedAt.After(assignment.DeployedAt.Time) {
+		return nil
+	}
+
+	if s.quicHandler == nil {
+		return fmt.Errorf("raw QUIC handler is not configured")
+	}
+
+	reason := "missing assignment"
+	if force {
+		reason = "forced redeploy for runtime execution"
+	}
+	if assignment != nil {
+		switch {
+		case force:
+			reason = "forced redeploy for runtime execution"
+		case assignment.DeploymentStatus != "deployed":
+			reason = "assignment status=" + assignment.DeploymentStatus
+		case assignment.DeployedVersion != dbGraph.Version:
+			reason = fmt.Sprintf("deployed_version=%d server_version=%d", assignment.DeployedVersion, dbGraph.Version)
+		case !assignment.DeployedAt.Valid:
+			reason = "missing deployed_at"
+		case dbGraph.UpdatedAt.After(assignment.DeployedAt.Time):
+			reason = fmt.Sprintf("graph updated_at=%s is newer than deployed_at=%s", dbGraph.UpdatedAt.Format(time.RFC3339), assignment.DeployedAt.Time.Format(time.RFC3339))
+		default:
+			reason = "stale deployment metadata"
+		}
+	}
+	log.Printf("[Scheduler] Ensuring latest graph %s for agent %s (%s)", dbGraph.ID, agentID, reason)
+
+	canonicalGraph, err := graph.FromDBModel(dbGraph)
+	if err != nil {
+		return fmt.Errorf("convert graph to canonical: %w", err)
+	}
+	if err := canonicalGraph.Validate(); err != nil {
+		return fmt.Errorf("graph validation failed before deploy: %w", err)
+	}
+	if canonicalGraph.HasCycle() {
+		return fmt.Errorf("cannot deploy graph with cycles")
+	}
+
+	canonicalGraph.BehaviorTree.AgentID = agentID
+	canonicalGraph.SubstituteServerPatterns("")
+
+	graphJSON, err := json.Marshal(canonicalGraph)
+	if err != nil {
+		return fmt.Errorf("serialize canonical graph: %w", err)
+	}
+
+	now := time.Now()
+	if assignment == nil {
+		assignment = &db.AgentBehaviorTree{
+			ID:               uuid.New().String(),
+			AgentID:          agentID,
+			BehaviorTreeID:   dbGraph.ID,
+			ServerVersion:    dbGraph.Version,
+			DeployedVersion:  0,
+			DeploymentStatus: "deploying",
+			Enabled:          true,
+			Priority:         0,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+		}
+		if err := s.repo.CreateAgentBehaviorTree(assignment); err != nil {
+			return fmt.Errorf("create agent behavior tree assignment: %w", err)
+		}
+	} else {
+		assignment.ServerVersion = dbGraph.Version
+		assignment.DeploymentStatus = "deploying"
+		assignment.DeploymentError = sql.NullString{}
+		assignment.UpdatedAt = now
+		if err := s.repo.UpdateAgentBehaviorTree(assignment); err != nil {
+			return fmt.Errorf("mark graph deployment in progress: %w", err)
+		}
+	}
+
+	deployCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	result, err := s.quicHandler.DeployCanonicalGraph(deployCtx, agentID, graphJSON)
+	if err != nil {
+		assignment.DeploymentStatus = "failed"
+		assignment.DeploymentError = sql.NullString{String: err.Error(), Valid: true}
+		assignment.UpdatedAt = time.Now()
+		_ = s.repo.UpdateAgentBehaviorTree(assignment)
+		return fmt.Errorf("deploy latest graph to agent: %w", err)
+	}
+	if !result.Success {
+		deployErr := strings.TrimSpace(result.Error)
+		if deployErr == "" {
+			deployErr = "unknown deploy error"
+		}
+		assignment.DeploymentStatus = "failed"
+		assignment.DeploymentError = sql.NullString{String: deployErr, Valid: true}
+		assignment.UpdatedAt = time.Now()
+		_ = s.repo.UpdateAgentBehaviorTree(assignment)
+		return fmt.Errorf("deploy latest graph to agent failed: %s", deployErr)
+	}
+
+	assignment.ServerVersion = dbGraph.Version
+	assignment.DeployedVersion = dbGraph.Version
+	assignment.DeploymentStatus = "deployed"
+	assignment.DeploymentError = sql.NullString{}
+	assignment.DeployedAt = sql.NullTime{Time: time.Now(), Valid: true}
+	assignment.UpdatedAt = time.Now()
+	if err := s.repo.UpdateAgentBehaviorTree(assignment); err != nil {
+		return fmt.Errorf("update deployed graph version: %w", err)
+	}
+
+	s.stateManager.GraphCache().SetDeployed(agentID, dbGraph.ID, canonicalGraph)
+	log.Printf("[Scheduler] Auto-deployed latest graph %s v%d to agent %s before execution", dbGraph.ID, dbGraph.Version, agentID)
+	return nil
+}
+
 // TaskCompletionResult represents the result of a completed task
 type TaskCompletionResult struct {
 	TaskID string
@@ -65,7 +200,9 @@ const (
 	startConditionPollInterval = 250 * time.Millisecond
 	logRetentionInterval       = 24 * time.Hour
 	logRetentionWindow         = 30 * 24 * time.Hour
-	taskDispatchLease          = 5 * time.Second
+	taskDispatchLease          = 20 * time.Second
+	maxDispatchAttempts        = 3
+	maxDispatchErrorWindow     = 45 * time.Second
 
 	taskParamPlanProblemID     = "__fleet_plan_problem_id"
 	taskParamPlanExecutionID   = "__fleet_plan_execution_id"
@@ -79,6 +216,7 @@ const (
 type RunningTask struct {
 	ID                 string
 	BehaviorTreeID     string
+	RuntimeGraphID     string
 	AgentID            string
 	TaskDistributorID  string
 	PlanProblemID      string
@@ -102,6 +240,10 @@ type RunningTask struct {
 	DispatchSent       bool
 	DispatchLeaseUntil time.Time
 	DispatchAttempts   int
+	DispatchRetryAt    time.Time
+	DispatchFirstError time.Time
+	QueuedAt           time.Time
+	ErrorMessage       string
 
 	// Step results storage for field_sources resolution
 	// Maps step_id -> result data (e.g., {"success": true, "distance": 5.2})
@@ -297,6 +439,11 @@ func (s *Scheduler) dispatchNextQueuedTask(agentID string) error {
 			continue
 		}
 
+		if !task.DispatchRetryAt.IsZero() && now.Before(task.DispatchRetryAt) {
+			s.taskQueues[agentID] = queue
+			return nil
+		}
+
 		if !task.DispatchLeaseUntil.IsZero() && now.Before(task.DispatchLeaseUntil) {
 			s.taskQueues[agentID] = queue
 			return nil
@@ -313,8 +460,40 @@ func (s *Scheduler) dispatchNextQueuedTask(agentID string) error {
 		}
 
 		if err := s.dispatchQueuedTaskLocked(task, now); err != nil {
-			return err
+			task.ErrorMessage = err.Error()
+			if task.DispatchFirstError.IsZero() {
+				task.DispatchFirstError = now
+			}
+			task.DispatchRetryAt = now.Add(dispatchRetryBackoff(task.DispatchAttempts))
+
+			if task.DispatchAttempts >= maxDispatchAttempts && now.Sub(task.DispatchFirstError) >= maxDispatchErrorWindow {
+				failMsg := fmt.Sprintf(
+					"dispatch timeout after %d attempts (%s): %v",
+					task.DispatchAttempts,
+					time.Since(task.DispatchFirstError).Round(time.Second),
+					err,
+				)
+				log.Printf("[Scheduler] Marking task %s as failed: %s", task.ID, failMsg)
+				task.Status = TaskFailed
+				task.ErrorMessage = failMsg
+				queue = queue[1:]
+				s.taskQueues[agentID] = queue
+				if len(queue) == 0 {
+					delete(s.taskQueues, agentID)
+				}
+				go s.NotifyTaskComplete(task.ID, TaskFailed, failMsg)
+				continue
+			}
+			log.Printf(
+				"[Scheduler] Dispatch start failed for task %s on agent %s (attempt=%d): %v (retry at %s)",
+				task.ID, agentID, task.DispatchAttempts, err, task.DispatchRetryAt.Format(time.RFC3339),
+			)
+			s.taskQueues[agentID] = queue
+			return nil
 		}
+		task.DispatchRetryAt = time.Time{}
+		task.DispatchFirstError = time.Time{}
+		task.ErrorMessage = ""
 
 		s.taskQueues[agentID] = queue
 		return nil
@@ -322,6 +501,20 @@ func (s *Scheduler) dispatchNextQueuedTask(agentID string) error {
 
 	delete(s.taskQueues, agentID)
 	return nil
+}
+
+func dispatchRetryBackoff(attempt int) time.Duration {
+	if attempt < 1 {
+		return time.Second
+	}
+	if attempt > 6 {
+		attempt = 6
+	}
+	delay := time.Second << (attempt - 1) // 1s,2s,4s,8s,16s,32s
+	if delay > 15*time.Second {
+		return 15 * time.Second
+	}
+	return delay
 }
 
 func (s *Scheduler) reserveTaskResourcesForDispatch(task *RunningTask) (bool, error) {
@@ -439,7 +632,12 @@ func (s *Scheduler) dispatchQueuedTaskLocked(task *RunningTask, now time.Time) e
 		sendParams[taskParamResourceBindings] = string(bindingJSON)
 	}
 
-	if err := s.quicHandler.SendStartTask(task.AgentID, task.ID, task.BehaviorTreeID, task.AgentID, sendParams); err != nil {
+	graphID := task.RuntimeGraphID
+	if strings.TrimSpace(graphID) == "" {
+		graphID = task.BehaviorTreeID
+	}
+
+	if err := s.quicHandler.SendStartTask(task.AgentID, task.ID, graphID, task.AgentID, sendParams); err != nil {
 		s.stateManager.ReleaseTaskResources(task.ID, task.AgentID)
 		s.stateManager.UnregisterTaskRuntime(task.ID)
 		s.stateManager.CompleteExecution(task.AgentID, task.ReservedZones)
@@ -498,13 +696,23 @@ func (s *Scheduler) ValidateCapabilities(behaviorTreeID, agentID string) (*Capab
 		return nil, fmt.Errorf("failed to get agent capabilities: %w", err)
 	}
 
+	normalizeServer := func(server string) string {
+		server = strings.TrimSpace(server)
+		return strings.TrimPrefix(server, "/")
+	}
+
 	// Build capability map for quick lookup
-	capMap := make(map[string]*db.AgentCapability)    // action_type -> capability
-	serverMap := make(map[string]*db.AgentCapability) // action_server -> capability
+	capMap := make(map[string]*db.AgentCapability)       // action_type -> capability
+	serverMap := make(map[string]*db.AgentCapability)    // action_server(raw) -> capability
+	serverNormMap := make(map[string]*db.AgentCapability) // action_server(normalized) -> capability
 	for i := range agentCaps {
 		cap := &agentCaps[i]
 		capMap[cap.ActionType] = cap
 		serverMap[cap.ActionServer] = cap
+		norm := normalizeServer(cap.ActionServer)
+		if norm != "" {
+			serverNormMap[norm] = cap
+		}
 	}
 
 	// Check each required capability
@@ -512,17 +720,30 @@ func (s *Scheduler) ValidateCapabilities(behaviorTreeID, agentID string) (*Capab
 	var unavailableServers []string
 
 	for actionType, actionServer := range requiredCapabilities {
-		// First check by action server (more specific)
+		// First check by action server (strict when explicitly provided by graph).
 		if actionServer != "" {
-			if cap, exists := serverMap[actionServer]; exists {
+			cap, exists := serverMap[actionServer]
+			if !exists {
+				normalized := normalizeServer(actionServer)
+				if normalized != "" {
+					cap, exists = serverNormMap[normalized]
+				}
+			}
+
+			if exists {
 				if !cap.IsAvailable {
 					unavailableServers = append(unavailableServers, actionServer)
 				}
 				continue
 			}
+
+			// IMPORTANT: when action_server is explicitly specified in the graph,
+			// do not silently fallback to action_type matching.
+			missingCaps = append(missingCaps, fmt.Sprintf("%s (%s)", actionType, actionServer))
+			continue
 		}
 
-		// Check by action type
+		// action_server is not specified in the graph -> fallback to action type.
 		if cap, exists := capMap[actionType]; exists {
 			if !cap.IsAvailable {
 				unavailableServers = append(unavailableServers, actionType)
@@ -642,6 +863,15 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 		taskDistributorID = dbGraph.TaskDistributorID.String
 	}
 
+	// Realtime/PDDL tasks can be high-frequency. Forcing redeploy on every
+	// runtime execution causes deploy/start races and flaky immediate failures.
+	// Keep auto-redeploy only when assignment/version is actually stale.
+	forceGraphRedeploy := false
+	runtimeGraphID, err := s.prepareExecutionGraph(ctx, agentID, taskID, dbGraph, paramStrings, forceGraphRedeploy)
+	if err != nil {
+		return "", fmt.Errorf("failed to prepare execution graph: %w", err)
+	}
+
 	planningTask, err := db.DecodePlanningTaskSpec(dbGraph.PlanningTask)
 	if err != nil {
 		return "", fmt.Errorf("failed to decode task planning metadata: %w", err)
@@ -759,6 +989,7 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 	task := &RunningTask{
 		ID:                taskID,
 		BehaviorTreeID:    actionGraphID,
+		RuntimeGraphID:    runtimeGraphID,
 		AgentID:           agentID,
 		TaskDistributorID: taskDistributorID,
 		PlanProblemID:     planProblemID,
@@ -779,6 +1010,7 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 		StepResults:       make(map[string]map[string]interface{}),
 		ResultChan:        make(chan *StepResult, 1),
 		CancelFunc:        taskCancel,
+		QueuedAt:          now,
 	}
 	// Initialize pause condition variable
 	task.pauseCond = sync.NewCond(&task.pauseMu)
@@ -791,6 +1023,7 @@ func (s *Scheduler) StartTask(ctx context.Context, actionGraphID, agentID string
 
 	// Start lifecycle watcher in background. Actual dispatch happens on heartbeat.
 	go s.runTask(taskCtx, task)
+	s.DispatchIdleAgents()
 
 	log.Printf("Task queued: %s (graph=%s, agent=%s, entry=%s)", taskID, actionGraphID, agentID, entryStepID)
 
@@ -828,13 +1061,17 @@ func (s *Scheduler) runTask(ctx context.Context, task *RunningTask) {
 		s.stateManager.UnregisterTaskRuntime(task.ID)
 
 		// Update database
-		s.repo.UpdateTaskStatus(task.ID, string(task.Status), "", task.CurrentStep, "")
+		s.repo.UpdateTaskStatus(task.ID, string(task.Status), "", task.CurrentStep, task.ErrorMessage)
 
 		// Remove from active tasks
 		s.tasksMu.Lock()
 		s.removeQueuedTaskLocked(task.AgentID, task.ID)
 		delete(s.tasks, task.ID)
 		s.tasksMu.Unlock()
+
+		if task.RuntimeGraphID != "" && task.RuntimeGraphID != task.BehaviorTreeID {
+			s.stateManager.GraphCache().InvalidateDeployed(task.AgentID, task.RuntimeGraphID)
+		}
 
 		s.DispatchIdleAgents()
 
@@ -848,11 +1085,15 @@ func (s *Scheduler) runTask(ctx context.Context, task *RunningTask) {
 		task.Status = result.Status
 		if result.Error != "" {
 			log.Printf("[Scheduler] Task error: %s", result.Error)
+			task.ErrorMessage = result.Error
+		} else if result.Status == TaskCompleted {
+			task.ErrorMessage = ""
 		}
 
 	case <-ctx.Done():
 		log.Printf("[Scheduler] Task %s cancelled by context", task.ID)
 		task.Status = TaskCancelled
+		task.ErrorMessage = "task context cancelled"
 	}
 }
 
@@ -1289,6 +1530,11 @@ func (s *Scheduler) handleStepResult(task *RunningTask, step *db.BehaviorTreeSte
 			retryCount := task.RetryCount[step.ID]
 			if failureTransition.Retry > 0 && retryCount < failureTransition.Retry {
 				task.RetryCount[step.ID]++
+				if failureTransition.BackoffMs > 0 {
+					backoff := time.Duration(failureTransition.BackoffMs) * time.Millisecond
+					log.Printf("Retry backoff for step %s: %v (attempt %d/%d)", step.ID, backoff, retryCount+1, failureTransition.Retry)
+					time.Sleep(backoff)
+				}
 				log.Printf("Retrying step %s (attempt %d/%d)", step.ID, retryCount+1, failureTransition.Retry)
 				return step.ID // Retry same step
 			}
@@ -1499,6 +1745,21 @@ func (s *Scheduler) parseFailureTransition(transition interface{}) *db.Transitio
 
 	// Object - parse as TransitionOnFailure (from JSON unmarshaling)
 	if obj, ok := transition.(map[string]interface{}); ok {
+		parseInt := func(value interface{}) int {
+			switch v := value.(type) {
+			case int:
+				return v
+			case int64:
+				return int(v)
+			case float64:
+				return int(v)
+			case float32:
+				return int(v)
+			default:
+				return 0
+			}
+		}
+
 		result := &db.TransitionOnFailure{}
 
 		if retry, exists := obj["retry"]; exists {
@@ -1515,6 +1776,11 @@ func (s *Scheduler) parseFailureTransition(transition interface{}) *db.Transitio
 			if nextStr, ok := next.(string); ok {
 				result.Next = nextStr
 			}
+		}
+		if backoffMs, exists := obj["backoff_ms"]; exists {
+			result.BackoffMs = parseInt(backoffMs)
+		} else if backoffMs, exists := obj["backoffMs"]; exists {
+			result.BackoffMs = parseInt(backoffMs)
 		}
 
 		return result
@@ -2002,11 +2268,12 @@ func (s *Scheduler) buildTransitionsForVertex(g *graph.CanonicalGraph, vertexID 
 				transition.OnSuccess = e.To
 			}
 		case graph.EdgeTypeOnFailure:
-			if e.Config != nil && (e.Config.Retry > 0 || e.Config.Fallback != "") {
+			if e.Config != nil && (e.Config.Retry > 0 || e.Config.Fallback != "" || e.Config.BackoffMs > 0) {
 				transition.OnFailure = db.TransitionOnFailure{
-					Retry:    e.Config.Retry,
-					Fallback: e.Config.Fallback,
-					Next:     e.To,
+					Retry:     e.Config.Retry,
+					Fallback:  e.Config.Fallback,
+					Next:      e.To,
+					BackoffMs: e.Config.BackoffMs,
 				}
 			} else {
 				transition.OnFailure = e.To

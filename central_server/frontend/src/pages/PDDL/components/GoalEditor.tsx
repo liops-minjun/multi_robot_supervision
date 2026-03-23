@@ -1,4 +1,5 @@
 import { Plus, X, Sparkles } from 'lucide-react'
+import { useState } from 'react'
 import { useTranslation } from '../../../i18n'
 
 const TYPE_BADGE: Record<string, { bg: string; text: string }> = {
@@ -22,6 +23,7 @@ interface Props {
 
 export default function GoalEditor({ label, stateVars, values, onChange }: Props) {
   const { t } = useTranslation()
+  const [customVariableName, setCustomVariableName] = useState('')
 
   const unusedVars = stateVars.filter(sv => !(sv.name in values))
   const activeEntries = Object.entries(values)
@@ -39,6 +41,14 @@ export default function GoalEditor({ label, stateVars, values, onChange }: Props
   const addEntry = (variable: string) => {
     const sv = stateVars.find(s => s.name === variable)
     onChange({ ...values, [variable]: sv?.initial_value ?? '' })
+  }
+
+  const addCustomEntry = () => {
+    const variable = customVariableName.trim()
+    if (!variable || values[variable] !== undefined) return
+    const sv = stateVars.find(s => s.name === variable)
+    onChange({ ...values, [variable]: sv?.initial_value ?? '' })
+    setCustomVariableName('')
   }
 
   return (
@@ -148,6 +158,31 @@ export default function GoalEditor({ label, stateVars, values, onChange }: Props
             )
           })}
         </div>
+        </div>
+      )}
+
+      {stateVars.length > 0 && (
+        <div className="rounded-2xl border border-border bg-base/50 p-4 space-y-2">
+          <div className="text-sm font-semibold text-primary">직접 변수 입력</div>
+          <p className="text-xs text-secondary">
+            Goal 변수 이름을 직접 입력할 수 있습니다. (예: {'{{resource.name}}_status'}, {'{{agent.name}}_location'})
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <input
+              className="min-w-[240px] flex-1 rounded-xl border border-border bg-surface px-3 py-2 text-sm text-primary outline-none"
+              value={customVariableName}
+              onChange={(e) => setCustomVariableName(e.target.value)}
+              placeholder="예: {{resource.name}}_status"
+            />
+            <button
+              onClick={addCustomEntry}
+              disabled={!customVariableName.trim() || values[customVariableName.trim()] !== undefined}
+              className="inline-flex items-center gap-1 rounded-xl border border-border bg-surface px-3 py-2 text-sm text-secondary disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Plus size={14} />
+              추가
+            </button>
+          </div>
         </div>
       )}
     </div>

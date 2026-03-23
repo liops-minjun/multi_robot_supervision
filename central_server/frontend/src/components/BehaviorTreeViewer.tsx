@@ -186,10 +186,11 @@ const ViewerEventNode = memo(({ data, selected }: NodeProps<any>) => {
   const isStart = data.subtype === 'Start'
   const isEnd = data.subtype === 'End'
   const isError = data.subtype === 'Error'
+  const isWarning = data.subtype === 'Warning'
   const isActive = data.isActive
   const isCompleted = data.isCompleted
 
-  const bgColor = isStart ? '#22c55e' : isError ? '#ef4444' : '#3b82f6'
+  const bgColor = isStart ? '#22c55e' : isError ? '#ef4444' : isWarning ? '#f59e0b' : '#3b82f6'
 
   let borderColor = bgColor
   let glowStyle: React.CSSProperties = {}
@@ -221,7 +222,7 @@ const ViewerEventNode = memo(({ data, selected }: NodeProps<any>) => {
           <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
         )}
         <span className="text-[10px] font-bold text-primary tracking-wider">
-          {isStart ? 'START' : isError ? 'ERROR' : 'END'}
+          {isStart ? 'START' : isError ? 'ERROR' : isWarning ? 'WARNING' : 'END'}
         </span>
         {isCompleted && (
           <svg className="w-3 h-3 text-primary" fill="currentColor" viewBox="0 0 20 20">
@@ -238,13 +239,17 @@ const ViewerEventNode = memo(({ data, selected }: NodeProps<any>) => {
           className="!w-2 !h-2 !bg-green-500 !border !border-green-300 !rounded-full !-right-1"
         />
       )}
-      {(isEnd || isError) && (
+      {(isEnd || isError || isWarning) && (
         <Handle
           type="target"
           position={Position.Left}
           id="state-in"
           className={`!w-2 !h-2 !border !rounded-full !-left-1 ${
-            isError ? '!bg-red-500 !border-red-300' : '!bg-blue-500 !border-blue-300'
+            isError
+              ? '!bg-red-500 !border-red-300'
+              : isWarning
+                ? '!bg-yellow-500 !border-yellow-300'
+                : '!bg-blue-500 !border-blue-300'
           }`}
         />
       )}
@@ -254,9 +259,80 @@ const ViewerEventNode = memo(({ data, selected }: NodeProps<any>) => {
 
 ViewerEventNode.displayName = 'ViewerEventNode'
 
+// Compact Retry Node for Viewer
+const VIEWER_RETRY_PORT_TOP = {
+  out: '68%',
+  input: '68%',
+  failed: '84%',
+} as const
+
+const ViewerRetryNode = memo(({ data, selected }: NodeProps<any>) => {
+  const isActive = data.isActive
+  const borderColor = isActive ? '#22d3ee' : (selected ? 'white' : '#f59e0b')
+  const maxRetries = Number.isFinite(data.maxRetries) ? Number(data.maxRetries) : 0
+  const backoffMs = Number.isFinite(data.backoffMs) ? Number(data.backoffMs) : 0
+
+  return (
+    <div
+      className={`
+        w-[170px] min-h-[144px] rounded-lg overflow-visible
+        bg-surface border-2 transition-all duration-300
+        ${isActive ? 'shadow-[0_0_15px_3px_rgba(34,211,238,0.45)]' : ''}
+      `}
+      style={{ borderColor }}
+    >
+      <div className="px-2.5 py-1.5 border-b border-primary/40 bg-amber-500/15 flex items-center justify-between">
+        <span className="text-[10px] font-semibold text-amber-300">Retry</span>
+        <span className="text-[9px] text-muted">x{maxRetries}</span>
+      </div>
+      <div className="px-2 py-2">
+        <div className="grid grid-cols-2 gap-2">
+          <div className="rounded border border-primary/30 bg-base/50 px-1.5 py-1">
+            <div className="text-[8px] uppercase tracking-wider text-muted">max_retries</div>
+            <div className="text-[10px] font-mono text-primary">{maxRetries}</div>
+          </div>
+          <div className="rounded border border-primary/30 bg-base/50 px-1.5 py-1">
+            <div className="text-[8px] uppercase tracking-wider text-muted">backoff_ms</div>
+            <div className="text-[10px] font-mono text-primary">{backoffMs}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="pointer-events-none absolute left-2 -translate-y-1/2 rounded bg-base/90 px-1 py-0.5 text-[9px] font-medium text-amber-300" style={{ top: VIEWER_RETRY_PORT_TOP.out }}>out</div>
+      <div className="pointer-events-none absolute right-2 -translate-y-1/2 rounded bg-base/90 px-1 py-0.5 text-[9px] font-medium text-cyan-300" style={{ top: VIEWER_RETRY_PORT_TOP.input }}>in</div>
+      <div className="pointer-events-none absolute right-2 -translate-y-1/2 rounded bg-base/90 px-1 py-0.5 text-[9px] font-medium text-red-300" style={{ top: VIEWER_RETRY_PORT_TOP.failed }}>failed</div>
+
+      <Handle
+        type="source"
+        position={Position.Left}
+        id="retry-out"
+        className="!w-2.5 !h-2.5 !bg-amber-500 !border !border-amber-300 !rounded-full !-left-1"
+        style={{ top: VIEWER_RETRY_PORT_TOP.out }}
+      />
+      <Handle
+        type="target"
+        position={Position.Right}
+        id="retry-in"
+        className="!w-2.5 !h-2.5 !bg-cyan-400 !border !border-cyan-200 !rounded-full !-right-1"
+        style={{ top: VIEWER_RETRY_PORT_TOP.input }}
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="retry-failed"
+        className="!w-2.5 !h-2.5 !bg-red-500 !border !border-red-300 !rounded-full !-right-1"
+        style={{ top: VIEWER_RETRY_PORT_TOP.failed }}
+      />
+    </div>
+  )
+})
+
+ViewerRetryNode.displayName = 'ViewerRetryNode'
+
 const nodeTypes = {
   action: ViewerActionNode,
   event: ViewerEventNode,
+  retry: ViewerRetryNode,
 }
 
 interface BehaviorTreeViewerProps {
@@ -420,7 +496,11 @@ function BehaviorTreeViewerInner({
         position,
         data: {
           label: step.job_name || step.name || step.id,
-          subtype: isTerminal ? (step.terminal_type === 'success' ? 'End' : 'Error') : subtype,
+          subtype: isTerminal
+            ? ((step.terminal_type === 'failure'
+                ? 'Error'
+                : (step.alert ? 'Warning' : 'End')))
+            : subtype,
           color,
           server: step.action?.server,
           duringState,
@@ -430,12 +510,126 @@ function BehaviorTreeViewerInner({
         },
       })
 
+      const failureTransitionRaw = step.transition?.on_failure as unknown
+      const failureTransitionObj =
+        failureTransitionRaw && typeof failureTransitionRaw === 'object'
+          ? failureTransitionRaw as Record<string, unknown>
+          : undefined
+      const retryCount = Math.max(0, Number((failureTransitionObj?.retry as number | undefined) ?? 0))
+      const retryBackoffMs = Math.max(
+        0,
+        Number(
+          (failureTransitionObj?.backoff_ms as number | undefined) ??
+          (failureTransitionObj?.backoffMs as number | undefined) ??
+          0
+        )
+      )
+      const retryFallbackTarget =
+        typeof failureTransitionObj?.fallback === 'string'
+          ? failureTransitionObj.fallback
+          : (
+            typeof failureTransitionObj?.next === 'string'
+              ? failureTransitionObj.next
+              : (typeof failureTransitionRaw === 'string' ? failureTransitionRaw : '')
+          )
+      const retryUi = failureTransitionObj?.ui && typeof failureTransitionObj.ui === 'object'
+        ? failureTransitionObj.ui as Record<string, unknown>
+        : undefined
+      const retryStoredX = typeof retryUi?.x === 'number' && Number.isFinite(retryUi.x) ? retryUi.x : undefined
+      const retryStoredY = typeof retryUi?.y === 'number' && Number.isFinite(retryUi.y) ? retryUi.y : undefined
+      const hasRetryBlock = retryCount > 0 || retryBackoffMs > 0
+      const retryNodeId = `${step.id}__retry_view`
+      let retryInputEdgeAdded = false
+      let retryLoopEdgeAdded = false
+      let retryFallbackEdgeAdded = false
+
+      const ensureRetryNode = () => {
+        if (!hasRetryBlock) return
+        if (nodes.some(node => node.id === retryNodeId)) return
+        nodes.push({
+          id: retryNodeId,
+          type: 'retry',
+          position: { x: retryStoredX ?? (position.x + 180), y: retryStoredY ?? (position.y + 76) },
+          data: {
+            label: 'Retry',
+            maxRetries: retryCount,
+            backoffMs: retryBackoffMs,
+            isActive,
+          },
+        })
+      }
+
+      const addRetryInputEdge = (sourceHandle = 'failure-out') => {
+        if (!hasRetryBlock || retryInputEdgeAdded) return
+        ensureRetryNode()
+        edges.push({
+          id: `${step.id}-fail->${retryNodeId}`,
+          source: step.id,
+          target: retryNodeId,
+          sourceHandle,
+          targetHandle: 'retry-in',
+          type: 'smoothstep',
+          markerEnd: { type: MarkerType.ArrowClosed, color: '#f59e0b' },
+          style: { stroke: '#f59e0b', strokeWidth: 1.8, strokeDasharray: '4,4' },
+        })
+        retryInputEdgeAdded = true
+      }
+
+      const addRetryLoopEdge = () => {
+        if (!hasRetryBlock || retryLoopEdgeAdded) return
+        ensureRetryNode()
+        edges.push({
+          id: `${retryNodeId}->${step.id}::retry`,
+          source: retryNodeId,
+          target: step.id,
+          sourceHandle: 'retry-out',
+          targetHandle: 'state-in',
+          type: 'smoothstep',
+          markerEnd: { type: MarkerType.ArrowClosed, color: '#f59e0b' },
+          style: { stroke: '#f59e0b', strokeWidth: 1.6, strokeDasharray: '5,5' },
+        })
+        retryLoopEdgeAdded = true
+      }
+
+      const addRetryFallbackEdge = (target?: string) => {
+        const fallbackTarget = target || retryFallbackTarget
+        if (!hasRetryBlock || retryFallbackEdgeAdded || !fallbackTarget) return
+        ensureRetryNode()
+        const fallbackStep = behaviorTree.steps.find(s => s.id === fallbackTarget)
+        const fallbackSubtype = fallbackStep
+          ? (fallbackStep.terminal_type === 'failure' ? 'Error' : (fallbackStep.alert ? 'Warning' : 'End'))
+          : ''
+        const edgeColor = fallbackSubtype === 'Warning' ? '#f59e0b' : '#ef4444'
+        const sourceHandle = 'retry-failed'
+        edges.push({
+          id: `${retryNodeId}->${fallbackTarget}::fallback`,
+          source: retryNodeId,
+          target: fallbackTarget,
+          sourceHandle,
+          targetHandle: 'state-in',
+          type: 'smoothstep',
+          markerEnd: { type: MarkerType.ArrowClosed, color: edgeColor },
+          style: { stroke: edgeColor, strokeWidth: 1.6, strokeDasharray: '4,4' },
+        })
+        retryFallbackEdgeAdded = true
+      }
+
+      if (hasRetryBlock) {
+        addRetryLoopEdge()
+        addRetryFallbackEdge()
+      }
+
       const outcomeTransitions = step.transition?.on_outcomes || []
       if (outcomeTransitions.length > 0) {
         outcomeTransitions.forEach((transition, outcomeIndex) => {
           if (!transition.next) return
           const normalizedOutcome = normalizeOutcome(transition.outcome)
           const isSuccessOutcome = normalizedOutcome === 'success'
+          if (hasRetryBlock && !isSuccessOutcome) {
+            addRetryInputEdge('failure-out')
+            addRetryFallbackEdge(transition.next)
+            return
+          }
           const sourceHandle = isSuccessOutcome ? 'success-out' : 'failure-out'
           const edgeColor = isSuccessOutcome
             ? (isActive ? '#22d3ee' : '#22c55e')
@@ -456,6 +650,15 @@ function BehaviorTreeViewerInner({
             animated: isSuccessOutcome && isActive,
           })
         })
+        if (hasRetryBlock && !retryInputEdgeAdded) {
+          addRetryInputEdge('failure-out')
+        }
+        if (hasRetryBlock && !retryLoopEdgeAdded) {
+          addRetryLoopEdge()
+        }
+        if (hasRetryBlock && !retryFallbackEdgeAdded) {
+          addRetryFallbackEdge()
+        }
       } else {
         if (step.transition?.on_success) {
           const target = typeof step.transition.on_success === 'string'
@@ -485,7 +688,10 @@ function BehaviorTreeViewerInner({
             ? failureTransition
             : (failureTransition.fallback || (failureTransition as { next?: string }).next)
 
-          if (target) {
+          if (hasRetryBlock) {
+            addRetryInputEdge('failure-out')
+            addRetryFallbackEdge(target)
+          } else if (target) {
             edges.push({
               id: `${step.id}-fail->${target}`,
               source: step.id,

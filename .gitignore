@@ -51,3 +51,9 @@ go1.22.0.linux-amd64.tar.gz
 # ROS2 workspaces
 ros2_ws/
 test_ros2_ws/
+
+# Local save files (keep folder skeleton only)
+Save_files/tasks/*.json
+Save_files/pddl/*.json
+!Save_files/tasks/.gitkeep
+!Save_files/pddl/.gitkeep

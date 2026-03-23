@@ -41,6 +41,7 @@ services:
       HTTP_PORT: "8081"
       GRPC_PORT: "9090"
       DEFINITIONS_PATH: /app/definitions
+      SAVE_FILES_ROOT: /app/Save_files
     ports:
       - "19090:9090"    # gRPC TCP (Agent communication)
       - "18081:8081"    # HTTP REST API + WebSocket
@@ -49,6 +50,7 @@ services:
     volumes:
       - ./central_server_go/certs:/app/certs:ro
       - ./definitions:/app/definitions:ro
+      - ./Save_files:/app/Save_files:rw
     depends_on:
       neo4j:
         condition: service_healthy

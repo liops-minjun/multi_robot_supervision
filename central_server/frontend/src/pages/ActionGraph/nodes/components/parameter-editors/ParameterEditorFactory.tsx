@@ -5,7 +5,7 @@ import JointArrayEditor from './JointArrayEditor'
 import TelemetryPreview from './TelemetryPreview'
 import { type RobotTelemetryData, getEditorType, getStdPrimitiveWrapperType } from './types'
 import ParameterSourceSelector from '../../../../../components/ParameterSourceSelector'
-import type { ParameterFieldSource } from '../../../../../types'
+import type { ParameterFieldSource, RuntimeBindingOption } from '../../../../../types'
 import type { AvailableStep } from '../../types'
 
 interface ParameterEditorFactoryProps {
@@ -21,6 +21,7 @@ interface ParameterEditorFactoryProps {
   // Binding
   fieldSource?: ParameterFieldSource
   availableSteps?: AvailableStep[]
+  runtimeBindings?: RuntimeBindingOption[]
   onFieldSourceChange?: (source: ParameterFieldSource | undefined) => void
 }
 
@@ -35,6 +36,7 @@ const ParameterEditorFactory = memo(({
   selectedToolFrame,
   fieldSource,
   availableSteps,
+  runtimeBindings,
   onFieldSourceChange,
 }: ParameterEditorFactoryProps) => {
   const editorType = getEditorType(fieldType, isArray)
@@ -56,7 +58,7 @@ const ParameterEditorFactory = memo(({
   }
 
   // Check if field has a binding (step_result source)
-  const hasBinding = fieldSource?.source === 'step_result'
+  const hasBinding = fieldSource?.source === 'step_result' || fieldSource?.source === 'expression'
 
   // If bound to step result, show binding info instead of editor
   if (hasBinding && onFieldSourceChange) {
@@ -65,6 +67,7 @@ const ParameterEditorFactory = memo(({
         <ParameterSourceSelector
           fieldSource={fieldSource}
           availableSteps={availableSteps || []}
+          runtimeBindings={runtimeBindings || []}
           onChange={onFieldSourceChange}
           targetFieldType={fieldType}
           targetFieldName={fieldName}
@@ -121,6 +124,7 @@ const ParameterEditorFactory = memo(({
         onChange={onChange}
         fieldSource={fieldSource}
         availableSteps={availableSteps}
+        runtimeBindings={runtimeBindings}
         onFieldSourceChange={onFieldSourceChange}
         fieldType={fieldType}
         fieldName={fieldName}
@@ -137,6 +141,7 @@ const ParameterEditorFactory = memo(({
         onChange={onChange}
         fieldSource={fieldSource}
         availableSteps={availableSteps}
+        runtimeBindings={runtimeBindings}
         onFieldSourceChange={onFieldSourceChange}
         fieldType={fieldType}
         fieldName={fieldName}
@@ -153,6 +158,7 @@ const ParameterEditorFactory = memo(({
         onChange={onChange}
         fieldSource={fieldSource}
         availableSteps={availableSteps}
+        runtimeBindings={runtimeBindings}
         onFieldSourceChange={onFieldSourceChange}
         fieldType={fieldType}
         fieldName={fieldName}
@@ -173,6 +179,7 @@ const ParameterEditorFactory = memo(({
         robotTelemetry={robotTelemetry}
         fieldSource={fieldSource}
         availableSteps={availableSteps}
+        runtimeBindings={runtimeBindings}
         onFieldSourceChange={onFieldSourceChange}
       />
     )
@@ -189,6 +196,7 @@ const ParameterEditorFactory = memo(({
         robotTelemetry={robotTelemetry}
         fieldSource={fieldSource}
         availableSteps={availableSteps}
+        runtimeBindings={runtimeBindings}
         onFieldSourceChange={onFieldSourceChange}
       />
     )
@@ -214,6 +222,7 @@ const ParameterEditorFactory = memo(({
         robotTelemetry={robotTelemetry}
         fieldSource={fieldSource}
         availableSteps={availableSteps}
+        runtimeBindings={runtimeBindings}
         onFieldSourceChange={onFieldSourceChange}
         fieldType={fieldType}
         fieldName={fieldName}
@@ -257,6 +266,7 @@ const PrimitiveEditor = memo(({
   robotTelemetry,
   fieldSource,
   availableSteps,
+  runtimeBindings,
   onFieldSourceChange,
 }: {
   fieldName: string
@@ -267,13 +277,14 @@ const PrimitiveEditor = memo(({
   robotTelemetry?: RobotTelemetryData | null
   fieldSource?: ParameterFieldSource
   availableSteps?: AvailableStep[]
+  runtimeBindings?: RuntimeBindingOption[]
   onFieldSourceChange?: (source: ParameterFieldSource | undefined) => void
 }) => {
   const lower = fieldType.toLowerCase()
   const isBool = lower === 'bool' || lower === 'boolean'
   const isNumeric = ['int8', 'int16', 'int32', 'int64', 'uint8', 'uint16', 'uint32', 'uint64', 'float32', 'float64', 'double', 'float'].some(t => lower.includes(t))
   const isString = lower === 'string'
-  const isBinding = fieldSource?.source === 'step_result'
+  const isBinding = fieldSource?.source === 'step_result' || fieldSource?.source === 'expression'
   const supportsToolDropdown = isString && isToolFrameField(fieldName)
   const currentToolFrame = String(value ?? '').trim()
   const discoveredToolFrames = collectToolFramesFromTransforms(robotTelemetry)
@@ -308,6 +319,7 @@ const PrimitiveEditor = memo(({
       <ParameterSourceSelector
         fieldSource={fieldSource}
         availableSteps={availableSteps || []}
+        runtimeBindings={runtimeBindings || []}
         onChange={onFieldSourceChange || (() => {})}
         targetFieldType={fieldType}
         targetFieldName={fieldName}
@@ -567,6 +579,7 @@ const StdPrimitiveMessageEditor = memo(({
   robotTelemetry,
   fieldSource,
   availableSteps,
+  runtimeBindings,
   onFieldSourceChange,
 }: {
   fieldName: string
@@ -576,6 +589,7 @@ const StdPrimitiveMessageEditor = memo(({
   robotTelemetry?: RobotTelemetryData | null
   fieldSource?: ParameterFieldSource
   availableSteps?: AvailableStep[]
+  runtimeBindings?: RuntimeBindingOption[]
   onFieldSourceChange?: (source: ParameterFieldSource | undefined) => void
 }) => {
   const wrapperType = getStdPrimitiveWrapperType(fieldType)
@@ -597,7 +611,7 @@ const StdPrimitiveMessageEditor = memo(({
   const wrapped = normalizeWrappedValue(value)
   const constantValue = wrapped.data ?? getDefaultValue()
   const inputType = wrapperType === 'boolean' ? 'checkbox' : wrapperType === 'number' ? 'number' : 'text'
-  const isBinding = fieldSource?.source === 'step_result'
+  const isBinding = fieldSource?.source === 'step_result' || fieldSource?.source === 'expression'
   const supportsToolDropdown = wrapperType === 'string' && isToolFrameField(fieldName)
   const currentToolFrame = extractWrappedString(value).trim()
   const discoveredToolFrames = collectToolFramesFromTransforms(robotTelemetry)
@@ -625,6 +639,7 @@ const StdPrimitiveMessageEditor = memo(({
       <ParameterSourceSelector
         fieldSource={fieldSource}
         availableSteps={availableSteps || []}
+        runtimeBindings={runtimeBindings || []}
         onChange={onFieldSourceChange || (() => {})}
         targetFieldType={fieldType}
         targetFieldName={fieldName}
@@ -810,6 +825,7 @@ const ArrayEditorWithBinding = memo(({
   onChange,
   fieldSource,
   availableSteps,
+  runtimeBindings,
   onFieldSourceChange,
   fieldType,
   fieldName,
@@ -819,13 +835,14 @@ const ArrayEditorWithBinding = memo(({
   onChange: (value: unknown) => void
   fieldSource?: ParameterFieldSource
   availableSteps?: AvailableStep[]
+  runtimeBindings?: RuntimeBindingOption[]
   onFieldSourceChange?: (source: ParameterFieldSource | undefined) => void
   fieldType: string
   fieldName: string
   arrayType: 'numeric' | 'string'
 }) => {
   // Check if field has a binding (step_result source)
-  const hasBinding = fieldSource?.source === 'step_result'
+  const hasBinding = fieldSource?.source === 'step_result' || fieldSource?.source === 'expression'
 
   // If bound to step result, show binding selector
   if (hasBinding && onFieldSourceChange) {
@@ -833,6 +850,7 @@ const ArrayEditorWithBinding = memo(({
       <ParameterSourceSelector
         fieldSource={fieldSource}
         availableSteps={availableSteps || []}
+        runtimeBindings={runtimeBindings || []}
         onChange={onFieldSourceChange}
         targetFieldType={fieldType}
         targetFieldName={fieldName}
@@ -985,6 +1003,7 @@ const JointArrayEditorWithBinding = memo(({
   onChange,
   fieldSource,
   availableSteps,
+  runtimeBindings,
   onFieldSourceChange,
   fieldType,
   fieldName,
@@ -994,13 +1013,14 @@ const JointArrayEditorWithBinding = memo(({
   onChange: (value: unknown) => void
   fieldSource?: ParameterFieldSource
   availableSteps?: AvailableStep[]
+  runtimeBindings?: RuntimeBindingOption[]
   onFieldSourceChange?: (source: ParameterFieldSource | undefined) => void
   fieldType: string
   fieldName: string
   robotTelemetry?: RobotTelemetryData | null
 }) => {
   // Check if field has a binding (step_result source)
-  const hasBinding = fieldSource?.source === 'step_result'
+  const hasBinding = fieldSource?.source === 'step_result' || fieldSource?.source === 'expression'
 
   // If bound to step result, show binding selector
   if (hasBinding && onFieldSourceChange) {
@@ -1008,6 +1028,7 @@ const JointArrayEditorWithBinding = memo(({
       <ParameterSourceSelector
         fieldSource={fieldSource}
         availableSteps={availableSteps || []}
+        runtimeBindings={runtimeBindings || []}
         onChange={onFieldSourceChange}
         targetFieldType={fieldType}
         targetFieldName={fieldName}
@@ -1163,6 +1184,7 @@ const JointStateEditor = memo(({
   robotTelemetry,
   fieldSource,
   availableSteps,
+  runtimeBindings,
   onFieldSourceChange,
   fieldType,
   fieldName,
@@ -1172,12 +1194,13 @@ const JointStateEditor = memo(({
   robotTelemetry?: RobotTelemetryData | null
   fieldSource?: ParameterFieldSource
   availableSteps?: AvailableStep[]
+  runtimeBindings?: RuntimeBindingOption[]
   onFieldSourceChange?: (source: ParameterFieldSource | undefined) => void
   fieldType: string
   fieldName: string
 }) => {
   // Check if field has a binding (step_result source)
-  const hasBinding = fieldSource?.source === 'step_result'
+  const hasBinding = fieldSource?.source === 'step_result' || fieldSource?.source === 'expression'
 
   // If bound to step result, show binding selector
   if (hasBinding && onFieldSourceChange) {
@@ -1185,6 +1208,7 @@ const JointStateEditor = memo(({
       <ParameterSourceSelector
         fieldSource={fieldSource}
         availableSteps={availableSteps || []}
+        runtimeBindings={runtimeBindings || []}
         onChange={onFieldSourceChange}
         targetFieldType={fieldType}
         targetFieldName={fieldName}

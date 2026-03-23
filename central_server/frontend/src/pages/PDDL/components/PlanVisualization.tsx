@@ -6,8 +6,11 @@ interface Props {
   plan: PlanResult | null
   isLoading: boolean
   taskPlanning?: PlanningTaskSpec | null
+  taskPlanningByTaskId?: Record<string, PlanningTaskSpec | null | undefined>
   taskName?: string
+  taskNameByTaskId?: Record<string, string>
   requiredActionTypes?: string[]
+  requiredActionTypesByTaskId?: Record<string, string[]>
   execution?: PlanExecution | null
   resources?: TaskDistributorResource[]
 }
@@ -24,8 +27,11 @@ export default function PlanVisualization({
   plan,
   isLoading,
   taskPlanning,
+  taskPlanningByTaskId = {},
   taskName,
+  taskNameByTaskId = {},
   requiredActionTypes = [],
+  requiredActionTypesByTaskId = {},
   execution,
   resources = [],
 }: Props) {
@@ -230,7 +236,10 @@ export default function PlanVisualization({
 
               <div className="grid gap-2 p-3">
                 {waveAssignments.map(assignment => {
-                  const requiredResources = taskPlanning?.required_resources ?? []
+                  const assignmentTaskKey = assignment.behavior_tree_id || assignment.task_id
+                  const assignmentTaskPlanning = taskPlanningByTaskId[assignmentTaskKey] || taskPlanning || null
+                  const requiredResources = assignmentTaskPlanning?.required_resources ?? []
+                  const assignmentRequiredActionTypes = requiredActionTypesByTaskId[assignmentTaskKey] || requiredActionTypes
                   const stepStatus = execStepStatus.get(`${assignment.task_id}:${assignment.agent_id}`) || 'pending'
                   const statusStyle = STEP_STATUS_STYLES[stepStatus] || STEP_STATUS_STYLES.pending
                   const executionStep = executionSteps.find(step => step.task_id === assignment.task_id && step.agent_id === assignment.agent_id)
@@ -243,10 +252,10 @@ export default function PlanVisualization({
                       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                         <div className="min-w-0">
                           <div className="text-sm font-semibold text-primary">
-                            {assignment.task_name || taskName || assignment.task_id}
+                            {assignment.task_name || taskNameByTaskId[assignmentTaskKey] || taskName || assignment.task_id}
                           </div>
                           <div className="mt-1 text-[11px] text-secondary">
-                            Capability: {requiredActionTypes.length > 0 ? requiredActionTypes.map(item => item.split('/').pop()).join(', ') : 'Any'}
+                            Capability: {assignmentRequiredActionTypes.length > 0 ? assignmentRequiredActionTypes.map(item => item.split('/').pop()).join(', ') : 'Any'}
                           </div>
                         </div>
                         <div className="flex flex-wrap gap-2">

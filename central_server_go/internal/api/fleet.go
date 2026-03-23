@@ -297,6 +297,13 @@ func (s *Server) ResetAgentState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Clear live planning overlay for this agent to avoid stale error/warning
+	// values immediately re-appearing in realtime PDDL monitors.
+	clearedSessions := 0
+	if s.realtimePddl != nil {
+		clearedSessions = s.realtimePddl.ClearRuntimeStateByAgent(agentID, "agent:"+agentID)
+	}
+
 	// Update DB if agent exists there
 	if s.repo != nil {
 		// Reset enhanced state in DB (state_code, semantic_tags, graph_id)
@@ -306,10 +313,11 @@ func (s *Server) ResetAgentState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"success":  true,
-		"agent_id": agentID,
-		"state":    "idle",
-		"message":  "Agent state reset to idle",
+		"success":          true,
+		"agent_id":         agentID,
+		"state":            "idle",
+		"message":          "Agent state reset to idle",
+		"cleared_sessions": clearedSessions,
 	})
 }
 

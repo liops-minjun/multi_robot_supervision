@@ -56,20 +56,20 @@ type RobotConnectRequest struct {
 // ============================================================
 
 type BehaviorTreeListResponse struct {
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	Description      string    `json:"description,omitempty"`
-	AgentID          string    `json:"agent_id,omitempty"`
-	AgentName        string    `json:"agent_name,omitempty"`
-	EntryPoint       string    `json:"entry_point,omitempty"`
-	StepCount        int       `json:"step_count"`
-	StateCount       int       `json:"state_count"`
-	RequiredActionTypes []string `json:"required_action_types,omitempty"`
-	Version          int       `json:"version"`
-	IsTemplate       bool      `json:"is_template"`
-	DeploymentStatus string    `json:"deployment_status,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID                  string    `json:"id"`
+	Name                string    `json:"name"`
+	Description         string    `json:"description,omitempty"`
+	AgentID             string    `json:"agent_id,omitempty"`
+	AgentName           string    `json:"agent_name,omitempty"`
+	EntryPoint          string    `json:"entry_point,omitempty"`
+	StepCount           int       `json:"step_count"`
+	StateCount          int       `json:"state_count"`
+	RequiredActionTypes []string  `json:"required_action_types,omitempty"`
+	Version             int       `json:"version"`
+	IsTemplate          bool      `json:"is_template"`
+	DeploymentStatus    string    `json:"deployment_status,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 
 // GraphStateResponse represents a state in the API response
@@ -97,31 +97,42 @@ type PlanningEffectResponse struct {
 	Value    string `json:"value"`
 }
 
+type PlanningConditionResponse struct {
+	Variable string `json:"variable"`
+	Operator string `json:"operator,omitempty"`
+	Value    string `json:"value"`
+}
+
 type PlanningTaskResponse struct {
-	RequiredResources []string                `json:"required_resources,omitempty"`
-	DuringState       []PlanningEffectResponse `json:"during_state,omitempty"`
-	ResultStates      []PlanningEffectResponse `json:"result_states,omitempty"`
+	Preconditions          []PlanningConditionResponse `json:"preconditions,omitempty"`
+	RequiredResources      []string                    `json:"required_resources,omitempty"`
+	DuringState            []PlanningEffectResponse    `json:"during_state,omitempty"`
+	ResultStates           []PlanningEffectResponse    `json:"result_states,omitempty"`
+	WarningResultStates    []PlanningEffectResponse    `json:"warning_result_states,omitempty"`
+	ErrorResultStates      []PlanningEffectResponse    `json:"error_result_states,omitempty"`
+	WarningMessageVariable string                      `json:"warning_message_variable,omitempty"`
+	ErrorMessageVariable   string                      `json:"error_message_variable,omitempty"`
 }
 
 type BehaviorTreeResponse struct {
-	ID                string                     `json:"id"`
-	Name              string                     `json:"name"`
-	Description       string                     `json:"description,omitempty"`
-	AgentID           string                     `json:"agent_id,omitempty"`
-	AgentName         string                     `json:"agent_name,omitempty"`
-	EntryPoint        string                     `json:"entry_point,omitempty"`
-	Preconditions     []map[string]interface{}   `json:"preconditions,omitempty"`
-	Steps             []map[string]interface{}   `json:"steps"`
-	States            []GraphStateResponse       `json:"states,omitempty"`
-	PlanningStates    []PlanningStateVarResponse `json:"planning_states,omitempty"`
-	PlanningTask      *PlanningTaskResponse      `json:"planning_task,omitempty"`
-	TaskDistributorID string                     `json:"task_distributor_id,omitempty"`
-	RequiredActionTypes []string                 `json:"required_action_types,omitempty"`
-	Version           int                        `json:"version"`
-	IsTemplate        bool                       `json:"is_template"`
-	DeploymentStatus  string                     `json:"deployment_status,omitempty"`
-	CreatedAt         time.Time                  `json:"created_at"`
-	UpdatedAt         time.Time                  `json:"updated_at"`
+	ID                  string                     `json:"id"`
+	Name                string                     `json:"name"`
+	Description         string                     `json:"description,omitempty"`
+	AgentID             string                     `json:"agent_id,omitempty"`
+	AgentName           string                     `json:"agent_name,omitempty"`
+	EntryPoint          string                     `json:"entry_point,omitempty"`
+	Preconditions       []map[string]interface{}   `json:"preconditions,omitempty"`
+	Steps               []map[string]interface{}   `json:"steps"`
+	States              []GraphStateResponse       `json:"states,omitempty"`
+	PlanningStates      []PlanningStateVarResponse `json:"planning_states,omitempty"`
+	PlanningTask        *PlanningTaskResponse      `json:"planning_task,omitempty"`
+	TaskDistributorID   string                     `json:"task_distributor_id,omitempty"`
+	RequiredActionTypes []string                   `json:"required_action_types,omitempty"`
+	Version             int                        `json:"version"`
+	IsTemplate          bool                       `json:"is_template"`
+	DeploymentStatus    string                     `json:"deployment_status,omitempty"`
+	CreatedAt           time.Time                  `json:"created_at"`
+	UpdatedAt           time.Time                  `json:"updated_at"`
 }
 
 type BehaviorTreeCreateRequest struct {
@@ -670,16 +681,17 @@ type AgentConnectionStatusResponse struct {
 
 // PlanExecutionStepResponse represents a step status in plan execution
 type PlanExecutionStepResponse struct {
-	TaskID        string `json:"task_id"`
-	TaskName      string `json:"task_name,omitempty"`
-	RuntimeTaskID string `json:"runtime_task_id,omitempty"`
-	StepID        string `json:"step_id"`
-	StepName      string `json:"step_name"`
-	AgentID       string `json:"agent_id"`
-	AgentName     string `json:"agent_name"`
-	Order         int    `json:"order"`
-	Status        string `json:"status"`
-	Error         string `json:"error,omitempty"`
+	TaskID         string `json:"task_id"`
+	TaskName       string `json:"task_name,omitempty"`
+	BehaviorTreeID string `json:"behavior_tree_id,omitempty"`
+	RuntimeTaskID  string `json:"runtime_task_id,omitempty"`
+	StepID         string `json:"step_id"`
+	StepName       string `json:"step_name"`
+	AgentID        string `json:"agent_id"`
+	AgentName      string `json:"agent_name"`
+	Order          int    `json:"order"`
+	Status         string `json:"status"`
+	Error          string `json:"error,omitempty"`
 }
 
 type PlanExecutionResourceResponse struct {
@@ -697,16 +709,17 @@ type PlanExecutionResourceResponse struct {
 
 // PlanExecutionResponse represents a plan execution in API responses
 type PlanExecutionResponse struct {
-	ID             string                          `json:"id"`
-	ProblemID      string                          `json:"problem_id"`
-	BehaviorTreeID string                          `json:"behavior_tree_id"`
-	Status         string                          `json:"status"`
-	CurrentOrder   int                             `json:"current_order"`
-	TotalOrders    int                             `json:"total_orders"`
-	Steps          []PlanExecutionStepResponse     `json:"steps"`
-	PlanningState  map[string]string               `json:"planning_state,omitempty"`
-	Resources      []PlanExecutionResourceResponse `json:"resources,omitempty"`
-	StartedAt      time.Time                       `json:"started_at"`
-	CompletedAt    *time.Time                      `json:"completed_at,omitempty"`
-	Error          string                          `json:"error,omitempty"`
+	ID              string                          `json:"id"`
+	ProblemID       string                          `json:"problem_id"`
+	BehaviorTreeID  string                          `json:"behavior_tree_id"`
+	BehaviorTreeIDs []string                        `json:"behavior_tree_ids,omitempty"`
+	Status          string                          `json:"status"`
+	CurrentOrder    int                             `json:"current_order"`
+	TotalOrders     int                             `json:"total_orders"`
+	Steps           []PlanExecutionStepResponse     `json:"steps"`
+	PlanningState   map[string]string               `json:"planning_state,omitempty"`
+	Resources       []PlanExecutionResourceResponse `json:"resources,omitempty"`
+	StartedAt       time.Time                       `json:"started_at"`
+	CompletedAt     *time.Time                      `json:"completed_at,omitempty"`
+	Error           string                          `json:"error,omitempty"`
 }

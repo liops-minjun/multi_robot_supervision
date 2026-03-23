@@ -209,11 +209,20 @@ func extractEdges(step *db.BehaviorTreeStep) []Edge {
 	}
 
 	hasOutcomes := len(step.Transition.OnOutcomes) > 0
+	hasSuccessOutcome := false
+	hasFailureLikeOutcome := false
 
 	if hasOutcomes {
 		for _, transition := range step.Transition.OnOutcomes {
 			if transition.Next == "" {
 				continue
+			}
+			outcome := strings.ToLower(strings.TrimSpace(transition.Outcome))
+			switch outcome {
+			case "success", "succeeded", "done":
+				hasSuccessOutcome = true
+			default:
+				hasFailureLikeOutcome = true
 			}
 			condition := encodeOutcomeCondition(transition.Outcome, transition.State)
 			edges = append(edges, Edge{
@@ -228,7 +237,7 @@ func extractEdges(step *db.BehaviorTreeStep) []Edge {
 	}
 
 	// On success
-	if !hasOutcomes && step.Transition.OnSuccess != nil {
+	if (!hasOutcomes || !hasSuccessOutcome) && step.Transition.OnSuccess != nil {
 		switch v := step.Transition.OnSuccess.(type) {
 		case string:
 			edges = append(edges, Edge{
@@ -248,7 +257,7 @@ func extractEdges(step *db.BehaviorTreeStep) []Edge {
 	}
 
 	// On failure
-	if !hasOutcomes && step.Transition.OnFailure != nil {
+	if (!hasOutcomes || !hasFailureLikeOutcome) && step.Transition.OnFailure != nil {
 		switch v := step.Transition.OnFailure.(type) {
 		case string:
 			edges = append(edges, Edge{
@@ -256,10 +265,31 @@ func extractEdges(step *db.BehaviorTreeStep) []Edge {
 				To:   v,
 				Type: EdgeTypeOnFailure,
 			})
+		case db.TransitionOnFailure:
+			cfg := &EdgeConfig{
+				Retry:     v.Retry,
+				Fallback:  v.Fallback,
+				BackoffMs: v.BackoffMs,
+			}
+			target := v.Fallback
+			if target == "" {
+				target = v.Next
+			}
+			if target != "" {
+				edges = append(edges, Edge{
+					From:   step.ID,
+					To:     target,
+					Type:   EdgeTypeOnFailure,
+					Config: cfg,
+				})
+			}
 		case map[string]interface{}:
 			cfg := &EdgeConfig{}
 			if retry, ok := v["retry"].(float64); ok {
 				cfg.Retry = int(retry)
+			}
+			if backoffMs, ok := v["backoff_ms"].(float64); ok {
+				cfg.BackoffMs = int(backoffMs)
 			}
 			if fallback, ok := v["fallback"].(string); ok {
 				cfg.Fallback = fallback
@@ -426,11 +456,15 @@ func buildTransitionFromEdges(vertexID string, cg *CanonicalGraph) *db.StepTrans
 		case EdgeTypeOnSuccess:
 			transition.OnSuccess = e.To
 		case EdgeTypeOnFailure:
-			if e.Config != nil && e.Config.Retry > 0 {
-				transition.OnFailure = map[string]interface{}{
+			if e.Config != nil && (e.Config.Retry > 0 || e.Config.BackoffMs > 0) {
+				failure := map[string]interface{}{
 					"retry":    e.Config.Retry,
 					"fallback": e.To,
 				}
+				if e.Config.BackoffMs > 0 {
+					failure["backoff_ms"] = e.Config.BackoffMs
+				}
+				transition.OnFailure = failure
 			} else {
 				transition.OnFailure = e.To
 			}

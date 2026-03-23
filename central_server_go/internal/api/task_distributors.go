@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"central_server_go/internal/db"
@@ -27,17 +28,22 @@ type TaskDistributorUpdateRequest struct {
 }
 
 type TaskDistributorResponse struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	ID                 string                               `json:"id"`
+	Name               string                               `json:"name"`
+	Description        string                               `json:"description,omitempty"`
+	StateMergePolicies []db.TaskDistributorStateMergePolicy `json:"state_merge_policies,omitempty"`
+	CreatedAt          string                               `json:"created_at"`
+	UpdatedAt          string                               `json:"updated_at"`
 }
 
 type TaskDistributorFullResponse struct {
 	TaskDistributorResponse
 	States    []TaskDistributorStateResponse    `json:"states"`
 	Resources []TaskDistributorResourceResponse `json:"resources"`
+}
+
+type TaskDistributorStateMergePoliciesRequest struct {
+	Policies []db.TaskDistributorStateMergePolicy `json:"policies"`
 }
 
 type TaskDistributorStateCreateRequest struct {
@@ -203,6 +209,59 @@ func (s *Server) DeleteTaskDistributor(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"message": "deleted"})
 }
 
+func (s *Server) GetTaskDistributorStateMergePolicies(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "distributorID")
+	td, err := s.repo.GetTaskDistributor(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get task distributor: %v", err))
+		return
+	}
+	if td == nil {
+		writeError(w, http.StatusNotFound, "task distributor not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, TaskDistributorStateMergePoliciesRequest{
+		Policies: td.StateMergePolicies,
+	})
+}
+
+func (s *Server) UpdateTaskDistributorStateMergePolicies(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "distributorID")
+	var req TaskDistributorStateMergePoliciesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	policies := make([]db.TaskDistributorStateMergePolicy, 0, len(req.Policies))
+	seen := make(map[string]bool, len(req.Policies))
+	for _, policy := range req.Policies {
+		pattern := strings.TrimSpace(policy.Pattern)
+		priority := strings.ToLower(strings.TrimSpace(policy.Priority))
+		if pattern == "" || seen[pattern] {
+			continue
+		}
+		if priority != "live" && priority != "planner" {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid merge priority for %q", pattern))
+			return
+		}
+		seen[pattern] = true
+		policies = append(policies, db.TaskDistributorStateMergePolicy{
+			Pattern:  pattern,
+			Priority: priority,
+		})
+	}
+
+	if err := s.repo.UpdateTaskDistributorStateMergePolicies(id, policies); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update state merge policies: %v", err))
+		return
+	}
+	s.realtimePddl.UpdateStateMergePolicies(id, policies)
+	writeJSON(w, http.StatusOK, TaskDistributorStateMergePoliciesRequest{
+		Policies: policies,
+	})
+}
+
 // ============================================================
 // Task Distributor State Handlers
 // ============================================================
@@ -361,11 +420,12 @@ func (s *Server) DeleteTaskDistributorResource(w http.ResponseWriter, r *http.Re
 
 func toTaskDistributorResponse(td *db.TaskDistributor) TaskDistributorResponse {
 	return TaskDistributorResponse{
-		ID:          td.ID,
-		Name:        td.Name,
-		Description: td.Description,
-		CreatedAt:   td.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:   td.UpdatedAt.Format(time.RFC3339),
+		ID:                 td.ID,
+		Name:               td.Name,
+		Description:        td.Description,
+		StateMergePolicies: td.StateMergePolicies,
+		CreatedAt:          td.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:          td.UpdatedAt.Format(time.RFC3339),
 	}
 }
 

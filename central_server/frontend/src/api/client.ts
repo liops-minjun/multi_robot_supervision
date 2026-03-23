@@ -41,7 +41,9 @@ import type {
   StepAssignment,
   TaskDistributor,
   TaskDistributorState,
-  TaskDistributorResource
+  TaskDistributorResource,
+  RealtimeSession,
+  RealtimeGoalRule
 } from '../types'
 
 const api = axios.create({
@@ -141,6 +143,12 @@ export const agentApi = {
   // Backward compatibility alias
   getAssignedActionGraphs: async (agentId: string): Promise<AgentActionGraphInfo[]> => {
     const { data } = await api.get(`/agents/${agentId}/behavior-trees`)
+    return data
+  },
+
+  // Get a specific assigned behavior tree for an agent
+  getAssignedActionGraph: async (agentId: string, graphId: string): Promise<AgentActionGraphInfo> => {
+    const { data } = await api.get(`/agents/${agentId}/behavior-trees/${graphId}`)
     return data
   },
 
@@ -576,6 +584,15 @@ export const templateApi = {
     return data
   },
 
+  // Update template identity (id/name)
+  updateIdentity: async (
+    id: string,
+    payload: { new_id?: string; new_name?: string }
+  ): Promise<ActionGraph> => {
+    const { data } = await api.patch(`/templates/${id}/identity`, payload)
+    return data
+  },
+
   // Delete a template
   delete: async (id: string): Promise<void> => {
     await api.delete(`/templates/${id}`)
@@ -756,6 +773,7 @@ export const pddlApi = {
   createProblem: async (req: {
     name: string
     behavior_tree_id: string
+    behavior_tree_ids?: string[]
     task_distributor_id?: string
     initial_state?: Record<string, string>
     goal_state: Record<string, string>
@@ -794,6 +812,7 @@ export const pddlApi = {
 
   preview: async (req: {
     behavior_tree_id: string
+    behavior_tree_ids?: string[]
     task_distributor_id?: string
     initial_state?: Record<string, string>
     goal_state: Record<string, string>
@@ -816,6 +835,46 @@ export const pddlApi = {
 
   cancelExecution: async (id: string): Promise<void> => {
     await api.post(`/pddl/executions/${id}/cancel`)
+  },
+
+  listRealtimeSessions: async (): Promise<RealtimeSession[]> => {
+    const { data } = await api.get('/pddl/realtime-sessions')
+    return data
+  },
+
+  getRealtimeSession: async (id: string): Promise<RealtimeSession> => {
+    const { data } = await api.get(`/pddl/realtime-sessions/${id}`)
+    return data
+  },
+
+  startRealtimeSession: async (req: {
+    name: string
+    behavior_tree_id: string
+    behavior_tree_ids?: string[]
+    task_distributor_id?: string
+    initial_state?: Record<string, string>
+    agent_ids: string[]
+    tick_interval_sec?: number
+    goals: RealtimeGoalRule[]
+  }): Promise<RealtimeSession> => {
+    const { data } = await api.post('/pddl/realtime-sessions', req)
+    return data
+  },
+
+  stopRealtimeSession: async (id: string): Promise<RealtimeSession | { message: string }> => {
+    const { data } = await api.post(`/pddl/realtime-sessions/${id}/stop`)
+    return data
+  },
+
+  resetRealtimeSessionState: async (
+    id: string,
+    req: {
+      values: Record<string, string>
+      clear_live_keys?: string[]
+    }
+  ): Promise<RealtimeSession> => {
+    const { data } = await api.post(`/pddl/realtime-sessions/${id}/reset-state`, req)
+    return data
   },
 
   // Resources
@@ -854,6 +913,19 @@ export const taskDistributorApi = {
 
   delete: async (id: string): Promise<void> => {
     await api.delete(`/task-distributors/${id}`)
+  },
+
+  getStateMergePolicies: async (distributorId: string): Promise<{ policies: TaskDistributor['state_merge_policies'] }> => {
+    const { data } = await api.get(`/task-distributors/${distributorId}/state-merge-policies`)
+    return data
+  },
+
+  updateStateMergePolicies: async (
+    distributorId: string,
+    policies: NonNullable<TaskDistributor['state_merge_policies']>
+  ): Promise<{ policies: TaskDistributor['state_merge_policies'] }> => {
+    const { data } = await api.put(`/task-distributors/${distributorId}/state-merge-policies`, { policies })
+    return data
   },
 
   // States
@@ -902,6 +974,54 @@ export const taskDistributorApi = {
 
   deleteResource: async (distributorId: string, resourceId: string): Promise<void> => {
     await api.delete(`/task-distributors/${distributorId}/resources/${resourceId}`)
+  },
+}
+
+export type SavedJsonFileEntry = {
+  name: string
+  size_bytes: number
+  updated_at: string
+}
+
+const encodePathSegment = (value: string): string => encodeURIComponent(value)
+
+export const saveFilesApi = {
+  // Task set JSONs (Save_files/tasks)
+  listTaskSets: async (): Promise<SavedJsonFileEntry[]> => {
+    const { data } = await api.get('/save-files/task-sets')
+    return data?.files || []
+  },
+
+  saveTaskSet: async (fileName: string, payload: unknown): Promise<SavedJsonFileEntry> => {
+    const { data } = await api.post('/save-files/task-sets', {
+      file_name: fileName,
+      payload,
+    })
+    return data
+  },
+
+  loadTaskSet: async <T = unknown>(fileName: string): Promise<T> => {
+    const { data } = await api.get(`/save-files/task-sets/${encodePathSegment(fileName)}`)
+    return data?.payload as T
+  },
+
+  // PDDL profile JSONs (Save_files/pddl)
+  listPddlProfiles: async (): Promise<SavedJsonFileEntry[]> => {
+    const { data } = await api.get('/save-files/pddl-profiles')
+    return data?.files || []
+  },
+
+  savePddlProfile: async (fileName: string, payload: unknown): Promise<SavedJsonFileEntry> => {
+    const { data } = await api.post('/save-files/pddl-profiles', {
+      file_name: fileName,
+      payload,
+    })
+    return data
+  },
+
+  loadPddlProfile: async <T = unknown>(fileName: string): Promise<T> => {
+    const { data } = await api.get(`/save-files/pddl-profiles/${encodePathSegment(fileName)}`)
+    return data?.payload as T
   },
 }
 

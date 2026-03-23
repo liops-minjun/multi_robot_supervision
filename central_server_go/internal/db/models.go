@@ -377,14 +377,26 @@ type PlanningStateVar struct {
 // The behavior tree itself is the runtime task; the planner only needs the
 // task's resource requirements and state transitions.
 type PlanningTaskSpec struct {
-	RequiredResources []string         `json:"required_resources,omitempty"`
-	DuringState       []PlanningEffect `json:"during_state,omitempty"`
-	ResultStates      []PlanningEffect `json:"result_states,omitempty"`
+	Preconditions          []PlanningCondition `json:"preconditions,omitempty"`
+	RequiredResources      []string            `json:"required_resources,omitempty"`
+	DuringState            []PlanningEffect    `json:"during_state,omitempty"`
+	ResultStates           []PlanningEffect    `json:"result_states,omitempty"`
+	WarningResultStates    []PlanningEffect    `json:"warning_result_states,omitempty"`
+	ErrorResultStates      []PlanningEffect    `json:"error_result_states,omitempty"`
+	WarningMessageVariable string              `json:"warning_message_variable,omitempty"`
+	ErrorMessageVariable   string              `json:"error_message_variable,omitempty"`
 }
 
 // HasData reports whether the task spec contains any planning metadata.
 func (spec PlanningTaskSpec) HasData() bool {
-	return len(spec.RequiredResources) > 0 || len(spec.DuringState) > 0 || len(spec.ResultStates) > 0
+	return len(spec.Preconditions) > 0 ||
+		len(spec.RequiredResources) > 0 ||
+		len(spec.DuringState) > 0 ||
+		len(spec.ResultStates) > 0 ||
+		len(spec.WarningResultStates) > 0 ||
+		len(spec.ErrorResultStates) > 0 ||
+		spec.WarningMessageVariable != "" ||
+		spec.ErrorMessageVariable != ""
 }
 
 // DecodePlanningTaskSpec parses task-level planning metadata from stored JSON.
@@ -487,9 +499,10 @@ type StepTransition struct {
 }
 
 type TransitionOnFailure struct {
-	Retry    int    `json:"retry,omitempty"`
-	Fallback string `json:"fallback,omitempty"`
-	Next     string `json:"next,omitempty"`
+	Retry     int    `json:"retry,omitempty"`
+	Fallback  string `json:"fallback,omitempty"`
+	Next      string `json:"next,omitempty"`
+	BackoffMs int    `json:"backoff_ms,omitempty"`
 }
 
 type OutcomeTransition struct {
@@ -592,6 +605,7 @@ type PlanningProblem struct {
 	ID                string         `gorm:"primaryKey;size:50"`
 	Name              string         `gorm:"size:200;not null"`
 	BehaviorTreeID    string         `gorm:"size:50;not null;index"`
+	BehaviorTreeIDs   datatypes.JSON `gorm:"type:jsonb"` // []string (preferred, multi-task support)
 	TaskDistributorID sql.NullString `gorm:"size:50;index"`
 	InitialState      datatypes.JSON `gorm:"type:jsonb"`            // map[string]string
 	GoalState         datatypes.JSON `gorm:"type:jsonb;not null"`   // map[string]string
@@ -613,15 +627,23 @@ func (PlanningProblem) TableName() string {
 
 // TaskDistributor represents an entity that owns states and resources for PDDL planning
 type TaskDistributor struct {
-	ID          string    `gorm:"primaryKey;size:50"`
-	Name        string    `gorm:"size:200;not null"`
-	Description string    `gorm:"type:text"`
-	CreatedAt   time.Time `gorm:"autoCreateTime"`
-	UpdatedAt   time.Time `gorm:"autoUpdateTime"`
+	ID                 string                            `gorm:"primaryKey;size:50"`
+	Name               string                            `gorm:"size:200;not null"`
+	Description        string                            `gorm:"type:text"`
+	StateMergePolicies []TaskDistributorStateMergePolicy `gorm:"-"`
+	CreatedAt          time.Time                         `gorm:"autoCreateTime"`
+	UpdatedAt          time.Time                         `gorm:"autoUpdateTime"`
 }
 
 func (TaskDistributor) TableName() string {
 	return "task_distributors"
+}
+
+// TaskDistributorStateMergePolicy controls which source wins when effective_state
+// merges planner/current values with runtime/live values for a state variable.
+type TaskDistributorStateMergePolicy struct {
+	Pattern  string `json:"pattern"`
+	Priority string `json:"priority"` // live, planner
 }
 
 // TaskDistributorState represents a state variable owned by a TaskDistributor

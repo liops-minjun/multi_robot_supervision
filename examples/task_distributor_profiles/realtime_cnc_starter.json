@@ -1,0 +1,322 @@
+{
+  "version": 1,
+  "exported_at": "2026-03-11T00:00:00Z",
+  "distributor": {
+    "name": "test",
+    "description": "Starter profile for Task Distributor control-room (CNC realtime loop, full resources/states baseline)"
+  },
+  "states": [
+    {
+      "name": "at_cnc01",
+      "type": "bool",
+      "initial_value": "false",
+      "description": "Whether an agent is currently parked at cnc01"
+    },
+    {
+      "name": "cnc01_status",
+      "type": "string",
+      "initial_value": "idle",
+      "description": "CNC lifecycle state (idle/running/done/fault)"
+    },
+    {
+      "name": "at_cnc02",
+      "type": "bool",
+      "initial_value": "false",
+      "description": "Whether an agent is currently parked at cnc02"
+    },
+    {
+      "name": "cnc02_status",
+      "type": "string",
+      "initial_value": "idle",
+      "description": "CNC lifecycle state (idle/running/done/fault)"
+    },
+    {
+      "name": "at_cnc03",
+      "type": "bool",
+      "initial_value": "false",
+      "description": "Whether an agent is currently parked at cnc03"
+    },
+    {
+      "name": "cnc03_status",
+      "type": "string",
+      "initial_value": "idle",
+      "description": "CNC lifecycle state (idle/running/done/fault)"
+    },
+    {
+      "name": "at_cnc04",
+      "type": "bool",
+      "initial_value": "false",
+      "description": "Whether an agent is currently parked at cnc04"
+    },
+    {
+      "name": "cnc04_status",
+      "type": "string",
+      "initial_value": "idle",
+      "description": "CNC lifecycle state (idle/running/done/fault)"
+    },
+    {
+      "name": "at_cnc05",
+      "type": "bool",
+      "initial_value": "false",
+      "description": "Whether an agent is currently parked at cnc05"
+    },
+    {
+      "name": "cnc05_status",
+      "type": "string",
+      "initial_value": "idle",
+      "description": "CNC lifecycle state (idle/running/done/fault)"
+    },
+    {
+      "name": "at_cnc06",
+      "type": "bool",
+      "initial_value": "false",
+      "description": "Whether an agent is currently parked at cnc06"
+    },
+    {
+      "name": "cnc06_status",
+      "type": "string",
+      "initial_value": "idle",
+      "description": "CNC lifecycle state (idle/running/done/fault)"
+    },
+    {
+      "name": "agent01_battery_low",
+      "type": "bool",
+      "initial_value": "false",
+      "description": "Low-battery flag for agent01"
+    },
+    {
+      "name": "agent02_battery_low",
+      "type": "bool",
+      "initial_value": "false",
+      "description": "Low-battery flag for agent02"
+    },
+    {
+      "name": "agent03_battery_low",
+      "type": "bool",
+      "initial_value": "false",
+      "description": "Low-battery flag for agent03"
+    },
+    {
+      "name": "pending_leave",
+      "type": "bool",
+      "initial_value": "false",
+      "description": "Set true after cycle run succeeds; leave_cnc consumes this"
+    }
+  ],
+  "resources": [
+    {
+      "name": "cnc0",
+      "kind": "type",
+      "description": "CNC resource type"
+    },
+    {
+      "name": "cnc01",
+      "kind": "instance",
+      "parent_name": "cnc0",
+      "description": "CNC instance 01"
+    },
+    {
+      "name": "cnc02",
+      "kind": "instance",
+      "parent_name": "cnc0",
+      "description": "CNC instance 02"
+    },
+    {
+      "name": "cnc03",
+      "kind": "instance",
+      "parent_name": "cnc0",
+      "description": "CNC instance 03"
+    },
+    {
+      "name": "cnc04",
+      "kind": "instance",
+      "parent_name": "cnc0",
+      "description": "CNC instance 04"
+    },
+    {
+      "name": "cnc05",
+      "kind": "instance",
+      "parent_name": "cnc0",
+      "description": "CNC instance 05"
+    },
+    {
+      "name": "cnc06",
+      "kind": "instance",
+      "parent_name": "cnc0",
+      "description": "CNC instance 06"
+    },
+    {
+      "name": "charger",
+      "kind": "type",
+      "description": "Charger resource type"
+    },
+    {
+      "name": "charger01",
+      "kind": "instance",
+      "parent_name": "charger",
+      "description": "Charger instance 01"
+    },
+    {
+      "name": "charger02",
+      "kind": "instance",
+      "parent_name": "charger",
+      "description": "Charger instance 02"
+    }
+  ],
+  "selected_tasks": [
+    {
+      "name": "go to cnc and park"
+    },
+    {
+      "name": "run cnc service cycle 01"
+    },
+    {
+      "name": "run cnc cycle 02"
+    },
+    {
+      "name": "leave cnc"
+    }
+  ],
+  "selected_agents": [],
+  "initial_state": {
+    "at_cnc01": "false",
+    "at_cnc02": "false",
+    "at_cnc03": "false",
+    "at_cnc04": "false",
+    "at_cnc05": "false",
+    "at_cnc06": "false",
+    "cnc01_status": "idle",
+    "cnc02_status": "idle",
+    "cnc03_status": "idle",
+    "cnc04_status": "idle",
+    "cnc05_status": "idle",
+    "cnc06_status": "idle",
+    "agent01_battery_low": "false",
+    "agent02_battery_low": "false",
+    "agent03_battery_low": "false",
+    "pending_leave": "false"
+  },
+  "goal_state": {
+    "cnc01_status": "running"
+  },
+  "realtime": {
+    "tick_interval_sec": 2,
+    "goals": [
+      {
+        "id": "park_for_done_cnc",
+        "name": "park_for_done_cnc",
+        "priority": 10,
+        "enabled": true,
+        "activation_conditions": [
+          {
+            "variable": "cnc01_status",
+            "operator": "==",
+            "value": "done"
+          },
+          {
+            "variable": "at_cnc01",
+            "operator": "==",
+            "value": "false"
+          }
+        ],
+        "goal_state": {
+          "at_cnc01": "true"
+        }
+      },
+      {
+        "id": "run_cycle02",
+        "name": "run_cycle02",
+        "priority": 20,
+        "enabled": true,
+        "activation_conditions": [
+          {
+            "variable": "cnc01_status",
+            "operator": "==",
+            "value": "done"
+          },
+          {
+            "variable": "at_cnc01",
+            "operator": "==",
+            "value": "true"
+          }
+        ],
+        "goal_state": {
+          "cnc01_status": "idle"
+        }
+      },
+      {
+        "id": "run_cycle01",
+        "name": "run_cycle01",
+        "priority": 30,
+        "enabled": true,
+        "activation_conditions": [
+          {
+            "variable": "cnc01_status",
+            "operator": "==",
+            "value": "idle"
+          },
+          {
+            "variable": "at_cnc01",
+            "operator": "==",
+            "value": "true"
+          },
+          {
+            "variable": "pending_leave",
+            "operator": "==",
+            "value": "false"
+          }
+        ],
+        "goal_state": {
+          "cnc01_status": "running"
+        }
+      },
+      {
+        "id": "leave_after_cycle",
+        "name": "leave_after_cycle",
+        "priority": 40,
+        "enabled": true,
+        "activation_conditions": [
+          {
+            "variable": "cnc01_status",
+            "operator": "==",
+            "value": "running"
+          },
+          {
+            "variable": "at_cnc01",
+            "operator": "==",
+            "value": "true"
+          },
+          {
+            "variable": "pending_leave",
+            "operator": "==",
+            "value": "true"
+          }
+        ],
+        "goal_state": {
+          "at_cnc01": "false"
+        }
+      },
+      {
+        "id": "park_for_idle_cnc",
+        "name": "park_for_idle_cnc",
+        "priority": 50,
+        "enabled": true,
+        "activation_conditions": [
+          {
+            "variable": "cnc01_status",
+            "operator": "==",
+            "value": "idle"
+          },
+          {
+            "variable": "at_cnc01",
+            "operator": "==",
+            "value": "false"
+          }
+        ],
+        "goal_state": {
+          "at_cnc01": "true"
+        }
+      }
+    ]
+  }
+}

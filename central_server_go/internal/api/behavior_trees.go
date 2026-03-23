@@ -1,11 +1,14 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"central_server_go/internal/db"
@@ -404,14 +407,14 @@ func (s *Server) CheckExecutability(w http.ResponseWriter, r *http.Request) {
 	isOnline := s.stateManager.IsAgentOnline(agentID)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"behavior_tree_id":      graphID,
-		"agent_id":              agentID,
-		"can_execute":           result.Valid && isOnline,
-		"capabilities_valid":    result.Valid,
-		"agent_online":          isOnline,
-		"missing_capabilities":  result.MissingCapabilities,
-		"unavailable_servers":   result.UnavailableServers,
-		"message":               result.Message,
+		"behavior_tree_id":     graphID,
+		"agent_id":             agentID,
+		"can_execute":          result.Valid && isOnline,
+		"capabilities_valid":   result.Valid,
+		"agent_online":         isOnline,
+		"missing_capabilities": result.MissingCapabilities,
+		"unavailable_servers":  result.UnavailableServers,
+		"message":              result.Message,
 	})
 }
 
@@ -443,7 +446,9 @@ func (s *Server) ExecuteBehaviorTree(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("behavior tree '%s' is not assigned to agent '%s'. Please assign the graph first.", graphID, req.AgentID))
 		return
 	}
-
+	// Ensure the latest graph is deployed before execution.
+	// Scheduler.StartTask() also has deploy-on-dispatch safeguards, but we surface
+	// deployment errors here so RTM users get immediate feedback.
 	deployResult := s.deployBehaviorTreeToAgentSync(r.Context(), abt.ID)
 	deployStatus, _ := deployResult["status"].(string)
 	if deployStatus != "deployed" {
@@ -467,11 +472,11 @@ func (s *Server) ExecuteBehaviorTree(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"task_id":           taskID,
-		"behavior_tree_id":  graphID,
-		"agent_id":          req.AgentID,
-		"status":            "running",
-		"message":           "Behavior Tree execution started",
+		"task_id":          taskID,
+		"behavior_tree_id": graphID,
+		"agent_id":         req.AgentID,
+		"status":           "running",
+		"message":          "Behavior Tree execution started",
 	})
 }
 
@@ -729,12 +734,12 @@ func behaviorTreeToListResponse(graph *db.BehaviorTree, repo *db.Repository) Beh
 
 func behaviorTreeToResponse(graph *db.BehaviorTree, repo *db.Repository) BehaviorTreeResponse {
 	response := BehaviorTreeResponse{
-		ID:                 graph.ID,
-		Name:               graph.Name,
+		ID:         graph.ID,
+		Name:       graph.Name,
 		Version:    graph.Version,
 		IsTemplate: graph.IsTemplate,
 		CreatedAt:  graph.CreatedAt,
-		UpdatedAt:          graph.UpdatedAt,
+		UpdatedAt:  graph.UpdatedAt,
 	}
 
 	if graph.Description.Valid {
@@ -821,7 +826,19 @@ func planningTaskRequestToJSON(task *PlanningTaskResponse) []byte {
 	}
 
 	spec := db.PlanningTaskSpec{
-		RequiredResources: append([]string{}, task.RequiredResources...),
+		Preconditions:          make([]db.PlanningCondition, 0, len(task.Preconditions)),
+		RequiredResources:      append([]string{}, task.RequiredResources...),
+		WarningMessageVariable: strings.TrimSpace(task.WarningMessageVariable),
+		ErrorMessageVariable:   strings.TrimSpace(task.ErrorMessageVariable),
+	}
+	if len(task.Preconditions) > 0 {
+		for _, cond := range task.Preconditions {
+			spec.Preconditions = append(spec.Preconditions, db.PlanningCondition{
+				Variable: cond.Variable,
+				Operator: cond.Operator,
+				Value:    cond.Value,
+			})
+		}
 	}
 	if len(task.DuringState) > 0 {
 		spec.DuringState = make([]db.PlanningEffect, 0, len(task.DuringState))
@@ -836,6 +853,24 @@ func planningTaskRequestToJSON(task *PlanningTaskResponse) []byte {
 		spec.ResultStates = make([]db.PlanningEffect, 0, len(task.ResultStates))
 		for _, effect := range task.ResultStates {
 			spec.ResultStates = append(spec.ResultStates, db.PlanningEffect{
+				Variable: effect.Variable,
+				Value:    effect.Value,
+			})
+		}
+	}
+	if len(task.WarningResultStates) > 0 {
+		spec.WarningResultStates = make([]db.PlanningEffect, 0, len(task.WarningResultStates))
+		for _, effect := range task.WarningResultStates {
+			spec.WarningResultStates = append(spec.WarningResultStates, db.PlanningEffect{
+				Variable: effect.Variable,
+				Value:    effect.Value,
+			})
+		}
+	}
+	if len(task.ErrorResultStates) > 0 {
+		spec.ErrorResultStates = make([]db.PlanningEffect, 0, len(task.ErrorResultStates))
+		for _, effect := range task.ErrorResultStates {
+			spec.ErrorResultStates = append(spec.ErrorResultStates, db.PlanningEffect{
 				Variable: effect.Variable,
 				Value:    effect.Value,
 			})
@@ -857,7 +892,19 @@ func planningTaskJSONToResponse(raw []byte) *PlanningTaskResponse {
 	}
 
 	response := &PlanningTaskResponse{
-		RequiredResources: append([]string{}, spec.RequiredResources...),
+		Preconditions:          make([]PlanningConditionResponse, 0, len(spec.Preconditions)),
+		RequiredResources:      append([]string{}, spec.RequiredResources...),
+		WarningMessageVariable: strings.TrimSpace(spec.WarningMessageVariable),
+		ErrorMessageVariable:   strings.TrimSpace(spec.ErrorMessageVariable),
+	}
+	if len(spec.Preconditions) > 0 {
+		for _, cond := range spec.Preconditions {
+			response.Preconditions = append(response.Preconditions, PlanningConditionResponse{
+				Variable: cond.Variable,
+				Operator: cond.Operator,
+				Value:    cond.Value,
+			})
+		}
 	}
 	if len(spec.DuringState) > 0 {
 		response.DuringState = make([]PlanningEffectResponse, 0, len(spec.DuringState))
@@ -872,6 +919,24 @@ func planningTaskJSONToResponse(raw []byte) *PlanningTaskResponse {
 		response.ResultStates = make([]PlanningEffectResponse, 0, len(spec.ResultStates))
 		for _, effect := range spec.ResultStates {
 			response.ResultStates = append(response.ResultStates, PlanningEffectResponse{
+				Variable: effect.Variable,
+				Value:    effect.Value,
+			})
+		}
+	}
+	if len(spec.WarningResultStates) > 0 {
+		response.WarningResultStates = make([]PlanningEffectResponse, 0, len(spec.WarningResultStates))
+		for _, effect := range spec.WarningResultStates {
+			response.WarningResultStates = append(response.WarningResultStates, PlanningEffectResponse{
+				Variable: effect.Variable,
+				Value:    effect.Value,
+			})
+		}
+	}
+	if len(spec.ErrorResultStates) > 0 {
+		response.ErrorResultStates = make([]PlanningEffectResponse, 0, len(spec.ErrorResultStates))
+		for _, effect := range spec.ErrorResultStates {
+			response.ErrorResultStates = append(response.ErrorResultStates, PlanningEffectResponse{
 				Variable: effect.Variable,
 				Value:    effect.Value,
 			})
@@ -992,13 +1057,13 @@ func (s *Server) ValidateCanonicalGraph(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"valid":         len(errors) == 0,
-		"errors":        errors,
-		"warnings":      warnings,
-		"vertex_count":  len(canonicalGraph.Vertices),
-		"edge_count":    len(canonicalGraph.Edges),
-		"checksum":      canonicalGraph.Checksum,
-		"entry_point":   canonicalGraph.EntryPoint,
+		"valid":          len(errors) == 0,
+		"errors":         errors,
+		"warnings":       warnings,
+		"vertex_count":   len(canonicalGraph.Vertices),
+		"edge_count":     len(canonicalGraph.Edges),
+		"checksum":       canonicalGraph.Checksum,
+		"entry_point":    canonicalGraph.EntryPoint,
 		"terminal_count": len(terminals),
 	})
 }
@@ -1127,12 +1192,18 @@ func (s *Server) DeployBehaviorTreeToAgent(w http.ResponseWriter, r *http.Reques
 		s.repo.UpdateAgentBehaviorTree(abt)
 	}
 
-	// Deploy via QUIC
-	result, err := s.quicHandler.DeployCanonicalGraph(r.Context(), agentID, graphJSON)
+	// Deploy via QUIC (bounded timeout to avoid infinite "deploying" state)
+	deployCtx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	result, err := s.quicHandler.DeployCanonicalGraph(deployCtx, agentID, graphJSON)
 	if err != nil {
+		deployErr := err.Error()
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(deployCtx.Err(), context.DeadlineExceeded) {
+			deployErr = "deploy timeout: no response from RTM within 20s"
+		}
 		// Update database to reflect failed status
 		abt.DeploymentStatus = "failed"
-		abt.DeploymentError = sql.NullString{String: err.Error(), Valid: true}
+		abt.DeploymentError = sql.NullString{String: deployErr, Valid: true}
 		abt.UpdatedAt = time.Now()
 		s.repo.UpdateAgentBehaviorTree(abt)
 
@@ -1143,7 +1214,7 @@ func (s *Server) DeployBehaviorTreeToAgent(w http.ResponseWriter, r *http.Reques
 			Action:              "deploy",
 			Version:             dbGraph.Version,
 			Status:              "failed",
-			ErrorMessage:        sql.NullString{String: err.Error(), Valid: true},
+			ErrorMessage:        sql.NullString{String: deployErr, Valid: true},
 			InitiatedAt:         time.Now(),
 			CompletedAt:         sql.NullTime{Time: time.Now(), Valid: true},
 		}
@@ -1155,7 +1226,7 @@ func (s *Server) DeployBehaviorTreeToAgent(w http.ResponseWriter, r *http.Reques
 			"behavior_tree_id":  graphID,
 			"agent_id":          agentID,
 			"version":           dbGraph.Version,
-			"error":             err.Error(),
+			"error":             deployErr,
 			"deployment_status": "failed",
 		})
 		return

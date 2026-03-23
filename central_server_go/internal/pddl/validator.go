@@ -72,6 +72,23 @@ func ValidateProblem(problem *PlanProblem) error {
 			}
 		}
 
+		if task.BoundAgentID != "" {
+			var boundAgent *AgentInfo
+			for idx := range problem.Agents {
+				if problem.Agents[idx].ID == task.BoundAgentID {
+					boundAgent = &problem.Agents[idx]
+					break
+				}
+			}
+			if boundAgent == nil {
+				return fmt.Errorf("task %q is bound to unknown agent %q", task.TaskID, task.BoundAgentID)
+			}
+			if !agentCanRunTask(*boundAgent, task) {
+				return fmt.Errorf("task %q is bound to agent %q but it is offline or missing required capabilities", task.TaskID, task.BoundAgentID)
+			}
+			continue
+		}
+
 		if len(capableAgentIDs(task, problem.Agents)) == 0 {
 			return fmt.Errorf("no online agent satisfies capabilities required by task %q", task.TaskID)
 		}
