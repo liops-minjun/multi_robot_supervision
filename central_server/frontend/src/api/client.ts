@@ -986,7 +986,7 @@ export type SavedJsonFileEntry = {
 const encodePathSegment = (value: string): string => encodeURIComponent(value)
 
 export const saveFilesApi = {
-  // Task set JSONs (Save_files/tasks)
+  // Task set JSONs (Save_files/task/task_sets, legacy fallback: Save_files/tasks)
   listTaskSets: async (): Promise<SavedJsonFileEntry[]> => {
     const { data } = await api.get('/save-files/task-sets')
     return data?.files || []
@@ -1002,6 +1002,25 @@ export const saveFilesApi = {
 
   loadTaskSet: async <T = unknown>(fileName: string): Promise<T> => {
     const { data } = await api.get(`/save-files/task-sets/${encodePathSegment(fileName)}`)
+    return data?.payload as T
+  },
+
+  // Single task JSONs (Save_files/task/tasks)
+  listTasks: async (): Promise<SavedJsonFileEntry[]> => {
+    const { data } = await api.get('/save-files/tasks')
+    return data?.files || []
+  },
+
+  saveTask: async (fileName: string, payload: unknown): Promise<SavedJsonFileEntry> => {
+    const { data } = await api.post('/save-files/tasks', {
+      file_name: fileName,
+      payload,
+    })
+    return data
+  },
+
+  loadTask: async <T = unknown>(fileName: string): Promise<T> => {
+    const { data } = await api.get(`/save-files/tasks/${encodePathSegment(fileName)}`)
     return data?.payload as T
   },
 

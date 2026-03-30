@@ -320,6 +320,11 @@ func (s *Server) setupRouter() {
 				r.Post("/", s.SaveTaskSetFile)
 				r.Get("/{fileName}", s.LoadTaskSetFile)
 			})
+			r.Route("/tasks", func(r chi.Router) {
+				r.Get("/", s.ListTaskSaveFiles)
+				r.Post("/", s.SaveTaskFile)
+				r.Get("/{fileName}", s.LoadTaskFile)
+			})
 			r.Route("/pddl-profiles", func(r chi.Router) {
 				r.Get("/", s.ListPddlProfileSaveFiles)
 				r.Post("/", s.SavePddlProfileFile)

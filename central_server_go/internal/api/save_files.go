@@ -16,6 +16,7 @@ type saveFileCategory string
 
 const (
 	saveFileCategoryTaskSet      saveFileCategory = "task_sets"
+	saveFileCategoryTask         saveFileCategory = "tasks"
 	saveFileCategoryPddlProfiles saveFileCategory = "pddl_profiles"
 )
 
@@ -104,14 +105,28 @@ func canPrepareWritableDir(dirPath string) bool {
 	return true
 }
 
-func saveFileCategoryDirName(category saveFileCategory) (string, error) {
+type saveFileDirConfig struct {
+	primary string
+	legacy  []string
+}
+
+func saveFileCategoryDirConfig(category saveFileCategory) (saveFileDirConfig, error) {
 	switch category {
 	case saveFileCategoryTaskSet:
-		return "tasks", nil
+		return saveFileDirConfig{
+			primary: filepath.Join("task", "task_sets"),
+			legacy:  []string{"tasks"},
+		}, nil
+	case saveFileCategoryTask:
+		return saveFileDirConfig{
+			primary: filepath.Join("task", "tasks"),
+		}, nil
 	case saveFileCategoryPddlProfiles:
-		return "pddl", nil
+		return saveFileDirConfig{
+			primary: "pddl",
+		}, nil
 	default:
-		return "", fmt.Errorf("unsupported save file category: %s", category)
+		return saveFileDirConfig{}, fmt.Errorf("unsupported save file category: %s", category)
 	}
 }
 
@@ -138,48 +153,82 @@ func normalizeJSONFileName(input string) (string, error) {
 }
 
 func (s *Server) saveFileDir(category saveFileCategory) (string, error) {
-	subdir, err := saveFileCategoryDirName(category)
+	config, err := saveFileCategoryDirConfig(category)
 	if err != nil {
 		return "", err
 	}
-	dirPath := filepath.Join(s.saveFilesRoot, subdir)
+	dirPath := filepath.Join(s.saveFilesRoot, config.primary)
 	if err := os.MkdirAll(dirPath, 0o755); err != nil {
 		return "", err
 	}
 	return dirPath, nil
 }
 
+func (s *Server) saveFileLookupDirs(category saveFileCategory) ([]string, error) {
+	primaryDir, err := s.saveFileDir(category)
+	if err != nil {
+		return nil, err
+	}
+
+	config, err := saveFileCategoryDirConfig(category)
+	if err != nil {
+		return nil, err
+	}
+
+	dirs := []string{primaryDir}
+	for _, legacyRelPath := range config.legacy {
+		legacyDir := filepath.Join(s.saveFilesRoot, legacyRelPath)
+		info, statErr := os.Stat(legacyDir)
+		if statErr != nil || !info.IsDir() {
+			continue
+		}
+		dirs = append(dirs, legacyDir)
+	}
+
+	return dirs, nil
+}
+
 func (s *Server) listSaveFiles(w http.ResponseWriter, category saveFileCategory) {
-	dirPath, err := s.saveFileDir(category)
+	dirPaths, err := s.saveFileLookupDirs(category)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to prepare save file directory")
 		return
 	}
 
-	entries, err := os.ReadDir(dirPath)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list save files")
-		return
+	filesByName := make(map[string]saveFileListItem)
+	for _, dirPath := range dirPaths {
+		entries, readErr := os.ReadDir(dirPath)
+		if readErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list save files")
+			return
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if !strings.HasSuffix(strings.ToLower(name), ".json") {
+				continue
+			}
+			if _, exists := filesByName[name]; exists {
+				continue
+			}
+			info, infoErr := entry.Info()
+			if infoErr != nil {
+				continue
+			}
+			filesByName[name] = saveFileListItem{
+				Name:      name,
+				SizeBytes: info.Size(),
+				UpdatedAt: info.ModTime().UTC().Format(time.RFC3339),
+			}
+		}
 	}
 
-	files := make([]saveFileListItem, 0)
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasSuffix(strings.ToLower(name), ".json") {
-			continue
-		}
-		info, infoErr := entry.Info()
-		if infoErr != nil {
-			continue
-		}
-		files = append(files, saveFileListItem{
-			Name:      name,
-			SizeBytes: info.Size(),
-			UpdatedAt: info.ModTime().UTC().Format(time.RFC3339),
-		})
+	files := make([]saveFileListItem, 0, len(filesByName))
+	for _, file := range filesByName {
+		files = append(files, file)
 	}
 
 	sort.Slice(files, func(i, j int) bool {
@@ -257,20 +306,29 @@ func (s *Server) loadJSONFile(w http.ResponseWriter, fileName string, category s
 		return
 	}
 
-	dirPath, err := s.saveFileDir(category)
+	dirPaths, err := s.saveFileLookupDirs(category)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to prepare save file directory")
 		return
 	}
-	targetPath := filepath.Join(dirPath, normalizedName)
 
-	raw, err := os.ReadFile(targetPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			writeError(w, http.StatusNotFound, "save file not found")
+	var raw []byte
+	found := false
+	for _, dirPath := range dirPaths {
+		targetPath := filepath.Join(dirPath, normalizedName)
+		raw, err = os.ReadFile(targetPath)
+		if err == nil {
+			found = true
+			break
+		}
+		if !os.IsNotExist(err) {
+			writeError(w, http.StatusInternalServerError, "failed to read save file")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to read save file")
+	}
+
+	if !found {
+		writeError(w, http.StatusNotFound, "save file not found")
 		return
 	}
 
@@ -290,12 +348,24 @@ func (s *Server) ListTaskSetSaveFiles(w http.ResponseWriter, _ *http.Request) {
 	s.listSaveFiles(w, saveFileCategoryTaskSet)
 }
 
+func (s *Server) ListTaskSaveFiles(w http.ResponseWriter, _ *http.Request) {
+	s.listSaveFiles(w, saveFileCategoryTask)
+}
+
 func (s *Server) SaveTaskSetFile(w http.ResponseWriter, r *http.Request) {
 	s.saveJSONFile(w, r, saveFileCategoryTaskSet)
 }
 
+func (s *Server) SaveTaskFile(w http.ResponseWriter, r *http.Request) {
+	s.saveJSONFile(w, r, saveFileCategoryTask)
+}
+
 func (s *Server) LoadTaskSetFile(w http.ResponseWriter, r *http.Request) {
 	s.loadJSONFile(w, chiURLParam(r, "fileName"), saveFileCategoryTaskSet)
+}
+
+func (s *Server) LoadTaskFile(w http.ResponseWriter, r *http.Request) {
+	s.loadJSONFile(w, chiURLParam(r, "fileName"), saveFileCategoryTask)
 }
 
 func (s *Server) ListPddlProfileSaveFiles(w http.ResponseWriter, _ *http.Request) {

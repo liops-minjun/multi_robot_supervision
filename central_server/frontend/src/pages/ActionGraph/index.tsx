@@ -22,9 +22,10 @@ import 'reactflow/dist/style.css'
 import {
   Trash2, Zap, ChevronDown, ChevronRight, Server, Activity, Plus, PlusCircle, X,
   Cpu, FileCode, Users, Link2, Unlink, Check, AlertCircle, Clock, Layout, Save, Radio,
-  Edit, Lock, Unlock, Eye, EyeOff, Search, Download, Upload
+  Edit, Lock, Unlock, Eye, EyeOff, Search, Download, Upload, ArrowLeft, FolderOpen
 } from 'lucide-react'
 import { templateApi, stateDefinitionApi, agentApi, capabilityApi, behaviorTreeLockApi, taskDistributorApi, saveFilesApi } from '../../api/client'
+import type { SavedJsonFileEntry } from '../../api/client'
 import { useWebSocket, BehaviorTreeLockMessage, GraphSyncMessage } from '../../contexts/WebSocketContext'
 import { useUserStore } from '../../stores/userStore'
 import type {
@@ -472,6 +473,32 @@ type TaskSetBackup = {
   }>
 }
 
+type SingleTaskBackup = {
+  version: number
+  exported_at: string
+  source: string
+  template: TaskSetTemplateSnapshot
+}
+
+type SavedTaskFolder = 'task_sets' | 'tasks'
+
+const SAVED_TASK_FOLDER_META: Record<SavedTaskFolder, {
+  label: string
+  description: string
+  path: string
+}> = {
+  task_sets: {
+    label: 'Task Sets',
+    description: '여러 태스크와 할당 정보를 한 번에 불러옵니다.',
+    path: 'Save_files/task/task_sets',
+  },
+  tasks: {
+    label: 'Tasks',
+    description: '선택한 단일 태스크 JSON을 불러옵니다.',
+    path: 'Save_files/task/tasks',
+  },
+}
+
 const inferCapabilityKindFromActionType = (actionType?: string): 'action' | 'service' => {
   const normalizedType = (actionType || '').toLowerCase()
   return normalizedType.includes('/srv/') ? 'service' : 'action'
@@ -804,12 +831,10 @@ function ActionGraphEditor() {
   const [showTaskPddlConfigModal, setShowTaskPddlConfigModal] = useState(false)
   const [taskSetNotice, setTaskSetNotice] = useState<string | null>(null)
   const [isTaskSetProcessing, setIsTaskSetProcessing] = useState(false)
-  const [savedTaskSetFiles, setSavedTaskSetFiles] = useState<Array<{
-    name: string
-    size_bytes: number
-    updated_at: string
-  }>>([])
-  const [showTaskSetLoadModal, setShowTaskSetLoadModal] = useState(false)
+  const [savedTaskSetFiles, setSavedTaskSetFiles] = useState<SavedJsonFileEntry[]>([])
+  const [savedTaskFiles, setSavedTaskFiles] = useState<SavedJsonFileEntry[]>([])
+  const [showSaveFileLoadModal, setShowSaveFileLoadModal] = useState(false)
+  const [selectedSaveFileFolder, setSelectedSaveFileFolder] = useState<SavedTaskFolder | null>(null)
 
   const [expandedCategories, setExpandedCategories] = useState<string[]>([
     'Start Nodes',
@@ -2838,6 +2863,16 @@ function ActionGraphEditor() {
     setTaskSetNotice(summary)
   }, [agents, queryClient, selectedTemplateId])
 
+  const refreshSavedTaskFiles = useCallback(async () => {
+    const [taskSetFiles, taskFiles] = await Promise.all([
+      saveFilesApi.listTaskSets(),
+      saveFilesApi.listTasks(),
+    ])
+    setSavedTaskSetFiles(taskSetFiles)
+    setSavedTaskFiles(taskFiles)
+    return { taskSetFiles, taskFiles }
+  }, [])
+
   const handleExportTaskSet = useCallback(async () => {
     setIsTaskSetProcessing(true)
     setTaskSetNotice(null)
@@ -2874,8 +2909,7 @@ function ActionGraphEditor() {
       const timeLabel = new Date().toISOString().replace(/[:.]/g, '-')
       const fileName = `task_set_backup_${timeLabel}.json`
       const saved = await saveFilesApi.saveTaskSet(fileName, backup)
-      const files = await saveFilesApi.listTaskSets()
-      setSavedTaskSetFiles(files)
+      await refreshSavedTaskFiles()
       setTaskSetNotice(`태스크 세트 저장 완료: ${snapshotItems.length}개 (${saved.name})`)
     } catch (error) {
       console.error('Failed to export task set:', error)
@@ -2883,29 +2917,84 @@ function ActionGraphEditor() {
     } finally {
       setIsTaskSetProcessing(false)
     }
-  }, [])
+  }, [refreshSavedTaskFiles])
 
-  const handleOpenTaskSetImport = useCallback(async () => {
+  const handleExportSelectedTask = useCallback(async () => {
     setIsTaskSetProcessing(true)
     setTaskSetNotice(null)
     try {
-      const files = await saveFilesApi.listTaskSets()
-      setSavedTaskSetFiles(files)
-      if (files.length === 0) {
-        setTaskSetNotice('Save_files/tasks 폴더에 저장된 태스크 JSON이 없습니다.')
+      if (!selectedTemplateId) {
+        setTaskSetNotice('저장할 태스크를 먼저 선택하세요.')
         return
       }
-      setShowTaskSetLoadModal(true)
+
+      const defaultFileName = `${selectedTemplateId}_${new Date().toISOString().replace(/[:.]/g, '-')}.json`
+      const requestedFileName = window.prompt('단일 태스크 저장 파일 이름을 입력하세요.', defaultFileName)
+      if (requestedFileName === null) {
+        setTaskSetNotice('단일 태스크 저장을 취소했습니다.')
+        return
+      }
+
+      const trimmedFileName = requestedFileName.trim()
+      if (!trimmedFileName) {
+        setTaskSetNotice('저장 파일 이름을 입력하세요.')
+        return
+      }
+
+      const { steps, entryPoint } = convertGraphToSteps()
+      const snapshot: TaskSetTemplateSnapshot = {
+        id: selectedTemplateId,
+        name: selectedTemplate?.name || selectedTemplateId,
+        description: toOptionalString(selectedTemplate?.description),
+        entry_point: toOptionalString(entryPoint || selectedTemplate?.entry_point),
+        preconditions: (selectedTemplate?.preconditions || undefined) as unknown[] | undefined,
+        steps,
+        states: selectedTemplate?.states || undefined,
+        planning_states: selectedTemplate?.planning_states || undefined,
+        planning_task: planningTask || selectedTemplate?.planning_task || undefined,
+        task_distributor_id: toOptionalString(taskDistributorId || selectedTemplate?.task_distributor_id),
+      }
+
+      const payload: SingleTaskBackup = {
+        version: 1,
+        exported_at: new Date().toISOString(),
+        source: 'multi-robot-supervision/task-editor',
+        template: snapshot,
+      }
+
+      const saved = await saveFilesApi.saveTask(trimmedFileName, payload)
+      await refreshSavedTaskFiles()
+      setTaskSetNotice(`단일 태스크 저장 완료: ${snapshot.name} (${saved.name})`)
     } catch (error) {
-      console.error('Failed to list task set save files:', error)
+      console.error('Failed to export selected task:', error)
+      setTaskSetNotice(`단일 태스크 저장 실패: ${extractApiErrorMessage(error, 'unknown error')}`)
+    } finally {
+      setIsTaskSetProcessing(false)
+    }
+  }, [convertGraphToSteps, planningTask, refreshSavedTaskFiles, selectedTemplate, selectedTemplateId, taskDistributorId])
+
+  const handleOpenSavedTaskLoad = useCallback(async () => {
+    setIsTaskSetProcessing(true)
+    setTaskSetNotice(null)
+    setSelectedSaveFileFolder(null)
+    try {
+      const { taskSetFiles, taskFiles } = await refreshSavedTaskFiles()
+      if (taskSetFiles.length === 0 && taskFiles.length === 0) {
+        setTaskSetNotice('Save_files/task 폴더에 저장된 JSON 파일이 없습니다.')
+        return
+      }
+      setShowSaveFileLoadModal(true)
+    } catch (error) {
+      console.error('Failed to list saved task files:', error)
       setTaskSetNotice(`저장 파일 목록 조회 실패: ${extractApiErrorMessage(error, 'unknown error')}`)
     } finally {
       setIsTaskSetProcessing(false)
     }
-  }, [])
+  }, [refreshSavedTaskFiles])
 
   const handleImportTaskSet = useCallback(async (fileName: string) => {
-    setShowTaskSetLoadModal(false)
+    setShowSaveFileLoadModal(false)
+    setSelectedSaveFileFolder(null)
     setIsTaskSetProcessing(true)
     setTaskSetNotice(null)
     try {
@@ -2919,12 +3008,96 @@ function ActionGraphEditor() {
     }
   }, [importTaskSetBackup])
 
+  const handleImportSingleTask = useCallback(async (fileName: string) => {
+    setShowSaveFileLoadModal(false)
+    setSelectedSaveFileFolder(null)
+    setIsTaskSetProcessing(true)
+    setTaskSetNotice(null)
+    try {
+      const parsed = await saveFilesApi.loadTask<SingleTaskBackup | TaskSetTemplateSnapshot>(fileName)
+      const snapshot = (parsed as SingleTaskBackup)?.template || (parsed as TaskSetTemplateSnapshot)
+      const templateID = snapshot?.id?.trim()
+      if (!templateID || !Array.isArray(snapshot.steps)) {
+        throw new Error('유효한 단일 태스크 JSON이 아닙니다.')
+      }
+
+      const confirmed = window.confirm(
+        `단일 태스크 "${snapshot.name || templateID}"를 불러옵니다.\n동일 ID 태스크는 덮어씁니다. 계속할까요?`
+      )
+      if (!confirmed) {
+        setTaskSetNotice('단일 태스크 불러오기를 취소했습니다.')
+        return
+      }
+
+      const currentTemplates = await templateApi.list()
+      const exists = currentTemplates.some((template) => template.id === templateID)
+      const templateName = snapshot.name?.trim() || templateID
+
+      if (!exists) {
+        await templateApi.create({
+          id: templateID,
+          name: templateName,
+          description: snapshot.description || undefined,
+          entry_point: snapshot.entry_point || undefined,
+          preconditions: (snapshot.preconditions || undefined) as any,
+          steps: snapshot.steps as any,
+          states: snapshot.states || undefined,
+          planning_task: snapshot.planning_task || undefined,
+        } as any)
+      }
+
+      await templateApi.update(templateID, {
+        name: templateName,
+        description: snapshot.description || '',
+        entry_point: snapshot.entry_point || '',
+        preconditions: (snapshot.preconditions || undefined) as any,
+        steps: snapshot.steps as any,
+        states: snapshot.states || undefined,
+        planning_states: snapshot.planning_states || undefined,
+        planning_task: snapshot.planning_task || undefined,
+        task_distributor_id: snapshot.task_distributor_id || '',
+      } as any)
+
+      queryClient.invalidateQueries({ queryKey: ['templates'] })
+      queryClient.invalidateQueries({ queryKey: ['templates-all'] })
+      queryClient.invalidateQueries({ queryKey: ['template', templateID] })
+      setSelectedTemplateId(templateID)
+      setTaskSetNotice(`단일 태스크 불러오기 완료: ${templateName} [${fileName}]`)
+    } catch (error) {
+      console.error('Failed to import single task:', error)
+      setTaskSetNotice(`단일 태스크 불러오기 실패: ${extractApiErrorMessage(error, fileName)}`)
+    } finally {
+      setIsTaskSetProcessing(false)
+    }
+  }, [queryClient])
+
   const selectedTaskSummary = useMemo(
     () => allTemplates.find(template => template.id === selectedTemplateId) || null,
     [allTemplates, selectedTemplateId]
   )
   const selectedTaskName = selectedTemplate?.name || selectedTaskSummary?.name || selectedTemplateId || ''
   const selectedTaskVersion = selectedTemplate?.version || selectedTaskSummary?.version || null
+  const savedFolderCards = useMemo(
+    () => ([
+      {
+        key: 'task_sets' as const,
+        files: savedTaskSetFiles,
+        ...SAVED_TASK_FOLDER_META.task_sets,
+      },
+      {
+        key: 'tasks' as const,
+        files: savedTaskFiles,
+        ...SAVED_TASK_FOLDER_META.tasks,
+      },
+    ]),
+    [savedTaskFiles, savedTaskSetFiles]
+  )
+  const activeSavedFolderMeta = selectedSaveFileFolder ? SAVED_TASK_FOLDER_META[selectedSaveFileFolder] : null
+  const activeSavedFiles = selectedSaveFileFolder === 'task_sets'
+    ? savedTaskSetFiles
+    : selectedSaveFileFolder === 'tasks'
+      ? savedTaskFiles
+      : []
 
   return (
     <div className="h-screen flex bg-base">
@@ -2945,25 +3118,37 @@ function ActionGraphEditor() {
                 <PlusCircle size={14} />
               </button>
             </div>
-            <div className="px-3 pb-2 grid grid-cols-2 gap-1">
+            <div className="px-3 pb-2 space-y-2">
               <button
-                onClick={handleExportTaskSet}
+                onClick={handleOpenSavedTaskLoad}
                 disabled={isTaskSetProcessing}
-                className="inline-flex items-center justify-center gap-1 rounded border border-primary bg-elevated px-2 py-1 text-[10px] text-secondary hover:text-primary disabled:opacity-50"
-                title="현재 태스크 세트를 JSON으로 저장"
-              >
-                <Download size={11} />
-                저장
-              </button>
-              <button
-                onClick={handleOpenTaskSetImport}
-                disabled={isTaskSetProcessing}
-                className="inline-flex items-center justify-center gap-1 rounded border border-primary bg-elevated px-2 py-1 text-[10px] text-secondary hover:text-primary disabled:opacity-50"
-                title="JSON 파일에서 태스크 세트 불러오기"
+                className="inline-flex w-full items-center justify-center gap-1 rounded border border-primary bg-elevated px-2 py-1.5 text-[10px] text-secondary hover:text-primary disabled:opacity-50"
+                title="저장된 태스크 세트 또는 단일 태스크 불러오기"
               >
                 <Upload size={11} />
-                불러오기
+                태스크 불러오기
               </button>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={handleExportSelectedTask}
+                  disabled={isTaskSetProcessing}
+                  className="inline-flex items-center justify-center gap-1 rounded border border-primary bg-elevated px-2 py-1.5 text-[10px] text-secondary hover:text-primary disabled:opacity-50"
+                  title="현재 선택한 태스크를 JSON으로 저장"
+                >
+                  <Save size={11} />
+                  태스크 저장
+                </button>
+                <button
+                  onClick={handleExportTaskSet}
+                  disabled={isTaskSetProcessing}
+                  className="inline-flex items-center justify-center gap-1 rounded border border-primary bg-elevated px-2 py-1.5 text-[10px] text-secondary hover:text-primary disabled:opacity-50"
+                  title="현재 태스크 세트를 JSON으로 저장"
+                >
+                  <Download size={11} />
+                  태스크 세트 저장
+                </button>
+              </div>
             </div>
             {taskSetNotice && (
               <div className="mx-3 mb-2 rounded border border-blue-500/30 bg-blue-500/10 px-2 py-1.5 text-[10px] text-blue-200">
@@ -3888,16 +4073,23 @@ function ActionGraphEditor() {
         </div>
       </div>
 
-      {showTaskSetLoadModal && (
+      {showSaveFileLoadModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
           <div className="w-full max-w-xl rounded-xl border border-primary bg-surface shadow-2xl">
             <div className="flex items-center justify-between border-b border-primary px-4 py-3">
               <div>
-                <h3 className="text-sm font-semibold text-primary">태스크 세트 불러오기</h3>
-                <p className="text-[11px] text-muted">Save_files/tasks 폴더에서 파일을 선택하세요.</p>
+                <h3 className="text-sm font-semibold text-primary">저장된 태스크 불러오기</h3>
+                <p className="text-[11px] text-muted">
+                  {activeSavedFolderMeta
+                    ? `${activeSavedFolderMeta.path} 폴더에서 파일을 선택하세요.`
+                    : '먼저 불러올 폴더를 선택하세요.'}
+                </p>
               </div>
               <button
-                onClick={() => setShowTaskSetLoadModal(false)}
+                onClick={() => {
+                  setShowSaveFileLoadModal(false)
+                  setSelectedSaveFileFolder(null)
+                }}
                 className="rounded p-1 text-muted hover:bg-elevated hover:text-primary"
               >
                 <X size={16} />
@@ -3905,23 +4097,63 @@ function ActionGraphEditor() {
             </div>
 
             <div className="max-h-[55vh] space-y-2 overflow-y-auto p-3">
-              {savedTaskSetFiles.length === 0 ? (
-                <div className="rounded border border-primary bg-elevated px-3 py-4 text-xs text-muted">
-                  저장된 파일이 없습니다.
+              {!selectedSaveFileFolder ? (
+                <div className="space-y-2">
+                  {savedFolderCards.map((folder) => (
+                    <button
+                      key={folder.key}
+                      onClick={() => setSelectedSaveFileFolder(folder.key)}
+                      className="w-full rounded border border-primary bg-elevated px-3 py-3 text-left transition hover:border-blue-500/40 hover:bg-blue-500/10"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 text-sm font-medium text-primary">
+                            <FolderOpen size={15} className="text-blue-300" />
+                            {folder.label}
+                          </div>
+                          <div className="mt-1 text-[11px] text-muted">{folder.description}</div>
+                          <div className="mt-1 text-[10px] text-muted">{folder.path}</div>
+                        </div>
+                        <div className="shrink-0 rounded border border-primary px-2 py-1 text-[10px] text-secondary">
+                          {folder.files.length}개
+                        </div>
+                      </div>
+                    </button>
+                  ))}
                 </div>
               ) : (
-                savedTaskSetFiles.map((file) => (
+                <>
                   <button
-                    key={file.name}
-                    onClick={() => handleImportTaskSet(file.name)}
-                    className="w-full rounded border border-primary bg-elevated px-3 py-2 text-left transition hover:border-blue-500/40 hover:bg-blue-500/10"
+                    onClick={() => setSelectedSaveFileFolder(null)}
+                    className="inline-flex items-center gap-1 rounded border border-primary bg-elevated px-2 py-1 text-[11px] text-secondary hover:text-primary"
                   >
-                    <div className="truncate text-xs font-medium text-primary">{file.name}</div>
-                    <div className="mt-0.5 text-[10px] text-muted">
-                      {new Date(file.updated_at).toLocaleString()} · {Math.max(1, Math.round(file.size_bytes / 1024))} KB
-                    </div>
+                    <ArrowLeft size={12} />
+                    폴더 목록
                   </button>
-                ))
+
+                  {activeSavedFiles.length === 0 ? (
+                    <div className="rounded border border-primary bg-elevated px-3 py-4 text-xs text-muted">
+                      저장된 파일이 없습니다.
+                    </div>
+                  ) : (
+                    activeSavedFiles.map((file) => (
+                      <button
+                        key={file.name}
+                        onClick={() => (
+                          selectedSaveFileFolder === 'task_sets'
+                            ? handleImportTaskSet(file.name)
+                            : handleImportSingleTask(file.name)
+                        )}
+                        className="w-full rounded border border-primary bg-elevated px-3 py-2 text-left transition hover:border-blue-500/40 hover:bg-blue-500/10"
+                      >
+                        <div className="truncate text-xs font-medium text-primary">{file.name}</div>
+                        <div className="mt-0.5 text-[10px] text-muted">
+                          {new Date(file.updated_at).toLocaleString()} · {Math.max(1, Math.round(file.size_bytes / 1024))} KB
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </>
               )}
             </div>
           </div>
