@@ -757,6 +757,7 @@ export default function AgentDashboard() {
   const [statusFilter, setStatusFilter] = useState<'online' | 'offline' | 'saved'>('online')
   const [isDeployingAll, setIsDeployingAll] = useState(false)
   const [deployAllNotice, setDeployAllNotice] = useState<string | null>(null)
+  const [isAssignedGraphMenuOpen, setIsAssignedGraphMenuOpen] = useState(false)
   const staleCleanupDoneRef = useRef(false)
 
   // Fetch all agents
@@ -840,6 +841,19 @@ export default function AgentDashboard() {
       // Also refresh on error to show failed status
       queryClient.invalidateQueries({ queryKey: ['agent-assigned-graphs', selectedAgentId] })
       alert(`Deploy failed: ${getApiErrorMessage(error)}`)
+    },
+  })
+
+  const removeAssignedGraphMutation = useMutation({
+    mutationFn: async ({ agentId, graphId }: { agentId: string; graphId: string }) => {
+      await agentApi.removeAssignedBehaviorTree(agentId, graphId)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agent-assigned-graphs', selectedAgentId] })
+      queryClient.invalidateQueries({ queryKey: ['action-graph'] })
+    },
+    onError: (error: unknown) => {
+      alert(`할당 해제 실패: ${getApiErrorMessage(error)}`)
     },
   })
 
@@ -930,6 +944,13 @@ export default function AgentDashboard() {
     queryClient.invalidateQueries({ queryKey: ['action-graph'] })
   }, [deployableGraphTargets, queryClient, selectedAgentId])
 
+  const handleRemoveAssignedGraph = useCallback((graphId: string, graphName: string) => {
+    if (!selectedAgentId || !graphId) return
+    const confirmed = window.confirm(`"${graphName}" 태스크 할당을 삭제하시겠습니까?`)
+    if (!confirmed) return
+    removeAssignedGraphMutation.mutate({ agentId: selectedAgentId, graphId })
+  }, [removeAssignedGraphMutation, selectedAgentId])
+
   // Auto-select first graph when graphs load or selection becomes invalid
   useEffect(() => {
     if (sortedActionGraphs.length > 0) {
@@ -941,6 +962,10 @@ export default function AgentDashboard() {
       setSelectedGraphId(null)
     }
   }, [sortedActionGraphs, selectedGraphId])
+
+  useEffect(() => {
+    setIsAssignedGraphMenuOpen(false)
+  }, [selectedAgentId])
 
   const fleetGraphMeta = useMemo(() => {
     if (!selectedGraphId) return null
@@ -2070,23 +2095,75 @@ export default function AgentDashboard() {
                       <div className="mb-2 space-y-2">
                         <div className="flex items-center gap-2">
                           <label className="text-xs text-secondary">Behavior Tree:</label>
-                          <select
-                            value={selectedGraphId || ''}
-                            onChange={(e) => setSelectedGraphId(e.target.value)}
-                            className="flex-1 px-2 py-1 bg-elevated border border-primary rounded text-xs text-primary focus:outline-none focus:border-blue-500"
-                          >
-                            {sortedActionGraphs.map((graph) => {
-                              const statusIcon = graph.deployment_status === 'deployed' ? '\u2713' :
-                                                 graph.deployment_status === 'pending' ? '\u25cb' :
-                                                 graph.deployment_status === 'deploying' ? '\u21bb' :
-                                                 graph.deployment_status === 'failed' ? '\u2717' : '\u25cb'
-                              return (
-                                <option key={graph.id} value={graph.id}>
-                                  {statusIcon} {graph.name} {graph.version ? `(v${graph.version})` : graph.deployment_status === 'pending' ? '(not deployed)' : ''}
-                                </option>
-                              )
-                            })}
-                          </select>
+                          <div className="relative flex-1">
+                            <button
+                              onClick={() => setIsAssignedGraphMenuOpen(prev => !prev)}
+                              className="flex w-full items-center justify-between rounded border border-primary bg-elevated px-2 py-1 text-xs text-primary focus:outline-none focus:border-blue-500"
+                            >
+                              <span className="truncate text-left">
+                                {fleetGraphMeta?.name || 'Behavior Tree 선택'}
+                              </span>
+                              {isAssignedGraphMenuOpen ? (
+                                <ChevronUp className="ml-2 h-3.5 w-3.5 shrink-0 text-secondary" />
+                              ) : (
+                                <ChevronDown className="ml-2 h-3.5 w-3.5 shrink-0 text-secondary" />
+                              )}
+                            </button>
+
+                            {isAssignedGraphMenuOpen && (
+                              <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded border border-primary bg-surface shadow-2xl">
+                                {sortedActionGraphs.map((graph) => {
+                                  const isSelected = selectedGraphId === graph.id
+                                  const isMissingLike = !graph.name || graph.name === graph.id
+                                  const statusIcon = graph.deployment_status === 'deployed' ? '✓' :
+                                                     graph.deployment_status === 'pending' ? '○' :
+                                                     graph.deployment_status === 'deploying' ? '↻' :
+                                                     graph.deployment_status === 'failed' ? '✗' : '○'
+                                  return (
+                                    <div
+                                      key={`assigned-graph-menu-${graph.id}`}
+                                      className={`flex items-center gap-2 border-b border-primary/40 px-2 py-1.5 last:border-b-0 ${
+                                        isSelected ? 'bg-blue-500/10' : 'bg-surface'
+                                      }`}
+                                    >
+                                      <button
+                                        onClick={() => {
+                                          setSelectedGraphId(graph.id)
+                                          setIsAssignedGraphMenuOpen(false)
+                                        }}
+                                        className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                        title={graph.name}
+                                      >
+                                        <span className={`shrink-0 text-[11px] ${
+                                          isMissingLike ? 'text-red-400' : 'text-secondary'
+                                        }`}>
+                                          {isMissingLike ? '×' : statusIcon}
+                                        </span>
+                                        <div className="min-w-0">
+                                          <div className="truncate text-xs text-primary">{graph.name}</div>
+                                          <div className="text-[10px] text-muted">
+                                            {graph.deployment_status}
+                                            {graph.version ? ` · v${graph.version}` : ''}
+                                          </div>
+                                        </div>
+                                      </button>
+                                      <button
+                                        onClick={(event) => {
+                                          event.stopPropagation()
+                                          handleRemoveAssignedGraph(graph.id, graph.name)
+                                        }}
+                                        disabled={removeAssignedGraphMutation.isPending}
+                                        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-red-500/30 bg-red-500/10 text-red-300 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                                        title="이 RTM에서 태스크 할당 삭제"
+                                      >
+                                        <X size={12} />
+                                      </button>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )}
+                          </div>
                           <span className="text-[10px] text-muted">
                             {sortedActionGraphs.length} graphs
                           </span>

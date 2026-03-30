@@ -152,6 +152,11 @@ export const agentApi = {
     return data
   },
 
+  // Remove an assigned behavior tree from an agent
+  removeAssignedBehaviorTree: async (agentId: string, graphId: string): Promise<void> => {
+    await api.delete(`/agents/${agentId}/behavior-trees/${graphId}`)
+  },
+
   // Deploy a behavior tree to an agent via QUIC
   deployBehaviorTree: async (graphId: string, agentId: string): Promise<{
     success: boolean
