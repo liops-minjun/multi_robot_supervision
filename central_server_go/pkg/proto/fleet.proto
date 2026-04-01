@@ -81,6 +81,9 @@ message AgentHeartbeat {
 
   // Runtime resource occupancy changes reported by the agent.
   repeated ResourceEvent resource_events = 13;
+
+  // Runtime state variables for realtime PDDL/live overlays.
+  map<string, string> runtime_variables = 14;
 }
 
 message AgentStatusUpdate {
@@ -127,6 +130,7 @@ message ServerMessage {
     StartTaskCommand start_task = 16;         // Agent-driven task execution
     DeleteGraphCommand delete_graph = 17;     // Delete graph from agent storage
     GraphUpdateNotification graph_update = 18; // Real-time graph sync notification
+    ResetAgentStateCommand reset_agent_state = 19; // Manual reset of agent runtime state
   }
 }
 
@@ -164,6 +168,12 @@ message DeleteGraphCommand {
   string agent_id = 2;
   string action_graph_id = 3;
   string reason = 4;               // "unassigned", "deleted", "modified" (for auto-redeploy)
+}
+
+message ResetAgentStateCommand {
+  string command_id = 1;
+  string agent_id = 2;
+  string reason = 3;
 }
 
 // Graph update notification (for real-time sync)

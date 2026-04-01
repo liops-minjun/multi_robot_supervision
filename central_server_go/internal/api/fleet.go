@@ -290,6 +290,13 @@ func (s *Server) ResetAgentState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	agentCommandSent := false
+	if s.quicHandler != nil {
+		if err := s.quicHandler.SendResetAgentStateCommand(agentID, "manual reset from MCS"); err == nil {
+			agentCommandSent = true
+		}
+	}
+
 	// Reset state in memory
 	err := s.stateManager.ResetAgentState(agentID)
 	if err != nil {
@@ -316,6 +323,7 @@ func (s *Server) ResetAgentState(w http.ResponseWriter, r *http.Request) {
 		"success":          true,
 		"agent_id":         agentID,
 		"state":            "idle",
+		"agent_command_sent": agentCommandSent,
 		"message":          "Agent state reset to idle",
 		"cleared_sessions": clearedSessions,
 	})

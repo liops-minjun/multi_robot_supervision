@@ -501,6 +501,7 @@ type AgentHeartbeatMsg struct {
 	HasNetworkLatencyUs bool
 	Telemetry           *TelemetryPayloadMsg // Optional telemetry data
 	ResourceEvents      []ResourceEventMsg
+	RuntimeVariables    map[string]string
 }
 
 // TelemetryPayloadMsg represents telemetry data from agent
@@ -2916,7 +2917,9 @@ func statusFromAvailability(available bool) string {
 // parseAgentHeartbeat parses AgentHeartbeat protobuf (1:1 model)
 // AgentHeartbeat: agent_id=1, state=2, is_executing=3, current_action=4
 func parseAgentHeartbeat(data []byte) (*AgentHeartbeatMsg, error) {
-	hb := &AgentHeartbeatMsg{}
+	hb := &AgentHeartbeatMsg{
+		RuntimeVariables: make(map[string]string),
+	}
 
 	for len(data) > 0 {
 		fieldNum, wireType, n := protowire.ConsumeTag(data)
@@ -3035,6 +3038,18 @@ func parseAgentHeartbeat(data []byte) (*AgentHeartbeatMsg, error) {
 				}
 				data = data[n:]
 			}
+		case 14: // runtime_variables (map<string,string>)
+			if wireType == protowire.BytesType {
+				mapData, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, fmt.Errorf("invalid runtime_variables")
+				}
+				key, value := parseStringMapEntry(mapData)
+				if key != "" {
+					hb.RuntimeVariables[key] = value
+				}
+				data = data[n:]
+			}
 		default:
 			n := protowire.ConsumeFieldValue(fieldNum, wireType, data)
 			if n < 0 {
@@ -3045,6 +3060,40 @@ func parseAgentHeartbeat(data []byte) (*AgentHeartbeatMsg, error) {
 	}
 
 	return hb, nil
+}
+
+func parseStringMapEntry(mapData []byte) (string, string) {
+	var key, value string
+	for len(mapData) > 0 {
+		fn, wt, m := protowire.ConsumeTag(mapData)
+		if m < 0 {
+			break
+		}
+		mapData = mapData[m:]
+		switch {
+		case fn == 1 && wt == protowire.BytesType:
+			k, m := protowire.ConsumeString(mapData)
+			if m < 0 {
+				return key, value
+			}
+			key = k
+			mapData = mapData[m:]
+		case fn == 2 && wt == protowire.BytesType:
+			v, m := protowire.ConsumeString(mapData)
+			if m < 0 {
+				return key, value
+			}
+			value = v
+			mapData = mapData[m:]
+		default:
+			m := protowire.ConsumeFieldValue(fn, wt, mapData)
+			if m < 0 {
+				return key, value
+			}
+			mapData = mapData[m:]
+		}
+	}
+	return key, value
 }
 
 // parseTelemetryPayload parses TelemetryPayload protobuf
@@ -4254,6 +4303,10 @@ func (h *RawQUICHandler) handleHeartbeat(agentConn *agentConnection, hb *AgentHe
 		if changed := h.applyResourceEvents(agentConn.agentID, hb.CurrentTaskID, hb.CurrentStepID, hb.ResourceEvents); changed && h.resourceChangeCallback != nil {
 			h.resourceChangeCallback()
 		}
+	}
+
+	if h.planningStateCallback != nil && len(hb.RuntimeVariables) > 0 {
+		h.planningStateCallback(agentConn.agentID, hb.RuntimeVariables)
 	}
 
 	// Update telemetry if present in heartbeat
@@ -5661,6 +5714,45 @@ func (h *RawQUICHandler) SendDeleteGraphCommand(agentID, graphID, reason string)
 
 	log.Printf("[RawQUIC] Sent delete graph command to agent %s: graph=%s, reason=%s",
 		agentID, graphID, reason)
+	return nil
+}
+
+// SendResetAgentStateCommand sends a manual reset-state command to an agent.
+func (h *RawQUICHandler) SendResetAgentStateCommand(agentID, reason string) error {
+	h.connMu.RLock()
+	conn, exists := h.connections[agentID]
+	h.connMu.RUnlock()
+
+	if !exists || !conn.registered {
+		return fmt.Errorf("agent %s not connected", agentID)
+	}
+
+	var cmd []byte
+	commandID := fmt.Sprintf("reset-agent-state-%s-%d", agentID, time.Now().UnixNano())
+
+	// Field 1: command_id
+	cmd = protowire.AppendTag(cmd, 1, protowire.BytesType)
+	cmd = protowire.AppendString(cmd, commandID)
+
+	// Field 2: agent_id
+	cmd = protowire.AppendTag(cmd, 2, protowire.BytesType)
+	cmd = protowire.AppendString(cmd, agentID)
+
+	// Field 3: reason
+	if reason != "" {
+		cmd = protowire.AppendTag(cmd, 3, protowire.BytesType)
+		cmd = protowire.AppendString(cmd, reason)
+	}
+
+	// Build ServerMessage wrapper with field 19 (reset_agent_state)
+	msgData := h.buildServerMessage(commandID, 19, cmd)
+
+	if err := h.sendToAgent(conn, msgData); err != nil {
+		log.Printf("[RawQUIC] SendResetAgentStateCommand failed for agent %s: %v", agentID, err)
+		return err
+	}
+
+	log.Printf("[RawQUIC] Sent reset agent state command to agent %s (reason=%s)", agentID, reason)
 	return nil
 }
 
