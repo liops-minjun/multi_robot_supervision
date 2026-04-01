@@ -879,6 +879,18 @@ export default function PDDL() {
   const singleSelectedBT = selectedBTs.length === 1 ? selectedBTs[0] : null
 
   const selectedDistributor = distributors.find(d => d.id === selectedDistributorId) || null
+  const resolvedSelectedAgentIds = useMemo(() => {
+    const knownIds = new Set(agents.map(({ agent }) => agent.id))
+    const seen = new Set<string>()
+    const resolved: string[] = []
+    for (const id of selectedAgentIds) {
+      if (!knownIds.has(id) || seen.has(id)) continue
+      seen.add(id)
+      resolved.push(id)
+    }
+    return resolved
+  }, [agents, selectedAgentIds])
+
   const selectedStateMergePolicies = useMemo(
     () => normalizeStateMergePolicies(selectedDistributor?.state_merge_policies),
     [selectedDistributor]
@@ -965,7 +977,7 @@ export default function PDDL() {
   const buildCurrentDraft = useCallback((distributorIdOverride?: string | null): PDDLDraftState => ({
     selectedBTIds,
     selectedDistributorId: distributorIdOverride ?? selectedDistributorId,
-    selectedAgentIds,
+    selectedAgentIds: resolvedSelectedAgentIds,
     goalState,
     initialState,
     showInitialState,
@@ -1512,9 +1524,11 @@ export default function PDDL() {
   }, [selectedBTIds, btCache, distributors, selectedDistributorId, t])
 
   const toggleAgent = (id: string) => {
-    setSelectedAgentIds(prev =>
-      prev.includes(id) ? prev.filter(a => a !== id) : [...prev, id]
-    )
+    setSelectedAgentIds(prev => {
+      const knownIds = new Set(agents.map(({ agent }) => agent.id))
+      const sanitized = Array.from(new Set(prev.filter(agentId => knownIds.has(agentId))))
+      return sanitized.includes(id) ? sanitized.filter(a => a !== id) : [...sanitized, id]
+    })
   }
 
   const handleSelectDistributor = useCallback(async (distributorId: string) => {
@@ -1870,7 +1884,7 @@ export default function PDDL() {
       })),
       state_merge_policies: selectedStateMergePolicies,
       selected_tasks: selectedBTs.map(bt => ({ id: bt.id, name: bt.name })),
-      selected_agents: selectedAgentIds
+      selected_agents: resolvedSelectedAgentIds
         .map(agentId => agents.find(item => item.agent.id === agentId)?.agent)
         .filter((agent): agent is Agent => Boolean(agent))
         .map(agent => ({ id: agent.id, name: agent.name })),
@@ -2222,7 +2236,10 @@ export default function PDDL() {
     : `${selectedBehaviorTreeIds.length} tasks`
 
   const handlePreview = async () => {
-    if (selectedBehaviorTreeIds.length === 0 || !selectedDistributor || selectedAgentIds.length === 0 || Object.keys(goalState).length === 0) return
+    if (selectedBehaviorTreeIds.length === 0 || !selectedDistributor || resolvedSelectedAgentIds.length === 0 || Object.keys(goalState).length === 0) return
+    if (resolvedSelectedAgentIds.length !== selectedAgentIds.length) {
+      setSelectedAgentIds(resolvedSelectedAgentIds)
+    }
     setIsSolving(true); setPlan(null); setExecutionId(null); setExecution(null); setRealtimeExecutionMap({}); setResourceAllocations([])
     try {
       const result = await pddlApi.preview({
@@ -2231,7 +2248,7 @@ export default function PDDL() {
         task_distributor_id: selectedDistributor.id,
         initial_state: Object.keys(initialState).length > 0 ? initialState : undefined,
         goal_state: goalState,
-        agent_ids: selectedAgentIds,
+        agent_ids: resolvedSelectedAgentIds,
       })
       setPlan(result)
     } catch (err) {
@@ -2241,7 +2258,10 @@ export default function PDDL() {
   }
 
   const handleSaveAndSolve = async () => {
-    if (selectedBehaviorTreeIds.length === 0 || !selectedDistributor || selectedAgentIds.length === 0 || Object.keys(goalState).length === 0) return
+    if (selectedBehaviorTreeIds.length === 0 || !selectedDistributor || resolvedSelectedAgentIds.length === 0 || Object.keys(goalState).length === 0) return
+    if (resolvedSelectedAgentIds.length !== selectedAgentIds.length) {
+      setSelectedAgentIds(resolvedSelectedAgentIds)
+    }
     setIsSolving(true); setPlan(null); setExecutionId(null); setExecution(null); setRealtimeExecutionMap({}); setResourceAllocations([])
     try {
       const problem = await pddlApi.createProblem({
@@ -2251,7 +2271,7 @@ export default function PDDL() {
         task_distributor_id: selectedDistributor.id,
         initial_state: Object.keys(initialState).length > 0 ? initialState : undefined,
         goal_state: goalState,
-        agent_ids: selectedAgentIds,
+        agent_ids: resolvedSelectedAgentIds,
       })
       const solved = await pddlApi.solveProblem(problem.id)
       if (solved.plan_result) setPlan(solved.plan_result)
@@ -2263,6 +2283,9 @@ export default function PDDL() {
 
   const handleExecute = async () => {
     if (!plan?.is_valid || selectedBehaviorTreeIds.length === 0 || !selectedDistributor) return
+    if (resolvedSelectedAgentIds.length !== selectedAgentIds.length) {
+      setSelectedAgentIds(resolvedSelectedAgentIds)
+    }
     try {
       const problem = await pddlApi.createProblem({
         name: `${selectedBehaviorTreeLabel} - Exec ${new Date().toLocaleString()}`,
@@ -2271,7 +2294,7 @@ export default function PDDL() {
         task_distributor_id: selectedDistributor.id,
         initial_state: Object.keys(initialState).length > 0 ? initialState : undefined,
         goal_state: goalState,
-        agent_ids: selectedAgentIds,
+        agent_ids: resolvedSelectedAgentIds,
       })
       const solved = await pddlApi.solveProblem(problem.id)
       if (!solved.plan_result?.is_valid) { console.error('Plan invalid before execution'); return }
@@ -2297,7 +2320,7 @@ export default function PDDL() {
   }, [goalState, realtimeGoals.length])
 
   const handleStartRealtime = async () => {
-    if (selectedBehaviorTreeIds.length === 0 || !selectedDistributor || selectedAgentIds.length === 0) return
+    if (selectedBehaviorTreeIds.length === 0 || !selectedDistributor || resolvedSelectedAgentIds.length === 0) return
     const validGoals = realtimeGoals
       .filter(goal => goal.enabled && Object.keys(goal.goal_state || {}).length > 0)
       .map((goal, index) => ({
@@ -2306,6 +2329,9 @@ export default function PDDL() {
       }))
     if (validGoals.length === 0) return
 
+    if (resolvedSelectedAgentIds.length !== selectedAgentIds.length) {
+      setSelectedAgentIds(resolvedSelectedAgentIds)
+    }
     setIsStartingRealtime(true)
     setRealtimeNotice(null)
     setRealtimeExecutionMap({})
@@ -2316,7 +2342,7 @@ export default function PDDL() {
         behavior_tree_ids: selectedBehaviorTreeIds,
         task_distributor_id: selectedDistributor.id,
         initial_state: Object.keys(initialState).length > 0 ? initialState : undefined,
-        agent_ids: selectedAgentIds,
+        agent_ids: resolvedSelectedAgentIds,
         tick_interval_sec: realtimeTickIntervalSec,
         goals: validGoals,
       })
@@ -2506,17 +2532,17 @@ export default function PDDL() {
     const r: string[] = []
     if (!selectedDistributor) r.push(t('pddl.needDistributor'))
     if (selectedTaskCount === 0) r.push(t('pddl.needBT'))
-    if (selectedAgentIds.length === 0) r.push(t('pddl.needAgents'))
+    if (resolvedSelectedAgentIds.length === 0) r.push(t('pddl.needAgents'))
     if (goalCount === 0) r.push(t('pddl.needGoal'))
     return r
-  }, [selectedDistributor, selectedTaskCount, selectedAgentIds.length, goalCount, t])
+  }, [selectedDistributor, selectedTaskCount, resolvedSelectedAgentIds.length, goalCount, t])
   const solveTooltip = useMemo(() => {
     if (!selectedDistributor) return t('pddl.needDistributor')
     if (selectedTaskCount === 0) return t('pddl.needBT')
-    if (selectedAgentIds.length === 0) return t('pddl.needAgents')
+    if (resolvedSelectedAgentIds.length === 0) return t('pddl.needAgents')
     if (Object.keys(goalState).length === 0) return t('pddl.needGoal')
     return undefined
-  }, [selectedDistributor, selectedTaskCount, selectedAgentIds, goalState, t])
+  }, [selectedDistributor, selectedTaskCount, resolvedSelectedAgentIds, goalState, t])
   const executeTooltip = useMemo(() => {
     if (!selectedDistributor) return t('pddl.needDistributor')
     if (selectedTaskCount === 0) return t('pddl.needBT')
@@ -2524,7 +2550,7 @@ export default function PDDL() {
     if (!plan?.is_valid) return t('pddl.needValidPlan')
     return undefined
   }, [selectedDistributor, selectedTaskCount, plan, isExecuting, t])
-  const canSolve = !!selectedDistributor && selectedTaskCount > 0 && selectedAgentIds.length > 0 && Object.keys(goalState).length > 0
+  const canSolve = !!selectedDistributor && selectedTaskCount > 0 && resolvedSelectedAgentIds.length > 0 && Object.keys(goalState).length > 0
   const canExecute = !!selectedDistributor && selectedTaskCount > 0 && !!plan?.is_valid && !isExecuting
   const validRealtimeGoals = useMemo(
     () => realtimeGoals.filter(goal => goal.enabled && Object.keys(goal.goal_state || {}).length > 0),
@@ -2532,12 +2558,12 @@ export default function PDDL() {
   )
   const hasRealtimeSession = Boolean(realtimeSessionId)
   const isRealtimeActive = hasRealtimeSession && (realtimeSession ? realtimeSession.status !== 'stopped' : false)
-  const canStartRealtime = !!selectedDistributor && selectedTaskCount > 0 && selectedAgentIds.length > 0 && validRealtimeGoals.length > 0 && !isStartingRealtime && !isStoppingRealtime && !isRealtimeActive && !isExecuting
+  const canStartRealtime = !!selectedDistributor && selectedTaskCount > 0 && resolvedSelectedAgentIds.length > 0 && validRealtimeGoals.length > 0 && !isStartingRealtime && !isStoppingRealtime && !isRealtimeActive && !isExecuting
   const realtimeStartDisabledReason = useMemo(() => {
     if (canStartRealtime) return null
     if (!selectedDistributor) return t('pddl.needDistributor')
     if (selectedTaskCount === 0) return t('pddl.needBT')
-    if (selectedAgentIds.length === 0) return t('pddl.needAgents')
+    if (resolvedSelectedAgentIds.length === 0) return t('pddl.needAgents')
     if (validRealtimeGoals.length === 0) return '유효한 Realtime Goal이 필요합니다 (enabled + goal_state 설정)'
     if (isExecuting) return t('pddl.alreadyExecuting')
     if (isStartingRealtime) return 'Realtime 세션 시작 중입니다...'
@@ -2550,7 +2576,7 @@ export default function PDDL() {
     isRealtimeActive,
     isStartingRealtime,
     isStoppingRealtime,
-    selectedAgentIds.length,
+    resolvedSelectedAgentIds.length,
     selectedTaskCount,
     selectedDistributor,
     t,
@@ -2559,8 +2585,8 @@ export default function PDDL() {
 
   const sortedAgents = useMemo(
     () => [...agents].sort((a, b) => {
-      const aSelected = selectedAgentIds.includes(a.agent.id) ? 1 : 0
-      const bSelected = selectedAgentIds.includes(b.agent.id) ? 1 : 0
+      const aSelected = resolvedSelectedAgentIds.includes(a.agent.id) ? 1 : 0
+      const bSelected = resolvedSelectedAgentIds.includes(b.agent.id) ? 1 : 0
       if (aSelected !== bSelected) return bSelected - aSelected
       const aRec = recommendedSet.has(a.agent.id) ? 1 : 0
       const bRec = recommendedSet.has(b.agent.id) ? 1 : 0
@@ -2568,7 +2594,7 @@ export default function PDDL() {
       if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1
       return a.agent.name.localeCompare(b.agent.name)
     }),
-    [agents, selectedAgentIds, recommendedSet]
+    [agents, resolvedSelectedAgentIds, recommendedSet]
   )
 
   const realtimeMonitoringCards = useMemo<RealtimeMonitoringCard[]>(() => {
@@ -2621,7 +2647,7 @@ export default function PDDL() {
     }
 
     return cards
-  }, [aggregatedResources, realtimeSession, selectedAgentIds, sortedAgents, stateVars])
+  }, [aggregatedResources, realtimeSession, resolvedSelectedAgentIds, sortedAgents, stateVars])
 
   const plannedTaskBlocksByAgent = useMemo(() => {
     const grouped = new Map<string, SequenceTaskBlock[]>()
@@ -3104,7 +3130,7 @@ export default function PDDL() {
                 <div className="mt-0.5 flex items-center gap-2 text-[10px] text-secondary">
                   <span>{selectedTaskCount > 0 ? selectedBehaviorTreeLabel : `0 ${t('pddl.tasksSelectedShort')}`}</span>
                   <span>·</span>
-                  <span>{selectedAgentIds.length} {t('pddl.agentsSelectedShort')}</span>
+                  <span>{resolvedSelectedAgentIds.length} {t('pddl.agentsSelectedShort')}</span>
                   <span>·</span>
                   <span>{goalCount} {t('pddl.goalState')}</span>
                 </div>
@@ -3182,7 +3208,7 @@ export default function PDDL() {
                 <Database size={14} className="text-accent" />
                 <span className="flex-1 text-sm font-semibold text-primary">Planning Setup Workspace</span>
                 <span className="rounded-full bg-base px-2 py-0.5 text-[10px] text-secondary">
-                  Resource {aggregatedResources.length} · State {stateVars.length} · Agent {selectedAgentIds.length} · Goal {goalCount}
+                  Resource {aggregatedResources.length} · State {stateVars.length} · Agent {resolvedSelectedAgentIds.length} · Goal {goalCount}
                 </span>
                 {showPlanningConfig ? <ChevronDown size={14} className="text-muted" /> : <ChevronRight size={14} className="text-muted" />}
               </button>
@@ -3483,17 +3509,17 @@ export default function PDDL() {
             </ThemedSection>
 
             {/* =================== AGENT — emerald =================== */}
-            <ThemedSection icon={Bot} title="Agent" count={`${selectedAgentIds.length}/${agents.length}`} theme={SECTION_THEME.agent} compact>
+            <ThemedSection icon={Bot} title="Agent" count={`${resolvedSelectedAgentIds.length}/${agents.length}`} theme={SECTION_THEME.agent} compact>
               <div className="max-h-[220px] overflow-y-auto space-y-1">
-                {recommendedAgentIds.length > 0 && selectedAgentIds.length === 0 && (
-                  <button onClick={() => setSelectedAgentIds(recommendedAgentIds)} className="w-full rounded border border-emerald-500/20 bg-emerald-500/10 py-1 text-[10px] font-medium text-emerald-400 hover:bg-emerald-500/20">
+                {recommendedAgentIds.length > 0 && resolvedSelectedAgentIds.length === 0 && (
+                  <button onClick={() => setSelectedAgentIds(Array.from(new Set(recommendedAgentIds)))} className="w-full rounded border border-emerald-500/20 bg-emerald-500/10 py-1 text-[10px] font-medium text-emerald-400 hover:bg-emerald-500/20">
                     {t('pddl.selectRecommended')} ({recommendedAgentIds.length})
                   </button>
                 )}
                 {sortedAgents.length === 0 ? (
                   <p className="py-3 text-center text-[10px] text-muted">{t('pddl.noAgentsAvailable')}</p>
                 ) : sortedAgents.map(({ agent, isOnline }) => {
-                  const selected = selectedAgentIds.includes(agent.id)
+                  const selected = resolvedSelectedAgentIds.includes(agent.id)
                   const activeDispatch = (agentDispatchMap.get(agent.id) || [])[0]
                   const heldResources = heldResourcesByAgent.get(agent.id) || heldResourcesByAgent.get(agent.name) || []
                   const runtime = agentRuntimeMap[agent.id]
