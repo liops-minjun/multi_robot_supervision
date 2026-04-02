@@ -1102,9 +1102,9 @@ func agentToResponse(agent *db.Agent, sm *state.GlobalStateManager) AgentRespons
 
 	// Get current state from state manager
 	if robotState, exists := sm.GetRobotState(agent.ID); exists {
-		response.CurrentState = robotState.CurrentState
+		response.CurrentState = effectiveAgentCurrentState(robotState.CurrentState, robotState.IsOnline, robotState.IsExecuting)
 	} else {
-		response.CurrentState = agent.CurrentState
+		response.CurrentState = effectiveAgentCurrentState(agent.CurrentState, sm.IsAgentOnline(agent.ID), false)
 	}
 
 	// Check real-time online status from state manager

@@ -229,11 +229,16 @@ func (s *Server) ReportCommandResult(w http.ResponseWriter, r *http.Request) {
 
 // Helper function to convert db.Agent to RobotResponse (legacy support, 1 Agent = 1 Robot)
 func agentToRobotResponse(agent *db.Agent, sm *state.GlobalStateManager) RobotResponse {
+	currentState := effectiveAgentCurrentState(agent.CurrentState, sm.IsAgentOnline(agent.ID), false)
+	if robotState, exists := sm.GetRobotState(agent.ID); exists {
+		currentState = effectiveAgentCurrentState(robotState.CurrentState, robotState.IsOnline, robotState.IsExecuting)
+	}
+
 	response := RobotResponse{
 		ID:           agent.ID,
 		Name:         agent.Name,
 		Namespace:    agent.Namespace,
-		CurrentState: agent.CurrentState,
+		CurrentState: currentState,
 		AgentID:      agent.ID, // In 1:1 model, agent ID is also robot ID
 		CreatedAt:    agent.CreatedAt,
 	}
